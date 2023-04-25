@@ -24,6 +24,11 @@ CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y
 ## end choice
 
 ##
+## file: drivers/cxl/Kconfig
+##
+CONFIG_CXL_BUS=y
+
+##
 ## file: drivers/pcmcia/Kconfig
 ##
 # CONFIG_PCMCIA is not set

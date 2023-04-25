@@ -2,7 +2,7 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
 
 variables:
-  RELEASE: 'unstable'
+  RELEASE: 'bullseye-backports'
   # Make that build quicker
   SALSA_CI_DPKG_BUILDPACKAGE_ARGS: '-Ppkg.linux.quick'
   # We have to bump the version in source preparation, not later
@@ -33,7 +33,7 @@ stages:
 
 extract-source:
   stage: provisioning
-  image: $SALSA_CI_IMAGES_GBP
+  image: $SALSA_CI_IMAGES_BASE
   cache:
     key: "orig-${RELEASE}"
     paths:
@@ -49,14 +49,18 @@ extract-source:
     - rm -rf ../orig
     - mv orig ../orig
 
-    # Install dependencies of gencontrol.py and debian/rules orig
+    # Install dependencies of gencontrol.py, genorig.py, and debian/rules orig
     - apt-get update
     - |
       eatmydata apt-get install --no-install-recommends -y \
         debhelper \
+        git \
+        gpg \
+        gpgv \
         kernel-wedge \
         python3 \
         python3-debian \
+        python3-jinja2 \
         quilt \
         rsync
 

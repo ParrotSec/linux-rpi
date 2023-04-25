@@ -1,0 +1,41 @@
+From: Ben Hutchings <benh@debian.org>
+Date: Sun, 5 Mar 2023 19:05:14 +0100
+Subject: media: cx18: Avoid strlen() call that triggers ICE in gcc 10
+Bug-Debian: https://bugs.debian.org/1027456
+
+Commit e9a40e1585d7 "fortify: Do not cast to "unsigned char"",
+included in 6.2 and backported into 6.1.2, triggers an ICE in
+bullseye's gcc 10 when compiling cx18-i2c.c.  This change specifically
+affects use of the strlen() function.
+
+The compiler has been fixed in sid but not yet in bullseye.  Until
+that happens, we need a workaround here.
+
+init_cx18_i2c() initialises i2c_adapter instances from a template and
+then appends to their names by calling sprintf(...name +
+strlen(...name), ...).  Avoid using strlen() here by rewriting the
+entire name field instead of appending.
+
+Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+---
+ drivers/media/pci/cx18/cx18-i2c.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/pci/cx18/cx18-i2c.c b/drivers/media/pci/cx18/cx18-i2c.c
+index a83435245251..a6ce1c204937 100644
+--- a/drivers/media/pci/cx18/cx18-i2c.c
++++ b/drivers/media/pci/cx18/cx18-i2c.c
+@@ -229,8 +229,8 @@ int init_cx18_i2c(struct cx18 *cx)
+ 		/* Setup adapter */
+ 		cx->i2c_adap[i] = cx18_i2c_adap_template;
+ 		cx->i2c_adap[i].algo_data = &cx->i2c_algo[i];
+-		sprintf(cx->i2c_adap[i].name + strlen(cx->i2c_adap[i].name),
+-				" #%d-%d", cx->instance, i);
++		sprintf(cx->i2c_adap[i].name, "%s #%d-%d",
++			 cx18_i2c_adap_template.name, cx->instance, i);
+ 		i2c_set_adapdata(&cx->i2c_adap[i], &cx->v4l2_dev);
+ 		cx->i2c_adap[i].dev.parent = &cx->pci_dev->dev;
+ 	}
+-- 
+2.30.2
+

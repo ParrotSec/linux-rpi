@@ -233,6 +233,7 @@ class ConfigParser(object):
     def _convert_one(self, schema, data):
         ret = {}
         for key, value in data.items():
+            value = value.replace('\n', ' ')
             if key in schema:
                 value = schema[key](value)
             ret[key] = value

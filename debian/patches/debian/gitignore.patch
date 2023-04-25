@@ -5,9 +5,11 @@ Forwarded: not-needed
 
 [bwh: Tweak further for pure git]
 
---- a/.gitignore
-+++ b/.gitignore
-@@ -71,11 +71,6 @@ modules.order
+Index: linux/.gitignore
+===================================================================
+--- linux.orig/.gitignore
++++ linux/.gitignore
+@@ -76,11 +76,6 @@ modules.order
  /*.spec
  
  #
@@ -19,7 +21,7 @@ Forwarded: not-needed
  # Snap directory (make snap-pkg)
  #
  /snap/
-@@ -86,16 +81,6 @@ modules.order
+@@ -91,17 +86,6 @@ modules.order
  /tar-install/
  
  #
@@ -31,15 +33,16 @@ Forwarded: not-needed
 -!.gitattributes
 -!.gitignore
 -!.mailmap
+-!.rustfmt.toml
 -
 -#
  # Generated include files
  #
  /include/config/
-@@ -155,3 +140,10 @@ x509.genkey
+@@ -168,3 +152,10 @@ sphinx_*/
  
- # Documentation toolchain
- sphinx_*/
+ # Rust analyzer configuration
+ /rust-project.json
 +
 +#
 +# Debian packaging: ignore everything at the top level, since it isn't

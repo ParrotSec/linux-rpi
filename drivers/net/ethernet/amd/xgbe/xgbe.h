@@ -290,6 +290,7 @@
 /* Auto-negotiation */
 #define XGBE_AN_MS_TIMEOUT		500
 #define XGBE_LINK_TIMEOUT		5
+#define XGBE_KR_TRAINING_WAIT_ITER	50
 
 #define XGBE_SGMII_AN_LINK_STATUS	BIT(1)
 #define XGBE_SGMII_AN_LINK_SPEED	(BIT(2) | BIT(3))
@@ -609,6 +610,31 @@ enum xgbe_mdio_mode {
 	XGBE_MDIO_MODE_NONE = 0,
 	XGBE_MDIO_MODE_CL22,
 	XGBE_MDIO_MODE_CL45,
+};
+
+enum xgbe_mb_cmd {
+	XGBE_MB_CMD_POWER_OFF = 0,
+	XGBE_MB_CMD_SET_1G,
+	XGBE_MB_CMD_SET_2_5G,
+	XGBE_MB_CMD_SET_10G_SFI,
+	XGBE_MB_CMD_SET_10G_KR,
+	XGBE_MB_CMD_RRC
+};
+
+enum xgbe_mb_subcmd {
+	XGBE_MB_SUBCMD_NONE = 0,
+
+	/* 10GbE SFP subcommands */
+	XGBE_MB_SUBCMD_ACTIVE = 0,
+	XGBE_MB_SUBCMD_PASSIVE_1M,
+	XGBE_MB_SUBCMD_PASSIVE_3M,
+	XGBE_MB_SUBCMD_PASSIVE_OTHER,
+
+	/* 1GbE Mode subcommands */
+	XGBE_MB_SUBCMD_10MBITS = 0,
+	XGBE_MB_SUBCMD_100MBITS,
+	XGBE_MB_SUBCMD_1G_SGMII,
+	XGBE_MB_SUBCMD_1G_KX
 };
 
 struct xgbe_phy {
@@ -1013,6 +1039,7 @@ struct xgbe_version_data {
 	unsigned int tx_desc_prefetch;
 	unsigned int rx_desc_prefetch;
 	unsigned int an_cdr_workaround;
+	unsigned int enable_rrc;
 };
 
 struct xgbe_prv_data {
@@ -1254,6 +1281,7 @@ struct xgbe_prv_data {
 	unsigned int parallel_detect;
 	unsigned int fec_ability;
 	unsigned long an_start;
+	unsigned long kr_start_time;
 	enum xgbe_an_mode an_mode;
 
 	/* I2C support */

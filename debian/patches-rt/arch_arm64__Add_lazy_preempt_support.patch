@@ -1,7 +1,7 @@
 Subject: arch/arm64: Add lazy preempt support
 From: Anders Roxell <anders.roxell@linaro.org>
 Date: Thu May 14 17:52:17 2015 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 From: Anders Roxell <anders.roxell@linaro.org>
 
@@ -125,7 +125,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  #endif
 --- a/arch/arm64/kernel/signal.c
 +++ b/arch/arm64/kernel/signal.c
-@@ -1103,7 +1103,7 @@ static void do_signal(struct pt_regs *re
+@@ -1108,7 +1108,7 @@ static void do_signal(struct pt_regs *re
  void do_notify_resume(struct pt_regs *regs, unsigned long thread_flags)
  {
  	do {

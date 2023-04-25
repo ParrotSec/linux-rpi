@@ -2479,6 +2479,9 @@ void irdma_ib_qp_event(struct irdma_qp *iwqp, enum irdma_qp_event_type event)
 	case IRDMA_QP_EVENT_ACCESS_ERR:
 		ibevent.event = IB_EVENT_QP_ACCESS_ERR;
 		break;
+	case IRDMA_QP_EVENT_REQ_ERR:
+		ibevent.event = IB_EVENT_QP_REQ_ERR;
+		break;
 	}
 	ibevent.device = iwqp->ibqp.device;
 	ibevent.element.qp = &iwqp->ibqp;
@@ -2588,6 +2591,7 @@ void irdma_generate_flush_completions(struct irdma_qp *iwqp)
 			sw_wqe = qp->sq_base[wqe_idx].elem;
 			get_64bit_val(sw_wqe, 24, &wqe_qword);
 			cmpl->cpi.op_type = (u8)FIELD_GET(IRDMAQPSQ_OPCODE, IRDMAQPSQ_OPCODE);
+			cmpl->cpi.q_type = IRDMA_CQE_QTYPE_SQ;
 			/* remove the SQ WR by moving SQ tail*/
 			IRDMA_RING_SET_TAIL(*sq_ring,
 				sq_ring->tail + qp->sq_wrtrk_array[sq_ring->tail].quanta);
@@ -2626,6 +2630,7 @@ void irdma_generate_flush_completions(struct irdma_qp *iwqp)
 
 			cmpl->cpi.wr_id = qp->rq_wrid_array[wqe_idx];
 			cmpl->cpi.op_type = IRDMA_OP_TYPE_REC;
+			cmpl->cpi.q_type = IRDMA_CQE_QTYPE_RQ;
 			/* remove the RQ WR by moving RQ tail */
 			IRDMA_RING_SET_TAIL(*rq_ring, rq_ring->tail + 1);
 			ibdev_dbg(iwqp->iwrcq->ibcq.device,

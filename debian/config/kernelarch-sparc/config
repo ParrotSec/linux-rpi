@@ -12,13 +12,9 @@ CONFIG_SUN_LDOMS=y
 CONFIG_SUN_OPENPROMFS=m
 
 ##
-## file: block/partitions/Kconfig
+## file: arch/sparc/crypto/Kconfig
 ##
-CONFIG_SUN_PARTITION=y
-
-##
-## file: crypto/Kconfig
-##
+CONFIG_CRYPTO_DES_SPARC64=m
 CONFIG_CRYPTO_CRC32C_SPARC64=m
 CONFIG_CRYPTO_MD5_SPARC64=m
 CONFIG_CRYPTO_SHA1_SPARC64=m
@@ -26,7 +22,11 @@ CONFIG_CRYPTO_SHA256_SPARC64=m
 CONFIG_CRYPTO_SHA512_SPARC64=m
 CONFIG_CRYPTO_AES_SPARC64=m
 CONFIG_CRYPTO_CAMELLIA_SPARC64=m
-CONFIG_CRYPTO_DES_SPARC64=m
+
+##
+## file: block/partitions/Kconfig
+##
+CONFIG_SUN_PARTITION=y
 
 ##
 ## file: drivers/ata/Kconfig
@@ -215,13 +215,6 @@ CONFIG_SERIO_LIBPS2=y
 ## file: drivers/media/pci/cx88/Kconfig
 ##
 # CONFIG_VIDEO_CX88 is not set
-
-##
-## file: drivers/media/pci/saa7146/Kconfig
-##
-# CONFIG_VIDEO_HEXIUM_GEMINI is not set
-# CONFIG_VIDEO_HEXIUM_ORION is not set
-# CONFIG_VIDEO_MXB is not set
 
 ##
 ## file: drivers/media/radio/Kconfig
@@ -421,6 +414,13 @@ CONFIG_MEGARAID_MAILBOX=m
 CONFIG_MEGARAID_LEGACY=m
 
 ##
+## file: drivers/staging/media/deprecated/saa7146/saa7146/Kconfig
+##
+# CONFIG_VIDEO_HEXIUM_GEMINI is not set
+# CONFIG_VIDEO_HEXIUM_ORION is not set
+# CONFIG_VIDEO_MXB is not set
+
+##
 ## file: drivers/tty/Kconfig
 ##
 CONFIG_VT=y
@@ -528,12 +528,6 @@ CONFIG_SPARSEMEM_MANUAL=y
 ## file: net/ax25/Kconfig
 ##
 # CONFIG_HAMRADIO is not set
-
-##
-## file: net/decnet/Kconfig
-##
-CONFIG_DECNET=m
-CONFIG_DECNET_ROUTER=y
 
 ##
 ## file: net/lapb/Kconfig

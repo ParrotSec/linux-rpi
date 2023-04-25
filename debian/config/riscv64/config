@@ -31,6 +31,16 @@ CONFIG_KVM=m
 CONFIG_SATA_AHCI_PLATFORM=m
 
 ##
+## file: drivers/char/hw_random/Kconfig
+##
+CONFIG_HW_RANDOM_POLARFIRE_SOC=m
+
+##
+## file: drivers/cxl/Kconfig
+##
+CONFIG_CXL_BUS=y
+
+##
 ## file: drivers/gpio/Kconfig
 ##
 CONFIG_GPIOLIB=y
@@ -49,6 +59,11 @@ CONFIG_DRM_AMDGPU=m
 CONFIG_SENSORS_LM90=m
 
 ##
+## file: drivers/i2c/Kconfig
+##
+CONFIG_I2C=y
+
+##
 ## file: drivers/i2c/busses/Kconfig
 ##
 CONFIG_I2C_DESIGNWARE_PLATFORM=m
@@ -57,6 +72,12 @@ CONFIG_I2C_DESIGNWARE_PLATFORM=m
 ## file: drivers/input/misc/Kconfig
 ##
 CONFIG_INPUT_DA9063_ONKEY=m
+
+##
+## file: drivers/mailbox/Kconfig
+##
+CONFIG_MAILBOX=y
+CONFIG_POLARFIRE_SOC_MAILBOX=m
 
 ##
 ## file: drivers/mfd/Kconfig
@@ -123,11 +144,12 @@ CONFIG_REGULATOR_TPS65086=m
 ## file: drivers/rtc/Kconfig
 ##
 CONFIG_RTC_DRV_DA9063=m
+CONFIG_RTC_DRV_POLARFIRE_SOC=m
 
 ##
-## file: drivers/soc/sifive/Kconfig
+## file: drivers/soc/microchip/Kconfig
 ##
-CONFIG_SIFIVE_L2=y
+CONFIG_POLARFIRE_SOC_SYS_CTRL=m
 
 ##
 ## file: drivers/spi/Kconfig

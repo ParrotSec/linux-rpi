@@ -2,14 +2,18 @@ SHELL := bash -e
 
 export DH_OPTIONS
 
+BUILDDEB_ARGS := -Zxz $(if $(filter pkg.linux.quick,$(DEB_BUILD_PROFILES)),-z0)
+
 build-indep:
 
-install-signed: DH_OPTIONS = -p$(PACKAGE_NAME)
-install-signed: KERNEL_VERSION = $(ABINAME)$(LOCALVERSION)
-install-signed: IMAGE_PACKAGE_NAME = linux-image-$(KERNEL_VERSION)-unsigned
-install-signed: PACKAGE_DIR = debian/$(PACKAGE_NAME)
-install-signed: SIGNATURE_DIR = debian/signatures/$(IMAGE_PACKAGE_NAME)
-install-signed:
+build_image:
+
+binary_image: DH_OPTIONS = -p$(PACKAGE_NAME)
+binary_image: KERNEL_VERSION = $(ABINAME)$(LOCALVERSION)
+binary_image: IMAGE_PACKAGE_NAME = linux-image-$(KERNEL_VERSION)-unsigned
+binary_image: PACKAGE_DIR = debian/$(PACKAGE_NAME)
+binary_image: SIGNATURE_DIR = debian/signatures/$(IMAGE_PACKAGE_NAME)
+binary_image:
 	mkdir -p $(PACKAGE_DIR)/boot
 	rsync -a $(patsubst %,/boot/%-$(KERNEL_VERSION),config System.map $(IMAGE_INSTALL_STEM)) \
 		$(PACKAGE_DIR)/boot/
@@ -57,30 +61,34 @@ install-signed:
 	echo >> debian/$(PACKAGE_NAME).substvars "unsigned:DescriptionLong=$$(dpkg-query -f '$${Description}' -W $(IMAGE_PACKAGE_NAME) | tail -n +2 | sed -rz 's/\$$/$${}/g; s/^ //; s/\n \.?/$${Newline}/g')"
 	dh_gencontrol -- $(GENCONTROL_ARGS)
 	dh_md5sums
-	dh_builddeb
+	dh_builddeb -- $(BUILDDEB_ARGS)
 
-install-meta: DH_OPTIONS = -p$(PACKAGE_NAME)
-install-meta:
+build_meta:
+
+binary_meta:
 	dh_testdir
 	dh_prep
 	dh_bugfiles
-	dh_installdocs --link-doc=$(LINK_DOC_PACKAGE_NAME)
+	dh_installdocs --link-doc=$(INSTALLDOCS_LINK_DOC)
 	dh_lintian
 	dh_compress
 	dh_fixperms
 	dh_installdeb
 	dh_gencontrol -- $(GENCONTROL_ARGS)
 	dh_md5sums
-	dh_builddeb
+	dh_builddeb -- $(BUILDDEB_ARGS)
 
-install-udeb_$(ARCH): export KW_DEFCONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
-install-udeb_$(ARCH): export KW_CONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
-install-udeb_$(ARCH): DH_OPTIONS=$(PACKAGE_NAMES:%=-p%)
-install-udeb_$(ARCH):
+build_udeb:
+
+binary_udeb: export KW_DEFCONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
+binary_udeb: export KW_CONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
+binary_udeb:
 	dh_testdir
 	dh_prep
 	kernel-wedge install-files $(ABINAME)
 	kernel-wedge check $(PACKAGE_NAMES)
 	dh_fixperms
 	dh_gencontrol -- $(GENCONTROL_ARGS)
-	dh_builddeb
+	dh_builddeb -- $(BUILDDEB_ARGS)
+
+.PHONY: build_% binary_%

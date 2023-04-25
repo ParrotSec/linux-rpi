@@ -12,12 +12,16 @@ MAKE_PERF += perfexecdir=lib/perf-core plugindir=/usr/lib/traceevent/plugins tip
 
 # perf can link against libbfd if available, but the result is
 # undistributable as they are licenced under GPL v2 and v3+
-# respectively.  Override detection of libbfd and insist that
-# cplus_demangle() can be found in libiberty (LGPL v2.1+).
-MAKE_PERF += feature-libbfd=0 feature-libbfd-liberty=0 feature-libbfd-liberty-z=0 HAVE_CPLUS_DEMANGLE_SUPPORT=1
+# respectively.  Override detection of libbfd.
+MAKE_PERF += NO_LIBBFD=1
+
+# perf can link against libdebuginfod if available, but the result is
+# undistributable for the same reason.  Override detection of
+# libdebuginfod.
+MAKE_PERF += NO_LIBDEBUGINFOD=1
 
 # perf can link against libcrypto if available, but the result is
-# undistributable as GPL v2 and OpenSSL are not compatible without
+# undistributable as GPL v2 and Apache 2.0 are not compatible without
 # an explicit exception.  Override detection of libcrypto.
 MAKE_PERF += NO_LIBCRYPTO=1
 
@@ -51,9 +55,9 @@ all:
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
 	+$(MAKE_PERF) -C $(top_srcdir)/tools/perf/Documentation man
 endif
-# Check that perf didn't get linked against libbfd or libcrypto
+# Check that perf didn't get linked against incompatibly-licensed libraries
 	type ldd
-	! ldd $(CURDIR)/perf | grep -E '\blib(bfd|crypto)'
+	! ldd $(CURDIR)/perf | grep -E '\blib(bfd|crypto|debuginfod)'
 # Check that it includes cplus_demangle from libiberty
 	grep cplus_demangle $(CURDIR)/perf
 

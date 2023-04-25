@@ -1,111 +1,77 @@
+import io
 import os
 import re
 import textwrap
+import typing
+
+import jinja2
+
+from .debian import SourcePackage, BinaryPackage, TestsControl
 
 
 class Templates(object):
-    def __init__(self, dirs=["debian/templates"]):
+    dirs: list[str]
+    _cache: dict[str, str]
+    _jinja2: jinja2.Environment
+
+    def __init__(self, dirs: list[str] = ["debian/templates"]) -> None:
         self.dirs = dirs
 
         self._cache = {}
+        self._jinja2 = jinja2.Environment(
+            # autoescape uses HTML safe escaping, which does not help us
+            autoescape=False,
+            keep_trailing_newline=True,
+            trim_blocks=True,
+            undefined=jinja2.StrictUndefined,
+        )
 
-    def __getitem__(self, key):
-        ret = self.get(key)
-        if ret is not None:
-            return ret
-        raise KeyError(key)
+    def _read(self, name: str) -> typing.Any:
+        pkgid, name = name.rsplit('.', 1)
 
-    def _read(self, name):
-        prefix, id = name.split('.', 1)
-
-        for suffix in ['.in', '']:
+        for suffix in ['.j2', '.in', '']:
             for dir in self.dirs:
-                filename = "%s/%s%s" % (dir, name, suffix)
+                filename = "%s/%s.%s%s" % (dir, pkgid, name, suffix)
                 if os.path.exists(filename):
                     with open(filename, 'r', encoding='utf-8') as f:
                         mode = os.stat(f.fileno()).st_mode
-                        if name == 'control.source':
-                            return (read_control_source(f), mode)
-                        if prefix == 'control':
-                            return (read_control(f), mode)
-                        if prefix == 'tests-control':
-                            return (read_tests_control(f), mode)
-                        return (f.read(), mode)
+                        return (f.read(), mode, suffix)
 
-    def _get(self, key):
+        raise KeyError(name)
+
+    def _get(self, key: str) -> typing.Any:
         try:
             return self._cache[key]
         except KeyError:
             self._cache[key] = value = self._read(key)
             return value
 
-    def get(self, key, default=None):
+    def get(self, key: str, context: dict[str, str] = {}) -> str:
         value = self._get(key)
-        if value is None:
-            return default
+        suffix = value[2]
+
+        if context:
+            if suffix == '.in':
+                def subst(match):
+                    return context[match.group(1)]
+                return re.sub(r'@([-_a-z0-9]+)@', subst, str(value[0]))
+
+            elif suffix == '.j2':
+                return self._jinja2.from_string(value[0]).render(context)
+
         return value[0]
 
-    def get_mode(self, key):
-        value = self._get(key)
-        if value is None:
-            return None
-        return value[1]
+    def get_mode(self, key: str) -> str:
+        return self._get(key)[1]
 
+    def get_control(self, key: str, context: dict[str, str] = {}) -> BinaryPackage:
+        return BinaryPackage.read_rfc822(io.StringIO(self.get(key, context)))
 
-def read_control_source(f):
-    from .debian import SourcePackage
-    return _read_rfc822(f, SourcePackage)
+    def get_source_control(self, key: str, context: dict[str, str] = {}) -> SourcePackage:
+        return SourcePackage.read_rfc822(io.StringIO(self.get(key, context)))
 
-
-def read_control(f):
-    from .debian import BinaryPackage
-    return _read_rfc822(f, BinaryPackage)
-
-
-def read_tests_control(f):
-    from .debian import TestsControl
-    return _read_rfc822(f, TestsControl)
-
-
-def _read_rfc822(f, cls):
-    entries = []
-    eof = False
-
-    while not eof:
-        e = cls()
-        last = None
-        lines = []
-        while True:
-            line = f.readline()
-            if not line:
-                eof = True
-                break
-            # Strip comments rather than trying to preserve them
-            if line[0] == '#':
-                continue
-            line = line.strip('\n')
-            if not line:
-                break
-            if line[0] in ' \t':
-                if not last:
-                    raise ValueError(
-                        'Continuation line seen before first header')
-                lines.append(line.lstrip())
-                continue
-            if last:
-                e[last] = '\n'.join(lines)
-            i = line.find(':')
-            if i < 0:
-                raise ValueError(u"Not a header, not a continuation: ``%s''" %
-                                 line)
-            last = line[:i]
-            lines = [line[i + 1:].lstrip()]
-        if last:
-            e[last] = '\n'.join(lines)
-        if e:
-            entries.append(e)
-
-    return entries
+    def get_tests_control(self, key: str, context: dict[str, str] = {}) -> TestsControl:
+        return TestsControl.read_rfc822(io.StringIO(self.get(key, context)))
 
 
 class TextWrapper(textwrap.TextWrapper):

@@ -987,11 +987,11 @@ static void apple_nvme_reset_work(struct work_struct *work)
 		goto out;
 	}
 
-	if (anv->ctrl.ctrl_config & NVME_CC_ENABLE)
-		apple_nvme_disable(anv, false);
-
 	/* RTKit must be shut down cleanly for the (soft)-reset to work */
 	if (apple_rtkit_is_running(anv->rtk)) {
+		/* reset the controller if it is enabled */
+		if (anv->ctrl.ctrl_config & NVME_CC_ENABLE)
+			apple_nvme_disable(anv, false);
 		dev_dbg(anv->dev, "Trying to shut down RTKit before reset.");
 		ret = apple_rtkit_shutdown(anv->rtk);
 		if (ret)
@@ -1038,6 +1038,8 @@ static void apple_nvme_reset_work(struct work_struct *work)
 	anv->ctrl.max_hw_sectors = min_t(u32, NVME_MAX_KB_SZ << 1,
 					 dma_max_mapping_size(anv->dev) >> 9);
 	anv->ctrl.max_segments = NVME_MAX_SEGS;
+
+	dma_set_max_seg_size(anv->dev, 0xffffffff);
 
 	/*
 	 * Enable NVMMU and linear submission queues.

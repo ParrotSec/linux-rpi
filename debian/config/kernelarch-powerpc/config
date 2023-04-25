@@ -25,6 +25,11 @@ CONFIG_XMON_DISASSEMBLY=y
 CONFIG_BOOTX_TEXT=y
 
 ##
+## file: arch/powerpc/crypto/Kconfig
+##
+CONFIG_CRYPTO_SHA1_PPC=m
+
+##
 ## file: arch/powerpc/kvm/Kconfig
 ##
 CONFIG_VIRTUALIZATION=y
@@ -74,11 +79,6 @@ CONFIG_PPC_PMAC=y
 ##
 CONFIG_AMIGA_PARTITION=y
 CONFIG_MAC_PARTITION=y
-
-##
-## file: crypto/Kconfig
-##
-CONFIG_CRYPTO_SHA1_PPC=m
 
 ##
 ## file: drivers/ata/Kconfig
@@ -793,17 +793,6 @@ CONFIG_SGETMASK_SYSCALL=y
 ## file: lib/xz/Kconfig
 ##
 CONFIG_XZ_DEC_POWERPC=y
-
-##
-## file: net/decnet/Kconfig
-##
-CONFIG_DECNET=m
-CONFIG_DECNET_ROUTER=y
-
-##
-## file: net/decnet/netfilter/Kconfig
-##
-CONFIG_DECNET_NF_GRABULATOR=m
 
 ##
 ## file: net/lapb/Kconfig

@@ -17,7 +17,7 @@ use of $(ARCH) needs to be moved after this.
 ---
 --- a/Makefile
 +++ b/Makefile
-@@ -384,36 +384,6 @@ include $(srctree)/scripts/subarch.inclu
+@@ -395,36 +395,6 @@ include $(srctree)/scripts/subarch.inclu
  # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
  ARCH		?= $(SUBARCH)
  
@@ -54,7 +54,7 @@ use of $(ARCH) needs to be moved after this.
  KCONFIG_CONFIG	?= .config
  export KCONFIG_CONFIG
  
-@@ -491,6 +461,35 @@ CFLAGS_KERNEL	=
+@@ -540,6 +510,35 @@ RUSTFLAGS_KERNEL =
  AFLAGS_KERNEL	=
  LDFLAGS_vmlinux =
  

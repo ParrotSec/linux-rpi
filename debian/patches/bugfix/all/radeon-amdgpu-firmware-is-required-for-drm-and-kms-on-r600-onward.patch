@@ -30,16 +30,16 @@ is missing, except for the pre-R600 case.
 
 --- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
 +++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
-@@ -38,6 +38,8 @@
- #include <linux/mmu_notifier.h>
- #include <linux/suspend.h>
+@@ -39,6 +39,8 @@
  #include <linux/cc_platform.h>
+ #include <linux/fb.h>
+ #include <linux/dynamic_debug.h>
 +#include <linux/namei.h>
 +#include <linux/path.h>
  
  #include "amdgpu.h"
  #include "amdgpu_irq.h"
-@@ -1983,6 +1985,28 @@ static void amdgpu_get_secondary_funcs(s
+@@ -2039,6 +2041,28 @@ static void amdgpu_get_secondary_funcs(s
  	}
  }
  
@@ -68,7 +68,7 @@ is missing, except for the pre-R600 case.
  static int amdgpu_pci_probe(struct pci_dev *pdev,
  			    const struct pci_device_id *ent)
  {
-@@ -2057,6 +2081,11 @@ static int amdgpu_pci_probe(struct pci_d
+@@ -2122,6 +2146,11 @@ static int amdgpu_pci_probe(struct pci_d
  	}
  #endif
  
@@ -77,9 +77,9 @@ is missing, except for the pre-R600 case.
 +		return -ENODEV;
 +	}
 +
- 	/* Get rid of things like offb */
- 	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &amdgpu_kms_driver);
- 	if (ret)
+ 	adev = devm_drm_dev_alloc(&pdev->dev, &amdgpu_kms_driver, typeof(*adev), ddev);
+ 	if (IS_ERR(adev))
+ 		return PTR_ERR(adev);
 --- a/drivers/gpu/drm/radeon/radeon_drv.c
 +++ b/drivers/gpu/drm/radeon/radeon_drv.c
 @@ -48,6 +48,8 @@
@@ -91,7 +91,7 @@ is missing, except for the pre-R600 case.
  
  #include "radeon_drv.h"
  #include "radeon.h"
-@@ -288,6 +290,28 @@ MODULE_DEVICE_TABLE(pci, pciidlist);
+@@ -284,6 +286,28 @@ MODULE_DEVICE_TABLE(pci, pciidlist);
  
  static const struct drm_driver kms_driver;
  
@@ -120,7 +120,7 @@ is missing, except for the pre-R600 case.
  static int radeon_pci_probe(struct pci_dev *pdev,
  			    const struct pci_device_id *ent)
  {
-@@ -328,6 +352,12 @@ static int radeon_pci_probe(struct pci_d
+@@ -324,6 +348,12 @@ static int radeon_pci_probe(struct pci_d
  	if (vga_switcheroo_client_probe_defer(pdev))
  		return -EPROBE_DEFER;
  

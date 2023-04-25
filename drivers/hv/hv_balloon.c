@@ -905,7 +905,7 @@ static unsigned long handle_pg_range(unsigned long pg_start,
 			 * We have some residual hot add range
 			 * that needs to be hot added; hot add
 			 * it now. Hot add a multiple of
-			 * of HA_CHUNK that fully covers the pages
+			 * HA_CHUNK that fully covers the pages
 			 * we have.
 			 */
 			size = (has->end_pfn - has->ha_end_pfn);
@@ -1911,7 +1911,7 @@ static void  hv_balloon_debugfs_init(struct hv_dynmem_device *b)
 
 static void  hv_balloon_debugfs_exit(struct hv_dynmem_device *b)
 {
-	debugfs_remove(debugfs_lookup("hv-balloon", NULL));
+	debugfs_lookup_and_remove("hv-balloon", NULL);
 }
 
 #else

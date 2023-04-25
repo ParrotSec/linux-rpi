@@ -1,7 +1,7 @@
 Subject: tpm_tis: fix stall after iowrite*()s
 From: Haris Okanovic <haris.okanovic@ni.com>
 Date: Tue Aug 15 15:13:08 2017 -0500
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 From: Haris Okanovic <haris.okanovic@ni.com>
 
@@ -63,7 +63,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  static int interrupts = -1;
  module_param(interrupts, int, 0444);
  MODULE_PARM_DESC(interrupts, "Enable interrupts");
-@@ -185,12 +210,12 @@ static int tpm_tcg_write_bytes(struct tp
+@@ -186,12 +211,12 @@ static int tpm_tcg_write_bytes(struct tp
  	switch (io_mode) {
  	case TPM_TIS_PHYS_8:
  		while (len--)

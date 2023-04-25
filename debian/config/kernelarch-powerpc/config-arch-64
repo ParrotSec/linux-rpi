@@ -13,6 +13,11 @@ CONFIG_SCHED_SMT=y
 CONFIG_KERNEL_START=0xc000000000000000
 
 ##
+## file: arch/powerpc/crypto/Kconfig
+##
+CONFIG_CRYPTO_CRC32C_VPMSUM=m
+
+##
 ## file: arch/powerpc/kvm/Kconfig
 ##
 CONFIG_KVM_BOOK3S_64=m
@@ -51,11 +56,6 @@ CONFIG_PPC_SPLPAR=y
 ## file: block/partitions/Kconfig
 ##
 CONFIG_AIX_PARTITION=y
-
-##
-## file: crypto/Kconfig
-##
-CONFIG_CRYPTO_CRC32C_VPMSUM=m
 
 ##
 ## file: drivers/ata/Kconfig

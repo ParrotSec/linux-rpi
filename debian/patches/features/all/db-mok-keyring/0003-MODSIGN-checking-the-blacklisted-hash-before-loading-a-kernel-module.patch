@@ -39,7 +39,7 @@ Signed-off-by: "Lee, Chun-Yi" <jlee@suse.com>
  #include <uapi/linux/module.h>
  #include "internal.h"
  
-@@ -37,13 +39,58 @@ void set_module_sig_enforced(void)
+@@ -37,13 +39,60 @@
  	sig_enforce = true;
  }
  
@@ -49,11 +49,13 @@ Signed-off-by: "Lee, Chun-Yi" <jlee@suse.com>
 +	struct shash_desc *desc;
 +	size_t digest_size, desc_size;
 +	u8 *digest;
-+	int ret = 0;
++	int ret;
 +
 +	tfm = crypto_alloc_shash("sha256", 0, 0);
-+	if (IS_ERR(tfm))
++	if (IS_ERR(tfm)) {
++		ret = PTR_ERR(tfm);
 +		goto error_return;
++	}
 +
 +	desc_size = crypto_shash_descsize(tfm) + sizeof(*desc);
 +	digest_size = crypto_shash_digestsize(tfm);
@@ -99,7 +101,7 @@ Signed-off-by: "Lee, Chun-Yi" <jlee@suse.com>
  	int ret;
  
  	pr_devel("==>%s(,%zu)\n", __func__, modlen);
-@@ -51,6 +98,7 @@ int mod_verify_sig(const void *mod, stru
+@@ -51,6 +100,7 @@
  	if (modlen <= sizeof(ms))
  		return -EBADMSG;
  
@@ -107,7 +109,7 @@ Signed-off-by: "Lee, Chun-Yi" <jlee@suse.com>
  	memcpy(&ms, mod + (modlen - sizeof(ms)), sizeof(ms));
  
  	ret = mod_check_sig(&ms, modlen, "module");
-@@ -61,10 +109,17 @@ int mod_verify_sig(const void *mod, stru
+@@ -61,10 +111,17 @@
  	modlen -= sig_len + sizeof(ms);
  	info->len = modlen;
  

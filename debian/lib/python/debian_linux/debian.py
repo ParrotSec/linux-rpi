@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 import collections.abc
 import functools
@@ -5,8 +7,6 @@ import os.path
 import re
 import unittest
 import warnings
-
-from . import utils
 
 
 class Changelog(list):
@@ -450,7 +450,8 @@ class PackageDescription(object):
                 self.append(desc_split[1])
 
     def __str__(self):
-        wrap = utils.TextWrapper(width=74, fix_sentence_endings=True).wrap
+        from .utils import TextWrapper
+        wrap = TextWrapper(width=74, fix_sentence_endings=True).wrap
         short = ', '.join(self.short)
         long_pars = []
         for i in self.long:
@@ -723,8 +724,19 @@ def restriction_requires_profile(form, profile):
     return True
 
 
-class _ControlFileDict(dict):
+class _ControlFileDict(collections.abc.MutableMapping):
+    def __init__(self):
+        self.__data = {}
+        self.meta = {}
+
+    def __getitem__(self, key):
+        return self.__data[key]
+
     def __setitem__(self, key, value):
+        if key.lower().startswith('meta-'):
+            self.meta[key.lower()[5:]] = value
+            return
+
         try:
             cls = self._fields[key]
             if not isinstance(value, cls):
@@ -733,25 +745,76 @@ class _ControlFileDict(dict):
             warnings.warn(
                 f'setting unknown field { key } in { type(self).__name__ }',
                 stacklevel=2)
-            pass
-        super(_ControlFileDict, self).__setitem__(key, value)
+        self.__data[key] = value
 
-    def keys(self):
-        keys = set(super(_ControlFileDict, self).keys())
-        for i in self._fields.keys():
-            if i in self:
-                keys.remove(i)
-                yield i
-        for i in sorted(list(keys)):
-            yield i
+    def __delitem__(self, key):
+        del self.__data[key]
 
-    def items(self):
-        for i in self.keys():
-            yield (i, self[i])
+    def __iter__(self):
+        keys = set(self.__data.keys())
+        for key in self._fields.keys():
+            if key in self.__data:
+                keys.remove(key)
+                yield key
+        for key in sorted(keys):
+            yield key
 
-    def values(self):
-        for i in self.keys():
-            yield self[i]
+    def __len__(self):
+        return len(self.__data)
+
+    def setdefault(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            try:
+                ret = self[key] = self._fields[key]()
+            except KeyError:
+                warnings.warn(
+                    f'setting unknown field { key } in { type(self).__name__ }',
+                    stacklevel=2)
+                ret = self[key] = ''
+            return ret
+
+    @classmethod
+    def read_rfc822(cls, f):
+        entries = []
+        eof = False
+
+        while not eof:
+            e = cls()
+            last = None
+            lines = []
+            while True:
+                line = f.readline()
+                if not line:
+                    eof = True
+                    break
+                # Strip comments rather than trying to preserve them
+                if line[0] == '#':
+                    continue
+                line = line.strip('\n')
+                if not line:
+                    break
+                if line[0] in ' \t':
+                    if not last:
+                        raise ValueError(
+                            'Continuation line seen before first header')
+                    lines.append(line.lstrip())
+                    continue
+                if last:
+                    e[last] = '\n'.join(lines)
+                i = line.find(':')
+                if i < 0:
+                    raise ValueError(u"Not a header, not a continuation: ``%s''" %
+                                     line)
+                last = line[:i]
+                lines = [line[i + 1:].lstrip()]
+            if last:
+                e[last] = '\n'.join(lines)
+            if e:
+                entries.append(e)
+
+        return entries
 
 
 class SourcePackage(_ControlFileDict):

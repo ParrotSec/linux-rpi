@@ -1,7 +1,7 @@
 Subject: zram: Replace bit spinlocks with spinlock_t for PREEMPT_RT.
 From: Mike Galbraith <umgwanakikbuti@gmail.com>
 Date: Thu Mar 31 04:08:28 2016 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 From: Mike Galbraith <umgwanakikbuti@gmail.com>
 
@@ -22,7 +22,7 @@ Link: https://lkml.kernel.org/r/YqIbMuHCPiQk+Ac2@linutronix.de
 ---
 --- a/drivers/block/zram/zram_drv.c
 +++ b/drivers/block/zram/zram_drv.c
-@@ -60,6 +60,40 @@ static void zram_free_page(struct zram *
+@@ -57,6 +57,40 @@ static void zram_free_page(struct zram *
  static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
  				u32 index, int offset, struct bio *bio);
  
@@ -63,7 +63,7 @@ Link: https://lkml.kernel.org/r/YqIbMuHCPiQk+Ac2@linutronix.de
  
  static int zram_slot_trylock(struct zram *zram, u32 index)
  {
-@@ -75,6 +109,7 @@ static void zram_slot_unlock(struct zram
+@@ -72,6 +106,7 @@ static void zram_slot_unlock(struct zram
  {
  	bit_spin_unlock(ZRAM_LOCK, &zram->table[index].flags);
  }
@@ -71,7 +71,7 @@ Link: https://lkml.kernel.org/r/YqIbMuHCPiQk+Ac2@linutronix.de
  
  static inline bool init_done(struct zram *zram)
  {
-@@ -1198,6 +1233,7 @@ static bool zram_meta_alloc(struct zram
+@@ -1187,6 +1222,7 @@ static bool zram_meta_alloc(struct zram
  
  	if (!huge_class_size)
  		huge_class_size = zs_huge_class_size(zram->mem_pool);
@@ -81,7 +81,7 @@ Link: https://lkml.kernel.org/r/YqIbMuHCPiQk+Ac2@linutronix.de
  
 --- a/drivers/block/zram/zram_drv.h
 +++ b/drivers/block/zram/zram_drv.h
-@@ -63,6 +63,9 @@ struct zram_table_entry {
+@@ -62,6 +62,9 @@ struct zram_table_entry {
  		unsigned long element;
  	};
  	unsigned long flags;

@@ -12,6 +12,10 @@ description:
 > modules - if the kernel is secure-booted.
 
 Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
+[Salvatore Bonaccorso: After fixing https://bugs.debian.org/956197 the
+help text for LOCK_DOWN_IN_EFI_SECURE_BOOT needs to be adjusted to
+mention that lockdown is triggered in integrity mode]
+Signed-off-by: Salvatore Bonaccorso <carnil@debian.org>
 ---
  arch/x86/kernel/setup.c           |    4 ++--
  drivers/firmware/efi/secureboot.c |    3 +++
@@ -111,7 +115,7 @@ Index: debian-kernel/security/lockdown/Kconfig
 +	  not indicated by the boot parameters.
 +
 +	  Enabling this option results in kernel lockdown being
-+	  triggered in confidentiality mode if EFI Secure Boot is set.
++	  triggered in integrity mode if EFI Secure Boot is set.
 Index: debian-kernel/security/lockdown/lockdown.c
 ===================================================================
 --- debian-kernel.orig/security/lockdown/lockdown.c

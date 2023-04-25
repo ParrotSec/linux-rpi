@@ -25,3 +25,6 @@ mac80211_hwsim -
 lib80211_crypt_wep ?
 lib80211_crypt_ccmp ?
 lib80211_crypt_tkip ?
+
+# (pending) ath11k_pci soft-dep:
+qrtr_mhi ?

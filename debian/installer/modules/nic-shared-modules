@@ -1,3 +1,5 @@
+drivers/net/phy/**
+
 8390 ?
 fixed_phy ?
 libphy ?

@@ -1,7 +1,7 @@
 Subject: powerpc: traps: Use PREEMPT_RT
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri Jul 26 11:30:49 2019 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -17,7 +17,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 ---
 --- a/arch/powerpc/kernel/traps.c
 +++ b/arch/powerpc/kernel/traps.c
-@@ -260,12 +260,17 @@ static char *get_mmu_str(void)
+@@ -261,12 +261,17 @@ static char *get_mmu_str(void)
  
  static int __die(const char *str, struct pt_regs *regs, long err)
  {

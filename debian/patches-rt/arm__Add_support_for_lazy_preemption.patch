@@ -1,7 +1,7 @@
 Subject: arm: Add support for lazy preemption
 From: Thomas Gleixner <tglx@linutronix.de>
 Date: Wed Oct 31 12:04:11 2012 +0100
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 From: Thomas Gleixner <tglx@linutronix.de>
 
@@ -20,7 +20,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 ---
 --- a/arch/arm/Kconfig
 +++ b/arch/arm/Kconfig
-@@ -113,6 +113,7 @@ config ARM
+@@ -114,6 +114,7 @@ config ARM
  	select HAVE_PERF_EVENTS
  	select HAVE_PERF_REGS
  	select HAVE_PERF_USER_STACK_DUMP
@@ -38,15 +38,15 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	__u32			cpu;		/* cpu */
  	__u32			cpu_domain;	/* cpu domain */
  	struct cpu_context_save	cpu_context;	/* cpu context */
-@@ -133,6 +134,7 @@ extern int vfp_restore_user_hwstate(stru
- #define TIF_SYSCALL_TRACEPOINT	6	/* syscall tracepoint instrumentation */
- #define TIF_SECCOMP		7	/* seccomp syscall filtering active */
- #define TIF_NOTIFY_SIGNAL	8	/* signal notifications exist */
-+#define TIF_NEED_RESCHED_LAZY	9
+@@ -129,6 +130,7 @@ extern int vfp_restore_user_hwstate(stru
+ #define TIF_NOTIFY_RESUME	2	/* callback before returning to user */
+ #define TIF_UPROBE		3	/* breakpointed or singlestepping */
+ #define TIF_NOTIFY_SIGNAL	4	/* signal notifications exist */
++#define TIF_NEED_RESCHED_LAZY	5
  
  #define TIF_USING_IWMMXT	17
  #define TIF_MEMDIE		18	/* is terminating due to OOM killer */
-@@ -147,6 +149,7 @@ extern int vfp_restore_user_hwstate(stru
+@@ -148,6 +150,7 @@ extern int vfp_restore_user_hwstate(stru
  #define _TIF_SYSCALL_TRACEPOINT	(1 << TIF_SYSCALL_TRACEPOINT)
  #define _TIF_SECCOMP		(1 << TIF_SECCOMP)
  #define _TIF_NOTIFY_SIGNAL	(1 << TIF_NOTIFY_SIGNAL)
@@ -54,7 +54,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  #define _TIF_USING_IWMMXT	(1 << TIF_USING_IWMMXT)
  
  /* Checks for any syscall work in entry-common.S */
-@@ -156,7 +159,8 @@ extern int vfp_restore_user_hwstate(stru
+@@ -157,7 +160,8 @@ extern int vfp_restore_user_hwstate(stru
  /*
   * Change these and you break ASM code in entry-common.S
   */

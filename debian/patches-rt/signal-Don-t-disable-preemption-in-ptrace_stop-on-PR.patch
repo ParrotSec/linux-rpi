@@ -2,7 +2,7 @@ From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Wed, 22 Jun 2022 11:36:17 +0200
 Subject: [PATCH] signal: Don't disable preemption in ptrace_stop() on
  PREEMPT_RT.
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.0/older/patches-6.0-rt11.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
 
 Commit
    53da1d9456fe7 ("fix ptrace slowness")
@@ -40,7 +40,7 @@ Link: https://lkml.kernel.org/r/20220720154435.232749-2-bigeasy@linutronix.de
 
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
-@@ -2297,13 +2297,13 @@ static int ptrace_stop(int exit_code, in
+@@ -2298,13 +2298,13 @@ static int ptrace_stop(int exit_code, in
  	/*
  	 * Don't want to allow preemption here, because
  	 * sys_ptrace() needs this task to be inactive.
@@ -55,6 +55,6 @@ Link: https://lkml.kernel.org/r/20220720154435.232749-2-bigeasy@linutronix.de
 -	preempt_enable_no_resched();
 +	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
 +		preempt_enable_no_resched();
- 	freezable_schedule();
+ 	schedule();
  	cgroup_leave_frozen(true);
  

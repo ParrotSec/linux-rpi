@@ -23,8 +23,10 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  arch/sh/boot/romimage/Makefile   |  4 ++--
  3 files changed, 9 insertions(+), 9 deletions(-)
 
---- a/arch/sh/Makefile
-+++ b/arch/sh/Makefile
+Index: linux/arch/sh/Makefile
+===================================================================
+--- linux.orig/arch/sh/Makefile
++++ linux/arch/sh/Makefile
 @@ -102,16 +102,16 @@ UTS_MACHINE		:= sh
  LDFLAGS_vmlinux		+= -e _stext
  
@@ -45,10 +47,12 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 -export ld-bfd
 +export ld_bfd
  
- head-y	:= arch/sh/kernel/head_32.o
- 
---- a/arch/sh/boot/compressed/Makefile
-+++ b/arch/sh/boot/compressed/Makefile
+ # Mach groups
+ machdir-$(CONFIG_SOLUTION_ENGINE)		+= mach-se
+Index: linux/arch/sh/boot/compressed/Makefile
+===================================================================
+--- linux.orig/arch/sh/boot/compressed/Makefile
++++ linux/arch/sh/boot/compressed/Makefile
 @@ -36,7 +36,7 @@ endif
  
  ccflags-remove-$(CONFIG_MCOUNT) += -pg
@@ -67,8 +71,10 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  
  $(obj)/piggy.o: $(obj)/vmlinux.scr $(obj)/vmlinux.bin.$(suffix_y) FORCE
  	$(call if_changed,ld)
---- a/arch/sh/boot/romimage/Makefile
-+++ b/arch/sh/boot/romimage/Makefile
+Index: linux/arch/sh/boot/romimage/Makefile
+===================================================================
+--- linux.orig/arch/sh/boot/romimage/Makefile
++++ linux/arch/sh/boot/romimage/Makefile
 @@ -13,7 +13,7 @@ mmcif-obj-$(CONFIG_CPU_SUBTYPE_SH7724)	:
  load-$(CONFIG_ROMIMAGE_MMCIF)		:= $(mmcif-load-y)
  obj-$(CONFIG_ROMIMAGE_MMCIF)		:= $(mmcif-obj-y)

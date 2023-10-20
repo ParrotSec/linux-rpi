@@ -170,7 +170,8 @@ fetch_store_string(unsigned long addr, void *dest, void *base)
 			 */
 			ret++;
 		*(u32 *)dest = make_data_loc(ret, (void *)dst - base);
-	}
+	} else
+		*(u32 *)dest = make_data_loc(0, (void *)dst - base);
 
 	return ret;
 }
@@ -220,6 +221,7 @@ process_fetch_insn(struct fetch_insn *code, void *rec, void *dest,
 {
 	struct pt_regs *regs = rec;
 	unsigned long val;
+	int ret;
 
 	/* 1st stage: get value from context */
 	switch (code->op) {
@@ -235,20 +237,16 @@ process_fetch_insn(struct fetch_insn *code, void *rec, void *dest,
 	case FETCH_OP_RETVAL:
 		val = regs_return_value(regs);
 		break;
-	case FETCH_OP_IMM:
-		val = code->immediate;
-		break;
 	case FETCH_OP_COMM:
 		val = FETCH_TOKEN_COMM;
-		break;
-	case FETCH_OP_DATA:
-		val = (unsigned long)code->data;
 		break;
 	case FETCH_OP_FOFFS:
 		val = translate_user_vaddr(code->immediate);
 		break;
 	default:
-		return -EILSEQ;
+		ret = process_common_fetch_insn(code, &val);
+		if (ret < 0)
+			return ret;
 	}
 	code++;
 
@@ -689,9 +687,12 @@ static int __trace_uprobe_create(int argc, const char **argv)
 
 	/* parse arguments */
 	for (i = 0; i < argc && i < MAX_TRACE_ARGS; i++) {
+		struct traceprobe_parse_context ctx = {
+			.flags = (is_return ? TPARG_FL_RETURN : 0) | TPARG_FL_USER,
+		};
+
 		trace_probe_log_set_index(i + 2);
-		ret = traceprobe_parse_probe_arg(&tu->tp, i, argv[i],
-					is_return ? TPARG_FL_RETURN : 0);
+		ret = traceprobe_parse_probe_arg(&tu->tp, i, argv[i], &ctx);
 		if (ret)
 			goto error;
 	}
@@ -1041,7 +1042,7 @@ print_uprobe_event(struct trace_iterator *iter, int flags, struct trace_event *e
 		data = DATAOF_TRACE_ENTRY(entry, false);
 	}
 
-	if (print_probe_args(s, tu->tp.args, tu->tp.nr_args, data, entry) < 0)
+	if (trace_probe_print_args(s, tu->tp.args, tu->tp.nr_args, data, entry) < 0)
 		goto out;
 
 	trace_seq_putc(s, '\n');
@@ -1417,7 +1418,7 @@ static void uretprobe_perf_func(struct trace_uprobe *tu, unsigned long func,
 
 int bpf_get_uprobe_info(const struct perf_event *event, u32 *fd_type,
 			const char **filename, u64 *probe_offset,
-			bool perf_type_tracepoint)
+			u64 *probe_addr, bool perf_type_tracepoint)
 {
 	const char *pevent = trace_event_name(event->tp_event);
 	const char *group = event->tp_event->class->system;
@@ -1434,6 +1435,7 @@ int bpf_get_uprobe_info(const struct perf_event *event, u32 *fd_type,
 				    : BPF_FD_TYPE_UPROBE;
 	*filename = tu->filename;
 	*probe_offset = tu->offset;
+	*probe_addr = 0;
 	return 0;
 }
 #endif	/* CONFIG_PERF_EVENTS */

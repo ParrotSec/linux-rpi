@@ -115,6 +115,8 @@ extern struct auxiliary_driver i40iw_auxiliary_drv;
 #define IRDMA_REFLUSH		BIT(2)
 #define IRDMA_FLUSH_WAIT	BIT(3)
 
+#define IRDMA_IRQ_NAME_STR_LEN (64)
+
 enum init_completion_state {
 	INVALID_STATE = 0,
 	INITIAL_STATE,
@@ -159,8 +161,8 @@ struct irdma_cqp_request {
 	void (*callback_fcn)(struct irdma_cqp_request *cqp_request);
 	void *param;
 	struct irdma_cqp_compl_info compl_info;
+	bool request_done; /* READ/WRITE_ONCE macros operate on it */
 	bool waiting:1;
-	bool request_done:1;
 	bool dynamic:1;
 };
 
@@ -212,6 +214,7 @@ struct irdma_msix_vector {
 	u32 cpu_affinity;
 	u32 ceq_id;
 	cpumask_t mask;
+	char name[IRDMA_IRQ_NAME_STR_LEN];
 };
 
 struct irdma_mc_table_info {
@@ -236,7 +239,7 @@ struct irdma_qv_info {
 
 struct irdma_qvlist_info {
 	u32 num_vectors;
-	struct irdma_qv_info qv_info[1];
+	struct irdma_qv_info qv_info[];
 };
 
 struct irdma_gen_ops {

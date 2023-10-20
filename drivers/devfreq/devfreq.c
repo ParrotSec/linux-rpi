@@ -763,6 +763,7 @@ static void devfreq_dev_release(struct device *dev)
 		dev_pm_opp_put_opp_table(devfreq->opp_table);
 
 	mutex_destroy(&devfreq->lock);
+	srcu_cleanup_notifier_head(&devfreq->transition_notifier_list);
 	kfree(devfreq);
 }
 
@@ -1057,7 +1058,7 @@ struct devfreq *devfreq_get_devfreq_by_node(struct device_node *node)
 	mutex_lock(&devfreq_list_lock);
 	list_for_each_entry(devfreq, &devfreq_list, node) {
 		if (devfreq->dev.parent
-			&& devfreq->dev.parent->of_node == node) {
+			&& device_match_of_node(devfreq->dev.parent, node)) {
 			mutex_unlock(&devfreq_list_lock);
 			return devfreq;
 		}
@@ -1988,7 +1989,7 @@ DEFINE_SHOW_ATTRIBUTE(devfreq_summary);
 
 static int __init devfreq_init(void)
 {
-	devfreq_class = class_create(THIS_MODULE, "devfreq");
+	devfreq_class = class_create("devfreq");
 	if (IS_ERR(devfreq_class)) {
 		pr_err("%s: couldn't create class\n", __FILE__);
 		return PTR_ERR(devfreq_class);

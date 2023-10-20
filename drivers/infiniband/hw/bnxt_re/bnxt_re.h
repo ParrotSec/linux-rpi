@@ -39,6 +39,7 @@
 
 #ifndef __BNXT_RE_H__
 #define __BNXT_RE_H__
+#include <rdma/uverbs_ioctl.h>
 #include "hw_counters.h"
 #define ROCE_DRV_MODULE_NAME		"bnxt_re"
 
@@ -89,13 +90,6 @@ struct bnxt_re_ring_attr {
 	u8		mode;
 };
 
-struct bnxt_re_work {
-	struct work_struct	work;
-	unsigned long		event;
-	struct bnxt_re_dev      *rdev;
-	struct net_device	*vlan_dev;
-};
-
 struct bnxt_re_sqp_entries {
 	struct bnxt_qplib_sge sge;
 	u64 wrid;
@@ -118,12 +112,32 @@ struct bnxt_re_gsi_context {
 #define BNXT_RE_NQ_IDX			1
 #define BNXT_RE_GEN_P5_MAX_VF		64
 
+struct bnxt_re_pacing {
+	u64 dbr_db_fifo_reg_off;
+	void *dbr_page;
+	u64 dbr_bar_addr;
+	u32 pacing_algo_th;
+	u32 do_pacing_save;
+	u32 dbq_pacing_time; /* ms */
+	u32 dbr_def_do_pacing;
+	bool dbr_pacing;
+};
+
+#define BNXT_RE_DBR_PACING_TIME 5 /* ms */
+#define BNXT_RE_PACING_ALGO_THRESHOLD 250 /* Entries in DB FIFO */
+#define BNXT_RE_PACING_ALARM_TH_MULTIPLE 2 /* Multiple of pacing algo threshold */
+/* Default do_pacing value when there is no congestion */
+#define BNXT_RE_DBR_DO_PACING_NO_CONGESTION 0x7F /* 1 in 512 probability */
+#define BNXT_RE_DB_FIFO_ROOM_MASK 0x1FFF8000
+#define BNXT_RE_MAX_FIFO_DEPTH 0x2c00
+#define BNXT_RE_DB_FIFO_ROOM_SHIFT 15
+#define BNXT_RE_GRC_FIFO_REG_BASE 0x2000
+
 struct bnxt_re_dev {
 	struct ib_device		ibdev;
 	struct list_head		list;
 	unsigned long			flags;
 #define BNXT_RE_FLAG_NETDEV_REGISTERED		0
-#define BNXT_RE_FLAG_GOT_MSIX			2
 #define BNXT_RE_FLAG_HAVE_L2_REF		3
 #define BNXT_RE_FLAG_RCFW_CHANNEL_EN		4
 #define BNXT_RE_FLAG_QOS_WORK_REG		5
@@ -132,18 +146,16 @@ struct bnxt_re_dev {
 #define BNXT_RE_FLAG_ERR_DEVICE_DETACHED       17
 #define BNXT_RE_FLAG_ISSUE_ROCE_STATS          29
 	struct net_device		*netdev;
+	struct notifier_block		nb;
 	unsigned int			version, major, minor;
 	struct bnxt_qplib_chip_ctx	*chip_ctx;
 	struct bnxt_en_dev		*en_dev;
-	struct bnxt_msix_entry		msix_entries[BNXT_RE_MAX_MSIX];
 	int				num_msix;
 
 	int				id;
 
 	struct delayed_work		worker;
 	u8				cur_prio_map;
-	u16				active_speed;
-	u8				active_width;
 
 	/* FP Notification Queue (CQ & SRQ) */
 	struct tasklet_struct		nq_task;
@@ -179,6 +191,7 @@ struct bnxt_re_dev {
 	atomic_t nq_alloc_cnt;
 	u32 is_virtfn;
 	u32 num_vfs;
+	struct bnxt_re_pacing pacing;
 };
 
 #define to_bnxt_re_dev(ptr, member)	\
@@ -188,6 +201,8 @@ struct bnxt_re_dev {
 #define BNXT_RE_ROCEV2_IPV4_PACKET	2
 #define BNXT_RE_ROCEV2_IPV6_PACKET	3
 
+#define BNXT_RE_CHECK_RC(x) ((x) && ((x) != -ETIMEDOUT))
+
 static inline struct device *rdev_to_dev(struct bnxt_re_dev *rdev)
 {
 	if (rdev)
@@ -195,4 +210,5 @@ static inline struct device *rdev_to_dev(struct bnxt_re_dev *rdev)
 	return NULL;
 }
 
+extern const struct uapi_definition bnxt_re_uapi_defs[];
 #endif

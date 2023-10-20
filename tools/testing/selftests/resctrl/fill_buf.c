@@ -14,7 +14,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <inttypes.h>
-#include <malloc.h>
 #include <string.h>
 
 #include "resctrl.h"
@@ -31,14 +30,6 @@ static void sb(void)
 	asm volatile("sfence\n\t"
 		     : : : "memory");
 #endif
-}
-
-static void ctrl_handler(int signo)
-{
-	free(startptr);
-	printf("\nEnding\n");
-	sb();
-	exit(EXIT_SUCCESS);
 }
 
 static void cl_flush(void *p)
@@ -64,10 +55,14 @@ static void mem_flush(void *p, size_t s)
 
 static void *malloc_and_init_memory(size_t s)
 {
+	void *p = NULL;
 	uint64_t *p64;
 	size_t s64;
+	int ret;
 
-	void *p = memalign(PAGE_SIZE, s);
+	ret = posix_memalign(&p, PAGE_SIZE, s);
+	if (ret < 0)
+		return NULL;
 
 	p64 = (uint64_t *)p;
 	s64 = s / sizeof(uint64_t);
@@ -182,12 +177,13 @@ fill_cache(unsigned long long buf_size, int malloc_and_init, int memflush,
 	else
 		ret = fill_cache_write(start_ptr, end_ptr, resctrl_val);
 
+	free(startptr);
+
 	if (ret) {
 		printf("\n Error in fill cache read/write...\n");
 		return -1;
 	}
 
-	free(startptr);
 
 	return 0;
 }
@@ -197,12 +193,6 @@ int run_fill_buf(unsigned long span, int malloc_and_init_memory,
 {
 	unsigned long long cache_size = span;
 	int ret;
-
-	/* set up ctrl-c handler */
-	if (signal(SIGINT, ctrl_handler) == SIG_ERR)
-		printf("Failed to catch SIGINT!\n");
-	if (signal(SIGHUP, ctrl_handler) == SIG_ERR)
-		printf("Failed to catch SIGHUP!\n");
 
 	ret = fill_cache(cache_size, malloc_and_init_memory, memflush, op,
 			 resctrl_val);

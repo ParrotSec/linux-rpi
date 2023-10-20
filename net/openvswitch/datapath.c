@@ -35,6 +35,7 @@
 #include <linux/rculist.h>
 #include <linux/dmi.h>
 #include <net/genetlink.h>
+#include <net/gso.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <net/pkt_cls.h>
@@ -209,6 +210,26 @@ static struct vport *new_vport(const struct vport_parms *parms)
 	return vport;
 }
 
+static void ovs_vport_update_upcall_stats(struct sk_buff *skb,
+					  const struct dp_upcall_info *upcall_info,
+					  bool upcall_result)
+{
+	struct vport *p = OVS_CB(skb)->input_vport;
+	struct vport_upcall_stats_percpu *stats;
+
+	if (upcall_info->cmd != OVS_PACKET_CMD_MISS &&
+	    upcall_info->cmd != OVS_PACKET_CMD_ACTION)
+		return;
+
+	stats = this_cpu_ptr(p->upcall_stats);
+	u64_stats_update_begin(&stats->syncp);
+	if (upcall_result)
+		u64_stats_inc(&stats->n_success);
+	else
+		u64_stats_inc(&stats->n_fail);
+	u64_stats_update_end(&stats->syncp);
+}
+
 void ovs_dp_detach_port(struct vport *p)
 {
 	ASSERT_OVSL();
@@ -305,6 +326,8 @@ int ovs_dp_upcall(struct datapath *dp, struct sk_buff *skb,
 		err = queue_userspace_packet(dp, skb, key, upcall_info, cutlen);
 	else
 		err = queue_gso_packets(dp, skb, key, upcall_info, cutlen);
+
+	ovs_vport_update_upcall_stats(skb, upcall_info, !err);
 	if (err)
 		goto err;
 
@@ -716,9 +739,9 @@ static void get_dp_stats(const struct datapath *dp, struct ovs_dp_stats *stats,
 		percpu_stats = per_cpu_ptr(dp->stats_percpu, i);
 
 		do {
-			start = u64_stats_fetch_begin_irq(&percpu_stats->syncp);
+			start = u64_stats_fetch_begin(&percpu_stats->syncp);
 			local_stats = *percpu_stats;
-		} while (u64_stats_fetch_retry_irq(&percpu_stats->syncp, start));
+		} while (u64_stats_fetch_retry(&percpu_stats->syncp, start));
 
 		stats->n_hit += local_stats.n_hit;
 		stats->n_missed += local_stats.n_missed;
@@ -1806,7 +1829,7 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 	parms.port_no = OVSP_LOCAL;
 	parms.upcall_portids = a[OVS_DP_ATTR_UPCALL_PID];
 	parms.desired_ifindex = a[OVS_DP_ATTR_IFINDEX]
-		? nla_get_u32(a[OVS_DP_ATTR_IFINDEX]) : 0;
+		? nla_get_s32(a[OVS_DP_ATTR_IFINDEX]) : 0;
 
 	/* So far only local changes have been made, now need the lock. */
 	ovs_lock();
@@ -2026,7 +2049,7 @@ static const struct nla_policy datapath_policy[OVS_DP_ATTR_MAX + 1] = {
 	[OVS_DP_ATTR_USER_FEATURES] = { .type = NLA_U32 },
 	[OVS_DP_ATTR_MASKS_CACHE_SIZE] =  NLA_POLICY_RANGE(NLA_U32, 0,
 		PCPU_MIN_UNIT_SIZE / sizeof(struct mask_cache_entry)),
-	[OVS_DP_ATTR_IFINDEX] = {.type = NLA_U32 },
+	[OVS_DP_ATTR_IFINDEX] = NLA_POLICY_MIN(NLA_S32, 0),
 };
 
 static const struct genl_small_ops dp_datapath_genl_ops[] = {
@@ -2103,6 +2126,9 @@ static int ovs_vport_cmd_fill_info(struct vport *vport, struct sk_buff *skb,
 	if (nla_put_64bit(skb, OVS_VPORT_ATTR_STATS,
 			  sizeof(struct ovs_vport_stats), &vport_stats,
 			  OVS_VPORT_ATTR_PAD))
+		goto nla_put_failure;
+
+	if (ovs_vport_get_upcall_stats(vport, skb))
 		goto nla_put_failure;
 
 	if (ovs_vport_get_upcall_portids(vport, skb))
@@ -2276,7 +2302,7 @@ restart:
 	parms.port_no = port_no;
 	parms.upcall_portids = a[OVS_VPORT_ATTR_UPCALL_PID];
 	parms.desired_ifindex = a[OVS_VPORT_ATTR_IFINDEX]
-		? nla_get_u32(a[OVS_VPORT_ATTR_IFINDEX]) : 0;
+		? nla_get_s32(a[OVS_VPORT_ATTR_IFINDEX]) : 0;
 
 	vport = new_vport(&parms);
 	err = PTR_ERR(vport);
@@ -2513,8 +2539,9 @@ static const struct nla_policy vport_policy[OVS_VPORT_ATTR_MAX + 1] = {
 	[OVS_VPORT_ATTR_TYPE] = { .type = NLA_U32 },
 	[OVS_VPORT_ATTR_UPCALL_PID] = { .type = NLA_UNSPEC },
 	[OVS_VPORT_ATTR_OPTIONS] = { .type = NLA_NESTED },
-	[OVS_VPORT_ATTR_IFINDEX] = { .type = NLA_U32 },
+	[OVS_VPORT_ATTR_IFINDEX] = NLA_POLICY_MIN(NLA_S32, 0),
 	[OVS_VPORT_ATTR_NETNSID] = { .type = NLA_S32 },
+	[OVS_VPORT_ATTR_UPCALL_STATS] = { .type = NLA_NESTED },
 };
 
 static const struct genl_small_ops dp_vport_genl_ops[] = {

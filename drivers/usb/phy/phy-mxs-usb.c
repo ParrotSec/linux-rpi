@@ -388,14 +388,8 @@ static void __mxs_phy_disconnect_line(struct mxs_phy *mxs_phy, bool disconnect)
 
 static bool mxs_phy_is_otg_host(struct mxs_phy *mxs_phy)
 {
-	void __iomem *base = mxs_phy->phy.io_priv;
-	u32 phyctrl = readl(base + HW_USBPHY_CTRL);
-
-	if (IS_ENABLED(CONFIG_USB_OTG) &&
-			!(phyctrl & BM_USBPHY_CTRL_OTG_ID_VALUE))
-		return true;
-
-	return false;
+	return IS_ENABLED(CONFIG_USB_OTG) &&
+		mxs_phy->phy.last_event == USB_EVENT_ID;
 }
 
 static void mxs_phy_disconnect_line(struct mxs_phy *mxs_phy, bool on)
@@ -733,7 +727,7 @@ static int mxs_phy_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* Some SoCs don't have anatop registers */
-	if (of_get_property(np, "fsl,anatop", NULL)) {
+	if (of_property_present(np, "fsl,anatop")) {
 		mxs_phy->regmap_anatop = syscon_regmap_lookup_by_phandle
 			(np, "fsl,anatop");
 		if (IS_ERR(mxs_phy->regmap_anatop)) {
@@ -801,13 +795,11 @@ static int mxs_phy_probe(struct platform_device *pdev)
 	return usb_add_phy_dev(&mxs_phy->phy);
 }
 
-static int mxs_phy_remove(struct platform_device *pdev)
+static void mxs_phy_remove(struct platform_device *pdev)
 {
 	struct mxs_phy *mxs_phy = platform_get_drvdata(pdev);
 
 	usb_remove_phy(&mxs_phy->phy);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -853,7 +845,7 @@ static SIMPLE_DEV_PM_OPS(mxs_phy_pm, mxs_phy_system_suspend,
 
 static struct platform_driver mxs_phy_driver = {
 	.probe = mxs_phy_probe,
-	.remove = mxs_phy_remove,
+	.remove_new = mxs_phy_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = mxs_phy_dt_ids,

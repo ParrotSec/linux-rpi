@@ -43,11 +43,11 @@
 #include "gt/intel_rps.h"
 
 #include "i915_active.h"
+#include "i915_config.h"
 #include "i915_deps.h"
 #include "i915_driver.h"
 #include "i915_drv.h"
 #include "i915_trace.h"
-#include "intel_pm.h"
 
 struct execute_cb {
 	struct irq_work work;
@@ -290,7 +290,7 @@ static enum hrtimer_restart __rq_watchdog_expired(struct hrtimer *hrtimer)
 
 	if (!i915_request_completed(rq)) {
 		if (llist_add(&rq->watchdog.link, &gt->watchdog.list))
-			schedule_work(&gt->watchdog.work);
+			queue_work(gt->i915->unordered_wq, &gt->watchdog.work);
 	} else {
 		i915_request_put(rq);
 	}
@@ -1621,6 +1621,20 @@ i915_request_await_object(struct i915_request *to,
 	return ret;
 }
 
+static void i915_request_await_huc(struct i915_request *rq)
+{
+	struct intel_huc *huc = &rq->context->engine->gt->uc.huc;
+
+	/* don't stall kernel submissions! */
+	if (!rcu_access_pointer(rq->context->gem_context))
+		return;
+
+	if (intel_huc_wait_required(huc))
+		i915_sw_fence_await_sw_fence(&rq->submit,
+					     &huc->delayed_load.fence,
+					     &rq->hucq);
+}
+
 static struct i915_request *
 __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 					struct intel_timeline *timeline)
@@ -1647,6 +1661,11 @@ __i915_request_ensure_parallel_ordering(struct i915_request *rq,
 
 	request_to_parent(rq)->parallel.last_rq = i915_request_get(rq);
 
+	/*
+	 * Users have to put a reference potentially got by
+	 * __i915_active_fence_set() to the returned request
+	 * when no longer needed
+	 */
 	return to_request(__i915_active_fence_set(&timeline->last_request,
 						  &rq->fence));
 }
@@ -1693,6 +1712,10 @@ __i915_request_ensure_ordering(struct i915_request *rq,
 							 0);
 	}
 
+	/*
+	 * Users have to put the reference to prev potentially got
+	 * by __i915_active_fence_set() when no longer needed
+	 */
 	return prev;
 }
 
@@ -1701,6 +1724,16 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 {
 	struct intel_timeline *timeline = i915_request_timeline(rq);
 	struct i915_request *prev;
+
+	/*
+	 * Media workloads may require HuC, so stall them until HuC loading is
+	 * complete. Note that HuC not being loaded when a user submission
+	 * arrives can only happen when HuC is loaded via GSC and in that case
+	 * we still expect the window between us starting to accept submissions
+	 * and HuC loading completion to be small (a few hundred ms).
+	 */
+	if (rq->engine->class == VIDEO_DECODE_CLASS)
+		i915_request_await_huc(rq);
 
 	/*
 	 * Dependency tracking and request ordering along the timeline
@@ -1736,6 +1769,8 @@ __i915_request_add_to_timeline(struct i915_request *rq)
 		prev = __i915_request_ensure_ordering(rq, timeline);
 	else
 		prev = __i915_request_ensure_parallel_ordering(rq, timeline);
+	if (prev)
+		i915_request_put(prev);
 
 	/*
 	 * Make sure that no request gazumped us - if it was allocated after

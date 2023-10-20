@@ -172,9 +172,9 @@ static ssize_t hwfifo_watermark_max_show(struct device *dev,
 
 static IIO_DEVICE_ATTR_RO(hwfifo_watermark_max, 0);
 
-static const struct attribute *cros_ec_sensor_fifo_attributes[] = {
-	&iio_dev_attr_hwfifo_timeout.dev_attr.attr,
-	&iio_dev_attr_hwfifo_watermark_max.dev_attr.attr,
+static const struct iio_dev_attr *cros_ec_sensor_fifo_attributes[] = {
+	&iio_dev_attr_hwfifo_timeout,
+	&iio_dev_attr_hwfifo_watermark_max,
 	NULL,
 };
 
@@ -253,7 +253,7 @@ int cros_ec_sensors_core_init(struct platform_device *pdev,
 	platform_set_drvdata(pdev, indio_dev);
 
 	state->ec = ec->ec_dev;
-	state->msg = devm_kzalloc(&pdev->dev,
+	state->msg = devm_kzalloc(&pdev->dev, sizeof(*state->msg) +
 				max((u16)sizeof(struct ec_params_motion_sense),
 				state->ec->max_response), GFP_KERNEL);
 	if (!state->msg)

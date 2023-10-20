@@ -6,9 +6,8 @@ Forwarded: not-needed
 
 ---
  tools/lib/perf/Documentation/Makefile       | 2 +-
- tools/lib/traceevent/Documentation/Makefile | 2 +-
  tools/perf/Documentation/Makefile           | 2 +-
- 3 files changed, 3 insertions(+), 3 deletions(-)
+ 2 files changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/tools/lib/perf/Documentation/Makefile b/tools/lib/perf/Documentation/Makefile
 index 972754082a85..272d06173a3e 100644
@@ -23,19 +22,6 @@ index 972754082a85..272d06173a3e 100644
  ASCIIDOC_HTML   = xhtml11
  MANPAGE_XSL     = manpage-normal.xsl
  XMLTO_EXTRA     =
-diff --git a/tools/lib/traceevent/Documentation/Makefile b/tools/lib/traceevent/Documentation/Makefile
-index aa72ab96c3c1..f3a4ff3b8b0e 100644
---- a/tools/lib/traceevent/Documentation/Makefile
-+++ b/tools/lib/traceevent/Documentation/Makefile
-@@ -28,7 +28,7 @@ mandir?=$(prefix)/share/man
- man3dir=$(mandir)/man3
- 
- ASCIIDOC=asciidoc
--ASCIIDOC_EXTRA = --unsafe -f asciidoc.conf
-+ASCIIDOC_EXTRA =
- ASCIIDOC_HTML = xhtml11
- MANPAGE_XSL = manpage-normal.xsl
- XMLTO_EXTRA =
 diff --git a/tools/perf/Documentation/Makefile b/tools/perf/Documentation/Makefile
 index 6e54979c2124..7bfa6ae971ab 100644
 --- a/tools/perf/Documentation/Makefile

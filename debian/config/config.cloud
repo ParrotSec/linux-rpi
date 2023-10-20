@@ -146,7 +146,6 @@ CONFIG_XEN_BLKDEV_FRONTEND=m
 ##
 ## file: drivers/char/tpm/Kconfig
 ##
-CONFIG_TCG_TPM=m
 # CONFIG_HW_RANDOM_TPM is not set
 CONFIG_TCG_TIS=m
 # CONFIG_TCG_TIS_SPI is not set
@@ -580,7 +579,6 @@ CONFIG_XEN_NETDEV_FRONTEND=m
 ## file: drivers/net/ethernet/Kconfig
 ##
 # CONFIG_JME is not set
-# CONFIG_FEALNX is not set
 
 ##
 ## file: drivers/net/ethernet/3com/Kconfig
@@ -706,7 +704,6 @@ CONFIG_NET_VENDOR_INTEL=y
 # CONFIG_E1000E is not set
 # CONFIG_IGB is not set
 # CONFIG_IGBVF is not set
-# CONFIG_IXGB is not set
 # CONFIG_IXGBE is not set
 #. Amazon EC2 uses Intel Corporation 82599 Ethernet Controller Virtual Function
 CONFIG_IXGBEVF=m
@@ -1064,7 +1061,6 @@ CONFIG_NVME_MULTIPATH=y
 # CONFIG_RTC_DRV_MSM6242 is not set
 # CONFIG_RTC_DRV_BQ4802 is not set
 # CONFIG_RTC_DRV_RP5C01 is not set
-# CONFIG_RTC_DRV_V3020 is not set
 # CONFIG_RTC_DRV_WM831X is not set
 # CONFIG_RTC_DRV_WM8350 is not set
 # CONFIG_RTC_DRV_PCF50633 is not set
@@ -1272,11 +1268,6 @@ CONFIG_HYPERV_STORAGE=m
 ## file: drivers/usb/Kconfig
 ##
 # CONFIG_USB_SUPPORT is not set
-
-##
-## file: drivers/vfio/mdev/Kconfig
-##
-# CONFIG_VFIO_MDEV is not set
 
 ##
 ## file: drivers/vfio/pci/Kconfig

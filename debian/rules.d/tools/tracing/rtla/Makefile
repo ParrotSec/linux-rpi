@@ -5,7 +5,7 @@ all:
 	echo '$(UPSTREAMVERSION)' >VERSION
 	rsync -a $(top_srcdir)/tools/tracing/rtla/ .
 	rsync -a $(top_srcdir)/Documentation/tools/rtla/ Documentation/
-	$(MAKE) EXTRA_CFLAGS='$(CFLAGS) $(CPPFLAGS)' EXTRA_LDFLAGS='$(LDFLAGS)'
+	$(MAKE) EXTRA_CFLAGS='$(CFLAGS) $(CPPFLAGS)' EXTRA_LDFLAGS='$(LDFLAGS)' PKG_CONFIG='$(PKG_CONFIG)'
 
 install:
 	$(MAKE) install

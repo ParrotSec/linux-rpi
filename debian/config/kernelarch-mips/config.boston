@@ -27,9 +27,25 @@ CONFIG_IMG_ASCII_LCD=y
 CONFIG_COMMON_CLK_BOSTON=y
 
 ##
+## file: drivers/dma/Kconfig
+##
+CONFIG_PCH_DMA=m
+
+##
+## file: drivers/gpio/Kconfig
+##
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_PCH=m
+
+##
 ## file: drivers/i2c/busses/Kconfig
 ##
 CONFIG_I2C_EG20T=y
+
+##
+## file: drivers/irqchip/Kconfig
+##
+CONFIG_GOLDFISH_PIC=y
 
 ##
 ## file: drivers/misc/Kconfig
@@ -43,8 +59,14 @@ CONFIG_MMC_SDHCI=y
 CONFIG_MMC_SDHCI_PCI=y
 
 ##
+## file: drivers/net/ethernet/oki-semi/pch_gbe/Kconfig
+##
+CONFIG_PCH_GBE=m
+
+##
 ## file: drivers/pci/controller/Kconfig
 ##
+CONFIG_PCI_HOST_GENERIC=y
 CONFIG_PCIE_XILINX=y
 
 ##

@@ -86,11 +86,6 @@ CONFIG_GAMEPORT_EMU10K1=m
 CONFIG_GAMEPORT_FM801=m
 
 ##
-## file: drivers/input/joystick/Kconfig
-##
-CONFIG_INPUT_JOYSTICK=y
-
-##
 ## file: drivers/input/keyboard/Kconfig
 ##
 CONFIG_KEYBOARD_NEWTON=m
@@ -162,11 +157,6 @@ CONFIG_MTD_REDBOOT_PARTS=y
 ## file: drivers/net/Kconfig
 ##
 CONFIG_NET_FC=y
-
-##
-## file: drivers/net/ethernet/Kconfig
-##
-CONFIG_FEALNX=m
 
 ##
 ## file: drivers/net/ethernet/3com/Kconfig
@@ -327,11 +317,6 @@ CONFIG_SERIAL_8250_SHARE_IRQ=y
 CONFIG_SERIAL_8250_RSA=y
 
 ##
-## file: drivers/usb/Kconfig
-##
-CONFIG_USB_USS720=m
-
-##
 ## file: drivers/usb/atm/Kconfig
 ##
 CONFIG_USB_ATM=m
@@ -343,6 +328,11 @@ CONFIG_USB_SPEEDTOUCH=m
 CONFIG_USB_ISP116X_HCD=m
 CONFIG_USB_UHCI_HCD=m
 CONFIG_USB_SL811_HCD=m
+
+##
+## file: drivers/usb/misc/Kconfig
+##
+CONFIG_USB_USS720=m
 
 ##
 ## file: drivers/video/fbdev/Kconfig

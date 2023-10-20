@@ -62,6 +62,11 @@ CONFIG_PRINTER=m
 # CONFIG_APPLICOM is not set
 
 ##
+## file: drivers/char/hw_random/Kconfig
+##
+CONFIG_HW_RANDOM_N2RNG=m
+
+##
 ## file: drivers/char/ipmi/Kconfig
 ##
 # CONFIG_IPMI_HANDLER is not set
@@ -75,7 +80,6 @@ CONFIG_CRYPTO_DEV_NIAGARA2=m
 ## file: drivers/gpu/drm/Kconfig
 ##
 CONFIG_DRM=m
-CONFIG_DRM_RADEON=m
 
 ##
 ## file: drivers/gpu/drm/i2c/Kconfig
@@ -88,6 +92,11 @@ CONFIG_DRM_I2C_SIL164=m
 ##
 CONFIG_DRM_NOUVEAU=m
 # CONFIG_DRM_NOUVEAU_BACKLIGHT is not set
+
+##
+## file: drivers/gpu/drm/radeon/Kconfig
+##
+CONFIG_DRM_RADEON=m
 
 ##
 ## file: drivers/hid/usbhid/Kconfig
@@ -166,11 +175,6 @@ CONFIG_I2C_PARPORT=m
 # CONFIG_GAMEPORT is not set
 
 ##
-## file: drivers/input/joystick/Kconfig
-##
-# CONFIG_INPUT_JOYSTICK is not set
-
-##
 ## file: drivers/input/keyboard/Kconfig
 ##
 CONFIG_INPUT_KEYBOARD=y
@@ -217,6 +221,13 @@ CONFIG_SERIO_LIBPS2=y
 # CONFIG_VIDEO_CX88 is not set
 
 ##
+## file: drivers/media/pci/saa7146/Kconfig
+##
+# CONFIG_VIDEO_HEXIUM_GEMINI is not set
+# CONFIG_VIDEO_HEXIUM_ORION is not set
+# CONFIG_VIDEO_MXB is not set
+
+##
 ## file: drivers/media/radio/Kconfig
 ##
 # CONFIG_RADIO_MAXIRADIO is not set
@@ -241,11 +252,6 @@ CONFIG_NET_FC=y
 ## file: drivers/net/arcnet/Kconfig
 ##
 # CONFIG_ARCNET is not set
-
-##
-## file: drivers/net/ethernet/Kconfig
-##
-CONFIG_FEALNX=m
 
 ##
 ## file: drivers/net/ethernet/3com/Kconfig
@@ -414,13 +420,6 @@ CONFIG_MEGARAID_MAILBOX=m
 CONFIG_MEGARAID_LEGACY=m
 
 ##
-## file: drivers/staging/media/deprecated/saa7146/saa7146/Kconfig
-##
-# CONFIG_VIDEO_HEXIUM_GEMINI is not set
-# CONFIG_VIDEO_HEXIUM_ORION is not set
-# CONFIG_VIDEO_MXB is not set
-
-##
 ## file: drivers/tty/Kconfig
 ##
 CONFIG_VT=y
@@ -443,7 +442,6 @@ CONFIG_SERIAL_JSM=m
 ## file: drivers/usb/Kconfig
 ##
 CONFIG_USB=m
-# CONFIG_USB_USS720 is not set
 
 ##
 ## file: drivers/usb/host/Kconfig
@@ -452,6 +450,11 @@ CONFIG_USB_EHCI_HCD=m
 CONFIG_USB_OHCI_HCD=m
 CONFIG_USB_UHCI_HCD=m
 # CONFIG_USB_SL811_HCD is not set
+
+##
+## file: drivers/usb/misc/Kconfig
+##
+# CONFIG_USB_USS720 is not set
 
 ##
 ## file: drivers/video/backlight/Kconfig

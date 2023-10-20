@@ -42,3 +42,14 @@ libcpupower.so.1 libcpupower1 #MINVER#
  cpupower_read_sysfs@Base 5.13.9-1~exp1
  cpupower_write_sysfs@Base 5.13.9-1~exp1
  get_cpu_topology@Base 4.7~rc2-1~exp1
+ powercap_get_driver@Base 6.2~rc1-1~exp1
+ powercap_get_enabled@Base 6.2~rc1-1~exp1
+ powercap_get_energy_uj@Base 6.2~rc1-1~exp1
+ powercap_get_max_energy_range_uj@Base 6.2~rc1-1~exp1
+ powercap_get_max_power_range_uw@Base 6.2~rc1-1~exp1
+ powercap_get_power_uw@Base 6.2~rc1-1~exp1
+ powercap_init_zones@Base 6.2~rc1-1~exp1
+ powercap_read_zone@Base 6.2~rc1-1~exp1
+ powercap_walk_zones@Base 6.2~rc1-1~exp1
+ powercap_zone_get_enabled@Base 6.2~rc1-1~exp1
+ powercap_zone_set_enabled@Base 6.2~rc1-1~exp1

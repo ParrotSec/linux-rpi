@@ -9,22 +9,23 @@ Index: linux/.gitignore
 ===================================================================
 --- linux.orig/.gitignore
 +++ linux/.gitignore
-@@ -76,11 +76,6 @@ modules.order
+@@ -80,11 +80,6 @@ modules.order
  /*.spec
+ /rpmbuild/
  
- #
+-#
 -# Debian directory (make deb-pkg)
 -#
 -/debian/
 -
--#
+ #
  # Snap directory (make snap-pkg)
  #
- /snap/
-@@ -91,17 +86,6 @@ modules.order
+@@ -95,18 +90,6 @@ modules.order
+ #
  /tar-install/
  
- #
+-#
 -# We don't want to ignore the following even if they are dot-files
 -#
 -!.clang-format
@@ -32,14 +33,14 @@ Index: linux/.gitignore
 -!.get_maintainer.ignore
 -!.gitattributes
 -!.gitignore
+-!.kunitconfig
 -!.mailmap
 -!.rustfmt.toml
 -
--#
+ #
  # Generated include files
  #
- /include/config/
-@@ -168,3 +152,10 @@ sphinx_*/
+@@ -174,3 +157,10 @@ sphinx_*/
  
  # Rust analyzer configuration
  /rust-project.json

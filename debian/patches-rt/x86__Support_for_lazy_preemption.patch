@@ -1,7 +1,7 @@
 Subject: x86: Support for lazy preemption
 From: Thomas Gleixner <tglx@linutronix.de>
 Date: Thu Nov  1 11:03:47 2012 +0100
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
 
 From: Thomas Gleixner <tglx@linutronix.de>
 
@@ -20,7 +20,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 ---
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
-@@ -250,6 +250,7 @@ config X86
+@@ -257,6 +257,7 @@ config X86
  	select HAVE_PCI
  	select HAVE_PERF_REGS
  	select HAVE_PERF_USER_STACK_DUMP
@@ -30,14 +30,15 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	select HAVE_POSIX_CPU_TIMERS_TASK_WORK
 --- a/arch/x86/include/asm/preempt.h
 +++ b/arch/x86/include/asm/preempt.h
-@@ -90,17 +90,48 @@ static __always_inline void __preempt_co
+@@ -90,18 +90,49 @@ static __always_inline void __preempt_co
   * a decrement which hits zero means we have no preempt_count and should
   * reschedule.
   */
 -static __always_inline bool __preempt_count_dec_and_test(void)
 +static __always_inline bool ____preempt_count_dec_and_test(void)
  {
- 	return GEN_UNARY_RMWcc("decl", __preempt_count, e, __percpu_arg([var]));
+ 	return GEN_UNARY_RMWcc("decl", pcpu_hot.preempt_count, e,
+ 			       __percpu_arg([var]));
  }
  
 +static __always_inline bool __preempt_count_dec_and_test(void)
@@ -62,7 +63,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  {
 +#ifdef CONFIG_PREEMPT_LAZY
 +	u32 tmp;
-+	tmp = raw_cpu_read_4(__preempt_count);
++	tmp = raw_cpu_read_4(pcpu_hot.preempt_count);
 +	if (tmp == preempt_offset)
 +		return true;
 +
@@ -75,7 +76,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 +		return false;
 +	return test_thread_flag(TIF_NEED_RESCHED_LAZY);
 +#else
- 	return unlikely(raw_cpu_read_4(__preempt_count) == preempt_offset);
+ 	return unlikely(raw_cpu_read_4(pcpu_hot.preempt_count) == preempt_offset);
 +#endif
  }
  

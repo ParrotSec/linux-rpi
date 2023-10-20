@@ -1,8 +1,8 @@
 # Include SCSI controller drivers by default
 drivers/scsi/**
-mptfc
-mptsas
-mptspi
+mptfc ?
+mptsas ?
+mptspi ?
 
 # Include iSCSI boot support
 iscsi_ibft ?

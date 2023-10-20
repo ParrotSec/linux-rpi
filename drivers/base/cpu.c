@@ -125,17 +125,6 @@ static DEVICE_ATTR(release, S_IWUSR, NULL, cpu_release_store);
 #endif /* CONFIG_ARCH_CPU_PROBE_RELEASE */
 #endif /* CONFIG_HOTPLUG_CPU */
 
-struct bus_type cpu_subsys = {
-	.name = "cpu",
-	.dev_name = "cpu",
-	.match = cpu_subsys_match,
-#ifdef CONFIG_HOTPLUG_CPU
-	.online = cpu_subsys_online,
-	.offline = cpu_subsys_offline,
-#endif
-};
-EXPORT_SYMBOL_GPL(cpu_subsys);
-
 #ifdef CONFIG_KEXEC
 #include <linux/kexec.h>
 
@@ -336,7 +325,7 @@ static ssize_t print_cpu_modalias(struct device *dev,
 	return len;
 }
 
-static int cpu_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int cpu_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
 	char *buf = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (buf) {
@@ -347,6 +336,20 @@ static int cpu_uevent(struct device *dev, struct kobj_uevent_env *env)
 	return 0;
 }
 #endif
+
+struct bus_type cpu_subsys = {
+	.name = "cpu",
+	.dev_name = "cpu",
+	.match = cpu_subsys_match,
+#ifdef CONFIG_HOTPLUG_CPU
+	.online = cpu_subsys_online,
+	.offline = cpu_subsys_offline,
+#endif
+#ifdef CONFIG_GENERIC_CPU_AUTOPROBE
+	.uevent = cpu_uevent,
+#endif
+};
+EXPORT_SYMBOL_GPL(cpu_subsys);
 
 /*
  * register_cpu - Setup a sysfs device for a CPU.
@@ -368,9 +371,6 @@ int register_cpu(struct cpu *cpu, int num)
 	cpu->dev.offline_disabled = !cpu->hotpluggable;
 	cpu->dev.offline = !cpu_online(num);
 	cpu->dev.of_node = of_get_cpu_node(num, NULL);
-#ifdef CONFIG_GENERIC_CPU_AUTOPROBE
-	cpu->dev.bus->uevent = cpu_uevent;
-#endif
 	cpu->dev.groups = common_cpu_attr_groups;
 	if (cpu->hotpluggable)
 		cpu->dev.groups = hotplugable_cpu_attr_groups;
@@ -487,7 +487,8 @@ static const struct attribute_group *cpu_root_attr_groups[] = {
 bool cpu_is_hotpluggable(unsigned int cpu)
 {
 	struct device *dev = get_cpu_device(cpu);
-	return dev && container_of(dev, struct cpu, dev)->hotpluggable;
+	return dev && container_of(dev, struct cpu, dev)->hotpluggable
+		&& tick_nohz_cpu_hotpluggable(cpu);
 }
 EXPORT_SYMBOL_GPL(cpu_is_hotpluggable);
 
@@ -508,73 +509,30 @@ static void __init cpu_dev_register_generic(void)
 }
 
 #ifdef CONFIG_GENERIC_CPU_VULNERABILITIES
-
-ssize_t __weak cpu_show_meltdown(struct device *dev,
-				 struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_spectre_v1(struct device *dev,
-				   struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_spectre_v2(struct device *dev,
-				   struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_spec_store_bypass(struct device *dev,
-					  struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_l1tf(struct device *dev,
-			     struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_mds(struct device *dev,
-			    struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_tsx_async_abort(struct device *dev,
-					struct device_attribute *attr,
-					char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_itlb_multihit(struct device *dev,
-				      struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
-
-ssize_t __weak cpu_show_srbds(struct device *dev,
+static ssize_t cpu_show_not_affected(struct device *dev,
 			      struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "Not affected\n");
 }
 
-ssize_t __weak cpu_show_mmio_stale_data(struct device *dev,
-					struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
+#define CPU_SHOW_VULN_FALLBACK(func)					\
+	ssize_t cpu_show_##func(struct device *,			\
+				  struct device_attribute *, char *)	\
+		 __attribute__((weak, alias("cpu_show_not_affected")))
 
-ssize_t __weak cpu_show_retbleed(struct device *dev,
-				 struct device_attribute *attr, char *buf)
-{
-	return sysfs_emit(buf, "Not affected\n");
-}
+CPU_SHOW_VULN_FALLBACK(meltdown);
+CPU_SHOW_VULN_FALLBACK(spectre_v1);
+CPU_SHOW_VULN_FALLBACK(spectre_v2);
+CPU_SHOW_VULN_FALLBACK(spec_store_bypass);
+CPU_SHOW_VULN_FALLBACK(l1tf);
+CPU_SHOW_VULN_FALLBACK(mds);
+CPU_SHOW_VULN_FALLBACK(tsx_async_abort);
+CPU_SHOW_VULN_FALLBACK(itlb_multihit);
+CPU_SHOW_VULN_FALLBACK(srbds);
+CPU_SHOW_VULN_FALLBACK(mmio_stale_data);
+CPU_SHOW_VULN_FALLBACK(retbleed);
+CPU_SHOW_VULN_FALLBACK(spec_rstack_overflow);
+CPU_SHOW_VULN_FALLBACK(gds);
 
 static DEVICE_ATTR(meltdown, 0444, cpu_show_meltdown, NULL);
 static DEVICE_ATTR(spectre_v1, 0444, cpu_show_spectre_v1, NULL);
@@ -587,6 +545,8 @@ static DEVICE_ATTR(itlb_multihit, 0444, cpu_show_itlb_multihit, NULL);
 static DEVICE_ATTR(srbds, 0444, cpu_show_srbds, NULL);
 static DEVICE_ATTR(mmio_stale_data, 0444, cpu_show_mmio_stale_data, NULL);
 static DEVICE_ATTR(retbleed, 0444, cpu_show_retbleed, NULL);
+static DEVICE_ATTR(spec_rstack_overflow, 0444, cpu_show_spec_rstack_overflow, NULL);
+static DEVICE_ATTR(gather_data_sampling, 0444, cpu_show_gds, NULL);
 
 static struct attribute *cpu_root_vulnerabilities_attrs[] = {
 	&dev_attr_meltdown.attr,
@@ -600,6 +560,8 @@ static struct attribute *cpu_root_vulnerabilities_attrs[] = {
 	&dev_attr_srbds.attr,
 	&dev_attr_mmio_stale_data.attr,
 	&dev_attr_retbleed.attr,
+	&dev_attr_spec_rstack_overflow.attr,
+	&dev_attr_gather_data_sampling.attr,
 	NULL
 };
 
@@ -610,9 +572,13 @@ static const struct attribute_group cpu_root_vulnerabilities_group = {
 
 static void __init cpu_register_vulnerabilities(void)
 {
-	if (sysfs_create_group(&cpu_subsys.dev_root->kobj,
-			       &cpu_root_vulnerabilities_group))
-		pr_err("Unable to register CPU vulnerabilities\n");
+	struct device *dev = bus_get_dev_root(&cpu_subsys);
+
+	if (dev) {
+		if (sysfs_create_group(&dev->kobj, &cpu_root_vulnerabilities_group))
+			pr_err("Unable to register CPU vulnerabilities\n");
+		put_device(dev);
+	}
 }
 
 #else

@@ -68,6 +68,12 @@ CONFIG_PATA_AMD=m
 # CONFIG_MAC_FLOPPY is not set
 
 ##
+## file: drivers/char/hw_random/Kconfig
+##
+CONFIG_HW_RANDOM_PSERIES=m
+CONFIG_HW_RANDOM_POWERNV=m
+
+##
 ## file: drivers/crypto/Kconfig
 ##
 CONFIG_CRYPTO_DEV_NX=y
@@ -87,7 +93,7 @@ CONFIG_CRYPTO_DEV_NX_COMPRESS_POWERNV=m
 CONFIG_CRYPTO_DEV_VMX_ENCRYPT=m
 
 ##
-## file: drivers/gpu/drm/Kconfig
+## file: drivers/gpu/drm/amd/amdgpu/Kconfig
 ##
 CONFIG_DRM_AMDGPU=m
 

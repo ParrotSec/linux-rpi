@@ -86,6 +86,12 @@ CONFIG_VEXPRESS_CONFIG=y
 CONFIG_ACPI_CPPC_CPUFREQ=m
 
 ##
+## file: drivers/firmware/google/Kconfig
+##
+CONFIG_GOOGLE_COREBOOT_TABLE=m
+CONFIG_GOOGLE_FRAMEBUFFER_COREBOOT=m
+
+##
 ## file: drivers/i2c/Kconfig
 ##
 CONFIG_ACPI_I2C_OPREGION=y

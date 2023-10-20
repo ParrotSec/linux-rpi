@@ -54,8 +54,6 @@ CONFIG_MACH_KIRKWOOD=y
 ## file: arch/arm/mach-orion5x/Kconfig
 ##
 CONFIG_ARCH_ORION5X=y
-CONFIG_MACH_DB88F5281=y
-CONFIG_MACH_RD88F5182=y
 CONFIG_MACH_RD88F5182_DT=y
 CONFIG_MACH_KUROBOX_PRO=y
 #. Only 1.5 MB flash available for kernel
@@ -64,17 +62,11 @@ CONFIG_MACH_TS209=y
 CONFIG_MACH_TERASTATION_PRO2=y
 CONFIG_MACH_LINKSTATION_PRO=y
 CONFIG_MACH_LINKSTATION_MINI=y
-CONFIG_MACH_LINKSTATION_LS_HGL=y
 CONFIG_MACH_TS409=y
-CONFIG_MACH_WRT350N_V2=y
 CONFIG_MACH_TS78XX=y
 CONFIG_MACH_MV2120=y
 CONFIG_MACH_NET2BIG=y
 CONFIG_MACH_MSS2_DT=y
-CONFIG_MACH_WNR854T=y
-CONFIG_MACH_RD88F5181L_GE=y
-CONFIG_MACH_RD88F5181L_FXO=y
-CONFIG_MACH_RD88F6183AP_GE=y
 
 ##
 ## file: arch/arm/mm/Kconfig
@@ -267,11 +259,6 @@ CONFIG_INPUT_MOUSEDEV=m
 ## file: drivers/input/gameport/Kconfig
 ##
 CONFIG_GAMEPORT=m
-
-##
-## file: drivers/input/joystick/Kconfig
-##
-CONFIG_INPUT_JOYSTICK=y
 
 ##
 ## file: drivers/input/keyboard/Kconfig
@@ -522,6 +509,11 @@ CONFIG_POWER_RESET_QNAP=y
 CONFIG_POWER_RESET_RESTART=y
 
 ##
+## file: drivers/ptp/Kconfig
+##
+CONFIG_PTP_1588_CLOCK=m
+
+##
 ## file: drivers/regulator/Kconfig
 ##
 CONFIG_REGULATOR=y
@@ -740,6 +732,8 @@ CONFIG_CC_OPTIMIZE_FOR_SIZE=y
 ##
 ## file: kernel/trace/Kconfig
 ##
+#. Adds ~90K to image
+# CONFIG_FUNCTION_TRACER is not set
 # CONFIG_FUNCTION_GRAPH_TRACER is not set
 # CONFIG_STACK_TRACER is not set
 # CONFIG_FTRACE_SYSCALLS is not set
@@ -798,6 +792,12 @@ CONFIG_IPV6=m
 # CONFIG_NET_MPLS_GSO is not set
 
 ##
+## file: net/mptcp/Kconfig
+##
+#. Adds ~40K to image
+# CONFIG_MPTCP is not set
+
+##
 ## file: net/packet/Kconfig
 ##
 CONFIG_PACKET=m
@@ -811,6 +811,12 @@ CONFIG_PACKET=m
 ## file: net/xdp/Kconfig
 ##
 # CONFIG_XDP_SOCKETS is not set
+
+##
+## file: security/apparmor/Kconfig
+##
+#. Selects ZSTD_COMPRESS which adds ~50K to image
+# CONFIG_SECURITY_APPARMOR_EXPORT_BINARY is not set
 
 ##
 ## file: security/integrity/Kconfig

@@ -179,7 +179,6 @@ CONFIG_CPU_FREQ_PMAC=y
 ## file: drivers/gpu/drm/Kconfig
 ##
 CONFIG_DRM=m
-CONFIG_DRM_RADEON=m
 
 ##
 ## file: drivers/gpu/drm/i2c/Kconfig
@@ -192,6 +191,11 @@ CONFIG_DRM_I2C_SIL164=m
 ##
 CONFIG_DRM_NOUVEAU=m
 CONFIG_DRM_NOUVEAU_BACKLIGHT=y
+
+##
+## file: drivers/gpu/drm/radeon/Kconfig
+##
+CONFIG_DRM_RADEON=m
 
 ##
 ## file: drivers/hid/Kconfig
@@ -278,11 +282,6 @@ CONFIG_GAMEPORT_NS558=m
 CONFIG_GAMEPORT_L4=m
 CONFIG_GAMEPORT_EMU10K1=m
 CONFIG_GAMEPORT_FM801=m
-
-##
-## file: drivers/input/joystick/Kconfig
-##
-CONFIG_INPUT_JOYSTICK=y
 
 ##
 ## file: drivers/input/keyboard/Kconfig
@@ -404,11 +403,6 @@ CONFIG_ARCNET_COM90xxIO=m
 CONFIG_ARCNET_COM20020=m
 CONFIG_ARCNET_COM20020_PCI=m
 CONFIG_ARCNET_COM20020_CS=m
-
-##
-## file: drivers/net/ethernet/Kconfig
-##
-CONFIG_FEALNX=m
 
 ##
 ## file: drivers/net/ethernet/3com/Kconfig
@@ -552,12 +546,6 @@ CONFIG_WANXL=m
 CONFIG_FARSYNC=m
 
 ##
-## file: drivers/net/wireless/Kconfig
-##
-CONFIG_PCMCIA_RAYCS=m
-CONFIG_PCMCIA_WL3501=m
-
-##
 ## file: drivers/net/wireless/atmel/Kconfig
 ##
 CONFIG_ATMEL=m
@@ -583,6 +571,12 @@ CONFIG_PLX_HERMES=m
 CONFIG_TMD_HERMES=m
 CONFIG_PCI_HERMES=m
 CONFIG_PCMCIA_HERMES=m
+
+##
+## file: drivers/net/wireless/legacy/Kconfig
+##
+CONFIG_PCMCIA_RAYCS=m
+CONFIG_PCMCIA_WL3501=m
 
 ##
 ## file: drivers/net/wireless/marvell/mwifiex/Kconfig
@@ -786,6 +780,10 @@ CONFIG_SGETMASK_SYSCALL=y
 ##
 ## file: lib/Kconfig.debug
 ##
+CONFIG_DEBUG_INFO_BTF=y
+#. Workaround module loading of different builds of on-disk modules
+#. vs booted kernel when keeping same ABI, cf. #1003210, #1022202
+CONFIG_MODULE_ALLOW_BTF_MISMATCH=y
 # CONFIG_DEBUG_STACK_USAGE is not set
 # CONFIG_DEBUG_STACKOVERFLOW is not set
 

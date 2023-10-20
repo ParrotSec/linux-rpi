@@ -1,7 +1,7 @@
 Subject: entry: Fix the preempt lazy fallout
 From: Thomas Gleixner <tglx@linutronix.de>
 Date: Tue, 13 Jul 2021 07:52:52 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
 
 Common code needs common defines....
 

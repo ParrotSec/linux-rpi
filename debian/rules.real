@@ -24,10 +24,8 @@ ifdef ARCH
   endif
 endif
 
-ifdef OVERRIDE_HOST_TYPE
-  CROSS_COMPILE := $(OVERRIDE_HOST_TYPE)-
-else ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
-  CROSS_COMPILE := $(DEB_HOST_GNU_TYPE)-
+ifneq ($(DEB_BUILD_ARCH),$(or $(KERNEL_DEB_ARCH),$(DEB_HOST_ARCH)))
+  CROSS_COMPILE := $(or $(KERNEL_GNU_TYPE),$(DEB_HOST_GNU_TYPE))-
 else
   CROSS_COMPILE :=
 endif
@@ -45,11 +43,18 @@ setup_env := env -u ABINAME -u ARCH -u FEATURESET -u FLAVOUR -u VERSION -u LOCAL
 setup_env += DISTRIBUTION_OFFICIAL_BUILD=1 DISTRIBUTOR="$(DISTRIBUTOR)" DISTRIBUTION_VERSION="$(SOURCEVERSION)" KBUILD_BUILD_TIMESTAMP="$(SOURCE_DATE)" KBUILD_BUILD_VERSION_TIMESTAMP="$(DISTRIBUTOR) $(SOURCEVERSION) ($(SOURCE_DATE_UTC_ISO))" KBUILD_BUILD_USER="$(word 1,$(subst @, ,$(MAINTAINER)))" KBUILD_BUILD_HOST="$(word 2,$(subst @, ,$(MAINTAINER)))"
 setup_env += KBUILD_VERBOSE=$(if $(filter terse,$(DEB_BUILD_OPTIONS)),0,1)
 
-MAKE_CLEAN = $(setup_env) $(MAKE) KCFLAGS=-fdebug-prefix-map=$(CURDIR)/= KBUILD_HOSTCFLAGS='$(CFLAGS) $(CPPFLAGS)' HOSTCFLAGS='$(CFLAGS) $(CPPFLAGS)' KBUILD_HOSTLDFLAGS='$(LDFLAGS)'
+# XXX: All the tools leak flags between host and build all the time, just don't care.  See #1050991.
+MAKE_CLEAN = $(setup_env) $(MAKE) KCFLAGS=-fdebug-prefix-map=$(CURDIR)/= KBUILD_HOSTCFLAGS='' HOSTCFLAGS='' KBUILD_HOSTLDFLAGS=''
 MAKE_SELF := $(MAKE) -f debian/rules.real $(MAKEOVERRIDES)
 MAKEOVERRIDES =
 
 BUILDDEB_ARGS := -Zxz $(if $(filter pkg.linux.quick,$(DEB_BUILD_PROFILES)),-z0)
+
+ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+  THREAD_COUNT = $(subst parallel=,,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+else
+  THREAD_COUNT = 0
+endif
 
 #
 # Targets
@@ -88,7 +93,7 @@ $(BUILD_DIR)/$(SOURCE_BASENAME)-source-$(UPSTREAMVERSION).tar.xz: $(STAMPS_DIR)/
 		-print0 | \
 		sort -z | \
 		tar --owner=root --group=root --numeric-owner \
-			--no-recursion --null -T - -c | xz -T0 > '$(SOURCE_BASENAME)-source-$(UPSTREAMVERSION).tar.xz'
+			--no-recursion --null -T - -c | xz -T$(THREAD_COUNT) > '$(SOURCE_BASENAME)-source-$(UPSTREAMVERSION).tar.xz'
 	rm -rf '$(DIR)'
 
 $(BUILD_DIR)/linux-patch-$(UPSTREAMVERSION)-%.patch.xz: $(STAMPS_DIR)/source_none $(STAMPS_DIR)/source_%
@@ -126,6 +131,8 @@ $(STAMPS_DIR)/source_none: $(STAMPS_DIR)/source
 $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): CONFIG=$(BUILD_DIR)/config.$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): SOURCE_DIR=$(BUILD_DIR)/source_$(FEATURESET)
 $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): DIR=$(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+$(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): KERNEL_DEB_ARCH?=$(DEB_HOST_ARCH)
+$(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): KERNEL_GNU_TYPE?=$(DEB_HOST_GNU_TYPE)
 $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR): $(STAMPS_DIR)/source_$(FEATURESET) $(BUILD_DIR)/config.$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 	rm -rf '$(DIR)'
 	mkdir '$(DIR)'
@@ -146,15 +153,18 @@ else
 	echo 'CC = $$(if $$(DEBIAN_KERNEL_USE_CCACHE),$$(CCACHE)) $$(word 1,$$(foreach dir,$(dir $(COMPILER)) $$(subst :, ,$$(PATH)),$$(wildcard $$(dir)/$$(CROSS_COMPILE)$(notdir $(COMPILER)))))' >> '$(DIR)/.kernelvariables'
 endif
 # TODO: Should we set CROSS_COMPILE always?
-ifdef OVERRIDE_HOST_TYPE
-	echo 'override CROSS_COMPILE = $(OVERRIDE_HOST_TYPE)-' >> '$(DIR)/.kernelvariables'
-else
-	echo 'ifneq ($$(DEB_BUILD_ARCH),$$(DEB_HOST_ARCH))' >> '$(DIR)/.kernelvariables'
-	echo 'override CROSS_COMPILE = $$(DEB_HOST_GNU_TYPE)-' >> '$(DIR)/.kernelvariables'
+	echo 'DEB_BUILD_ARCH ?= $$(shell dpkg --print-architecture)' >> '$(DIR)/.kernelvariables'
+	echo 'ifneq ($$(DEB_BUILD_ARCH),$(KERNEL_DEB_ARCH))' >> '$(DIR)/.kernelvariables'
+	echo 'override CROSS_COMPILE = $(KERNEL_GNU_TYPE)-' >> '$(DIR)/.kernelvariables'
 	echo 'endif' >> '$(DIR)/.kernelvariables'
-endif
 ifdef KCFLAGS
 	echo 'KCFLAGS += $(KCFLAGS)' >> '$(DIR)/.kernelvariables'
+endif
+ifdef COMPAT_DEB_ARCH
+	echo 'ifneq ($$(DEB_BUILD_ARCH),$(COMPAT_DEB_ARCH))' >> '$(DIR)/.kernelvariables'
+	echo 'override CROSS_COMPILE_COMPAT = $(COMPAT_GNU_TYPE)-' >> '$(DIR)/.kernelvariables'
+	echo 'override CROSS32_COMPILE = $(COMPAT_GNU_TYPE)-' >> '$(DIR)/.kernelvariables'
+	echo 'endif' >> '$(DIR)/.kernelvariables'
 endif
 	echo 'DEBIAN_KERNEL_NO_CC_VERSION_CHECK = y' >> '$(DIR)/.kernelvariables'
 	+$(MAKE_CLEAN) -C '$(SOURCE_DIR)' O='$(CURDIR)/$(DIR)' listnewconfig
@@ -241,7 +251,7 @@ endif
 
 build_headers-common:
 
-binary_headers-common: PACKAGE_NAME_KBUILD = linux-kbuild-$(VERSION)
+binary_headers-common: PACKAGE_NAME_KBUILD = linux-kbuild-$(ABINAME)
 binary_headers-common: BASE_DIR = /usr/src/$(PACKAGE_NAME)
 binary_headers-common: SOURCE_DIR = $(BUILD_DIR)/source_$(FEATURESET)
 binary_headers-common: DIR = $(DESTDIR)/$(BASE_DIR)
@@ -273,7 +283,7 @@ build_headers:
 
 binary_headers: REAL_VERSION = $(ABINAME)$(LOCALVERSION)
 binary_headers: PACKAGE_NAME_COMMON = linux-headers-$(ABINAME)-common$(LOCALVERSION_HEADERS)
-binary_headers: PACKAGE_NAME_KBUILD = linux-kbuild-$(VERSION)
+binary_headers: PACKAGE_NAME_KBUILD = linux-kbuild-$(ABINAME)
 binary_headers: BASE_DIR = /usr/src/$(PACKAGE_NAME)
 binary_headers: BASE_DIR_COMMON = /usr/src/$(PACKAGE_NAME_COMMON)
 binary_headers: SOURCE_DIR = $(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
@@ -319,7 +329,6 @@ binary_libc-dev:
 	mkdir -p $(DIR)
 	+$(MAKE_CLEAN) O='$(CURDIR)/$(DIR)' headers_install ARCH=$(KERNEL_ARCH) INSTALL_HDR_PATH='$(CURDIR)'/$(OUT_DIR)
 
-	rm -rf $(OUT_DIR)/include/drm $(OUT_DIR)/include/scsi
 	find $(OUT_DIR)/include \( -name .install -o -name ..install.cmd \) -execdir rm {} +
 
 # Move include/asm to arch-specific directory
@@ -345,7 +354,7 @@ binary_support:
 	dh_link $(PACKAGE_ROOT) /usr/src/$(PACKAGE_NAME)
 	+$(MAKE_SELF) install-base
 
-setup_image: $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR))
+setup_image: $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 
 build_image: $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 
@@ -395,11 +404,11 @@ endif
 
 binary_image_dt: DT_INSTALL_DIR = $(DESTDIR)/usr/lib/linux-image-$(REAL_VERSION)
 binary_image_dt:
-ifneq ($(filter arm64 armel armhf mipsr6 mipsr6el mips64r6 mips64r6el riscv64,$(ARCH)),)
+ifneq ($(filter arm64 armel armhf mipsel mips64el mipsr6 mipsr6el mips64r6 mips64r6el riscv64,$(ARCH)),)
 	+$(MAKE_CLEAN) -C $(DIR) dtbs
 	+$(MAKE_CLEAN) -C $(DIR) dtbs_install INSTALL_DTBS_PATH=$(DT_INSTALL_DIR)
-	# dtbs_install sets the executable bit on dtb files, which they shouldn't have
-	find $(DT_INSTALL_DIR) -type f -name '*.dtb' -exec chmod 644 {} \;
+	# dtbs_install sets the executable bit on dtb[o] files, which they shouldn't have
+	find $(DT_INSTALL_DIR) -type f \( -name '*.dtb' -o -name '*.dtbo' \) -exec chmod 644 {} \;
 endif
 ifneq ($(filter powerpc ppc64,$(ARCH)),)
 # Install wrapper code and DT source, but not the wrapper script or

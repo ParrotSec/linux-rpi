@@ -11,13 +11,15 @@ produce nice red background which should get the point across.
 
 Signed-off-by: Adam Borowski <kilobyte@angband.pl>
 [bwh: Also add_taint() so this is flagged in bug reports]
+[2023-01-10: still accurate according to btrfs-progs own manpage:
+https://git.kernel.org/pub/scm/linux/kernel/git/kdave/btrfs-progs.git/commit/?id=922797e15590b836e377d6dc47b828356cafc2a9]
 ---
  fs/btrfs/disk-io.c | 8 ++++++++
  1 file changed, 8 insertions(+)
 
 --- a/fs/btrfs/disk-io.c
 +++ b/fs/btrfs/disk-io.c
-@@ -3060,6 +3060,15 @@ retry_root_backup:
+@@ -3832,6 +3832,15 @@ int __cold open_ctree(struct super_block *sb,
  		btrfs_set_and_info(fs_info, SSD, "enabling ssd optimizations");
  	}
  
@@ -31,5 +33,5 @@ Signed-off-by: Adam Borowski <kilobyte@angband.pl>
 +	}
 +
  	/*
- 	 * Mount does not set all options immediately, we can do it now and do
- 	 * not have to wait for transaction commit
+ 	 * For devices supporting discard turn on discard=async automatically,
+ 	 * unless it's already set or disabled. This could be turned off by

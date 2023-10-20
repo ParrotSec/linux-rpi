@@ -2,7 +2,7 @@ From: Ian Campbell <ijc@hellion.org.uk>
 Subject: phy/marvell: disable 4-port phys
 Date: Wed, 20 Nov 2013 08:30:14 +0000
 Bug-Debian: https://bugs.debian.org/723177
-Forwarded: http://thread.gmane.org/gmane.linux.debian.devel.bugs.general/1107774/
+Forwarded: https://lore.kernel.org/netdev/1386932764.20787.85.camel@dagon.hellion.org.uk/
 
 The Marvell PHY was originally disabled because it can cause networking
 failures on some systems. According to Lennert Buytenhek this is because some
@@ -16,7 +16,7 @@ correctness.
 
 --- a/drivers/net/phy/marvell.c
 +++ b/drivers/net/phy/marvell.c
-@@ -1262,6 +1262,7 @@
+@@ -1320,6 +1320,7 @@ static int m88e1118_config_init(struct phy_device *phydev)
  	return genphy_soft_reset(phydev);
  }
  
@@ -24,7 +24,7 @@ correctness.
  static int m88e1149_config_init(struct phy_device *phydev)
  {
  	int err;
-@@ -1287,7 +1288,9 @@
+@@ -1345,7 +1346,9 @@ static int m88e1149_config_init(struct phy_device *phydev)
  
  	return genphy_soft_reset(phydev);
  }
@@ -34,7 +34,7 @@ correctness.
  static int m88e1145_config_init_rgmii(struct phy_device *phydev)
  {
  	int err;
-@@ -1365,6 +1368,7 @@
+@@ -1423,6 +1426,7 @@ static int m88e1145_config_init(struct phy_device *phydev)
  
  	return 0;
  }
@@ -42,15 +42,15 @@ correctness.
  
  static int m88e1540_get_fld(struct phy_device *phydev, u8 *msecs)
  {
-@@ -2853,6 +2857,7 @@
- 		.get_strings = marvell_get_strings,
- 		.get_stats = marvell_get_stats,
+@@ -3145,6 +3149,7 @@ static struct phy_driver marvell_drivers[] = {
+ 		.led_brightness_set = m88e1318_led_brightness_set,
+ 		.led_blink_set = m88e1318_led_blink_set,
  	},
 +#if 0
  	{
  		.phy_id = MARVELL_PHY_ID_88E1145,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -2873,6 +2878,8 @@
+@@ -3165,6 +3170,8 @@ static struct phy_driver marvell_drivers[] = {
  		.get_tunable = m88e1111_get_tunable,
  		.set_tunable = m88e1111_set_tunable,
  	},
@@ -59,7 +59,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1149R,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -2891,6 +2898,8 @@
+@@ -3183,6 +3190,8 @@ static struct phy_driver marvell_drivers[] = {
  		.get_strings = marvell_get_strings,
  		.get_stats = marvell_get_stats,
  	},
@@ -68,7 +68,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1240,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -2911,6 +2920,7 @@
+@@ -3203,6 +3212,7 @@ static struct phy_driver marvell_drivers[] = {
  		.get_tunable = m88e1011_get_tunable,
  		.set_tunable = m88e1011_set_tunable,
  	},
@@ -76,7 +76,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1116R,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -3163,9 +3173,9 @@
+@@ -3143,9 +3473,9 @@ static struct mdio_device_id __maybe_unused marvell_tbl[] = {
  	{ MARVELL_PHY_ID_88E1111_FINISAR, MARVELL_PHY_ID_MASK },
  	{ MARVELL_PHY_ID_88E1118, MARVELL_PHY_ID_MASK },
  	{ MARVELL_PHY_ID_88E1121R, MARVELL_PHY_ID_MASK },

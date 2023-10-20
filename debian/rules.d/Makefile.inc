@@ -7,6 +7,7 @@ SHELL = /bin/sh -e
 
 CC = $(CROSS_COMPILE)gcc
 CXX = $(CROSS_COMPILE)g++
+PKG_CONFIG = $(CROSS_COMPILE)pkg-config
 CFLAGS := $(shell dpkg-buildflags --get CFLAGS) -Wall
 CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS) \
 	-I$(top_srcdir)/$(OUTDIR) \

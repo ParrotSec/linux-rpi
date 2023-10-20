@@ -2,7 +2,7 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
 
 variables:
-  RELEASE: 'bullseye-backports'
+  RELEASE: 'bookworm-backports'
   # Make that build quicker
   SALSA_CI_DPKG_BUILDPACKAGE_ARGS: '-Ppkg.linux.quick'
   # We have to bump the version in source preparation, not later
@@ -111,6 +111,7 @@ extract-source:
 
 build:
   stage: build
+  timeout: 3 hours
   image: $SALSA_CI_IMAGES_BASE
   cache:
     key: "build-${BUILD_ARCH}_${HOST_ARCH}"
@@ -175,7 +176,7 @@ python-static:
   script:
     - |
       apt-get update && eatmydata apt-get install --no-install-recommends -y \
-        python3 pycodestyle pyflakes3
+        python3 pycodestyle pyflakes3 python3-pytest
 
     # Check Python modules under debian/lib and Python scripts under
     # debian/bin or debian/rules.d.
@@ -199,6 +200,7 @@ python-static:
       xargs pycodestyle --max-line-length=100 --ignore E126,E127,E226,W291,W503 \
         < "$sources" || pass=false
     - xargs pyflakes3 < "$sources" || pass=false
+    - py.test debian/lib/python || pass=false
     - $pass
   needs: []
 

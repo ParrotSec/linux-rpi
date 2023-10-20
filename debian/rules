@@ -35,14 +35,30 @@ build: build-arch build-indep
 
 build-arch: debian/control
 	dh_testdir
+
 # The perf-read-vdso* programs are built for different architectures,
 # without standard flags, but are not exposed to untrusted input.
+	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o *[^ ]*/perf-read-vdso.*'
+
 # Kernel code needs different hardening options that blhc doesn't know
 # about.
+	@printf '%s\n' 'blhc: ignore-line-regexp: .* -D__KERNEL__ .*'
+
+# The tools/perf/tests/workloads/.* programs are deliberately compiled
+# without -O2, so instruct blhc to ignore those
+	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*tools/perf/tests/workloads/.*'
+
+# Those tools conflict between flags used for host and build, so get none
+	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*/tools/objtool/.*'
+	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*/tools/.*/fixdep.*'
+
 # We need to use terse builds in CI due to the log size limit.  This
 # mostly affects the output for builds of kernel code, which need
 # different options for hardening anyway.
-	@printf '%s\n' 'blhc: ignore-line-regexp: (.* -o *[^ ]*/perf-read-vdso.*|.* -D__KERNEL__ .*$(if $(filter terse,$(DEB_BUILD_OPTIONS)),| *(CC(LD)?|LD|LINK)\b.*))'
+ifneq ($(filter terse,$(DEB_BUILD_OPTIONS)),)
+	@printf '%s\n' 'blhc: ignore-line-regexp: \s*(CC(LD)?|LD|LINK)\b.*'
+endif
+
 	$(MAKE) -f debian/rules.gen build-arch_$(DEB_HOST_ARCH)
 
 build-indep: debian/control

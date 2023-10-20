@@ -1,6 +1,7 @@
 From: Ben Hutchings <benh@debian.org>
 Date: Sat, 15 Jan 2022 22:30:49 +0100
 Subject: libapi: Define _FORTIFY_SOURCE as 2, not empty
+Forwarded: https://lore.kernel.org/lkml/20230424102049.58338-1-ukleinek@debian.org/
 
 Signed-off-by: Ben Hutchings <benh@debian.org>
 ---

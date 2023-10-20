@@ -269,9 +269,11 @@ CONFIG_MTD_PCMCIA=m
 CONFIG_ARCNET_COM20020_ISA=m
 
 ##
-## file: drivers/net/can/Kconfig
+## file: drivers/net/can/c_can/Kconfig
 ##
-CONFIG_PCH_CAN=m
+CONFIG_CAN_C_CAN=y
+# CONFIG_CAN_C_CAN_PLATFORM is not set
+CONFIG_CAN_C_CAN_PCI=m
 
 ##
 ## file: drivers/net/can/cc770/Kconfig
@@ -344,7 +346,7 @@ CONFIG_HOTPLUG_PCI_IBM=m
 CONFIG_I82365=m
 
 ##
-## file: drivers/platform/x86/Kconfig
+## file: drivers/platform/x86/hp/Kconfig
 ##
 CONFIG_TC1100_WMI=m
 

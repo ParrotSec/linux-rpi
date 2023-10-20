@@ -1,5 +1,4 @@
 PROGS = \
-	bin2c \
 	kallsyms \
 	recordmcount \
 	sign-file \

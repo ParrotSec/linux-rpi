@@ -15,7 +15,7 @@ probably discontinued 10 years ago.
 ---
 --- a/drivers/video/fbdev/Kconfig
 +++ b/drivers/video/fbdev/Kconfig
-@@ -866,99 +866,6 @@ config FB_ATMEL
+@@ -882,101 +882,6 @@ config FB_ATMEL
  	help
  	  This enables support for the AT91 LCD Controller.
  
@@ -29,6 +29,7 @@ probably discontinued 10 years ago.
 -	select FB_CFB_IMAGEBLIT
 -	select BITREVERSE
 -	select VGASTATE
+-	select VIDEO_NOMODESET
 -	help
 -	  This driver supports graphics boards with the nVidia chips, TNT
 -	  and newer. For very old chipsets, such as the RIVA128, then use
@@ -76,6 +77,7 @@ probably discontinued 10 years ago.
 -	select FB_CFB_IMAGEBLIT
 -	select BITREVERSE
 -	select VGASTATE
+-	select VIDEO_NOMODESET
 -	help
 -	  This driver supports graphics boards with the nVidia Riva/Geforce
 -	  chips.

@@ -37,6 +37,11 @@ CONFIG_CRYPTO_AES_ARM=m
 CONFIG_ARM_THUMB=y
 
 ##
+## file: drivers/char/hw_random/Kconfig
+##
+CONFIG_HW_RANDOM_IPROC_RNG200=m
+
+##
 ## file: drivers/gpu/drm/vc4/Kconfig
 ##
 CONFIG_DRM_VC4=m

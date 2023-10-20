@@ -23,6 +23,12 @@
 # CONFIG_XEN_DOM0 is not set
 
 ##
+## file: drivers/firmware/google/Kconfig
+##
+CONFIG_GOOGLE_COREBOOT_TABLE=m
+CONFIG_GOOGLE_FRAMEBUFFER_COREBOOT=m
+
+##
 ## file: drivers/hwmon/Kconfig
 ##
 # CONFIG_I8K is not set

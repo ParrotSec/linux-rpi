@@ -18,6 +18,6 @@ We really don't want to add -Werror anywhere.
 -ifeq ($(W),)
 -subdir-ccflags-y := -Werror
 -endif
- 
+
  # platform specific definitions
- include arch/mips/Kbuild.platforms
+ include $(srctree)/arch/mips/Kbuild.platforms

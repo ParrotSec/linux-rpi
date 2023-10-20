@@ -1,18 +1,24 @@
 --- a/net/mac80211/cfg.c
 +++ b/net/mac80211/cfg.c
-@@ -795,7 +795,8 @@ static int ieee80211_set_monitor_channel
- 			ret = ieee80211_vif_use_channel(sdata, chandef,
- 					IEEE80211_CHANCTX_EXCLUSIVE);
+@@ -928,10 +928,11 @@ static int ieee80211_set_monitor_channel
  		}
--	} else if (local->open_count == local->monitors) {
-+       // Patch: Always allow channel change, even if a normal virtual interface is present
-+       } else /*if (local->open_count == local->monitors)*/ {
- 		local->_oper_chandef = *chandef;
- 		ieee80211_hw_config(local, 0);
+ 	} else {
+ 		mutex_lock(&local->mtx);
+-		if (local->open_count == local->monitors) {
+-			local->_oper_chandef = *chandef;
+-			ieee80211_hw_config(local, 0);
+-		}
++		// Patch: Always allow channel change, even if a normal virtual interface is present
++//		if (local->open_count == local->monitors) {
++		local->_oper_chandef = *chandef;
++		ieee80211_hw_config(local, 0);
++//		}
+ 		mutex_unlock(&local->mtx);
  	}
+ 
 --- a/net/mac80211/tx.c
 +++ b/net/mac80211/tx.c
-@@ -810,11 +810,19 @@ ieee80211_tx_h_sequence(struct ieee80211
+@@ -825,11 +825,19 @@ ieee80211_tx_h_sequence(struct ieee80211
  
  	/*
  	 * Packet injection may want to control the sequence
@@ -35,7 +41,7 @@
  
  	if (unlikely(ieee80211_is_ctl(hdr->frame_control)))
  		return TX_CONTINUE;
-@@ -2012,6 +2020,10 @@ void ieee80211_xmit(struct ieee80211_sub
+@@ -2060,6 +2068,10 @@ void ieee80211_xmit(struct ieee80211_sub
  	}
  
  	ieee80211_set_qos_hdr(sdata, skb);
@@ -48,7 +54,7 @@
  
 --- a/net/wireless/chan.c
 +++ b/net/wireless/chan.c
-@@ -1209,8 +1209,10 @@ int cfg80211_set_monitor_channel(struct
+@@ -1393,8 +1393,10 @@ int cfg80211_set_monitor_channel(struct
  {
  	if (!rdev->ops->set_monitor_channel)
  		return -EOPNOTSUPP;
@@ -87,7 +93,7 @@
  }
  
  static int set_mac_and_bssid(struct zd_mac *mac)
-@@ -1043,7 +1048,8 @@ int zd_mac_rx(struct ieee80211_hw *hw, c
+@@ -1042,7 +1047,8 @@ int zd_mac_rx(struct ieee80211_hw *hw, c
  	/* Caller has to ensure that length >= sizeof(struct rx_status). */
  	status = (struct rx_status *)
  		(buffer + (length - sizeof(struct rx_status)));
@@ -97,7 +103,7 @@
  		if (mac->pass_failed_fcs &&
  				(status->frame_status & ZD_RX_CRC32_ERROR)) {
  			stats.flag |= RX_FLAG_FAILED_FCS_CRC;
-@@ -1386,7 +1392,7 @@ struct ieee80211_hw *zd_mac_alloc_hw(str
+@@ -1387,7 +1393,7 @@ struct ieee80211_hw *zd_mac_alloc_hw(str
  	ieee80211_hw_set(hw, MFP_CAPABLE);
  	ieee80211_hw_set(hw, HOST_BROADCAST_PS_BUFFERING);
  	ieee80211_hw_set(hw, RX_INCLUDES_FCS);

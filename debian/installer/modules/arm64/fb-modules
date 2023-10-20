@@ -32,3 +32,9 @@ imx-dcss
 mxsfb
 mux-mmio
 imx8mq-interconnect
+
+# For panel/backlight on Thinkpad X13s
+msm
+gpu-sched
+dispcc-sc8280xp
+gpucc-sc8280xp

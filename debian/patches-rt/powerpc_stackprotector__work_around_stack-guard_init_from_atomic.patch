@@ -1,7 +1,7 @@
 Subject: powerpc/stackprotector: work around stack-guard init from atomic
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Tue Mar 26 18:31:29 2019 +0100
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.1/older/patches-6.1.12-rt7.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -15,20 +15,23 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 
 
 ---
- arch/powerpc/include/asm/stackprotector.h |    4 ++++
- 1 file changed, 4 insertions(+)
+ arch/powerpc/include/asm/stackprotector.h |    7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
 ---
 --- a/arch/powerpc/include/asm/stackprotector.h
 +++ b/arch/powerpc/include/asm/stackprotector.h
-@@ -24,7 +24,11 @@ static __always_inline void boot_init_st
- 	unsigned long canary;
+@@ -19,8 +19,13 @@
+  */
+ static __always_inline void boot_init_stack_canary(void)
+ {
+-	unsigned long canary = get_random_canary();
++	unsigned long canary;
  
- 	/* Try to get a semi random initial value. */
-+#ifdef CONFIG_PREEMPT_RT
-+	canary = (unsigned long)&canary;
++#ifndef CONFIG_PREEMPT_RT
++	canary = get_random_canary();
 +#else
- 	canary = get_random_canary();
++	canary = ((unsigned long)&canary) & CANARY_MASK;
 +#endif
- 	canary ^= mftb();
- 	canary ^= LINUX_VERSION_CODE;
- 	canary &= CANARY_MASK;
+ 	current->stack_canary = canary;
+ #ifdef CONFIG_PPC64
+ 	get_paca()->canary = canary;

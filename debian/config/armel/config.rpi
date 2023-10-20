@@ -35,6 +35,7 @@ CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y
 ## end choice
 CONFIG_CPU_FREQ_GOV_ONDEMAND=y
 CONFIG_CPUFREQ_DT=m
+CONFIG_CPUFREQ_DT_PLATDEV=y
 
 ##
 ## file: drivers/cpufreq/Kconfig.arm
@@ -99,6 +100,11 @@ CONFIG_MMC_BCM2835=y
 ## file: drivers/net/wireless/broadcom/brcm80211/brcmfmac/Kconfig
 ##
 CONFIG_BRCMFMAC_SDIO=y
+
+##
+## file: drivers/nvmem/Kconfig
+##
+CONFIG_NVMEM_RMEM=m
 
 ##
 ## file: drivers/pwm/Kconfig

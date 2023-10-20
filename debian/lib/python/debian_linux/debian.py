@@ -5,7 +5,6 @@ import collections.abc
 import functools
 import os.path
 import re
-import unittest
 import warnings
 
 
@@ -150,79 +149,6 @@ class Version(object):
         return self.revision
 
 
-class _VersionTest(unittest.TestCase):
-    def test_native(self):
-        v = Version('1.2+c~4')
-        self.assertEqual(v.epoch, None)
-        self.assertEqual(v.upstream, '1.2+c~4')
-        self.assertEqual(v.revision, None)
-        self.assertEqual(v.complete, '1.2+c~4')
-        self.assertEqual(v.complete_noepoch, '1.2+c~4')
-
-    def test_nonnative(self):
-        v = Version('1-2+d~3')
-        self.assertEqual(v.epoch, None)
-        self.assertEqual(v.upstream, '1')
-        self.assertEqual(v.revision, '2+d~3')
-        self.assertEqual(v.complete, '1-2+d~3')
-        self.assertEqual(v.complete_noepoch, '1-2+d~3')
-
-    def test_native_epoch(self):
-        v = Version('5:1.2.3')
-        self.assertEqual(v.epoch, 5)
-        self.assertEqual(v.upstream, '1.2.3')
-        self.assertEqual(v.revision, None)
-        self.assertEqual(v.complete, '5:1.2.3')
-        self.assertEqual(v.complete_noepoch, '1.2.3')
-
-    def test_nonnative_epoch(self):
-        v = Version('5:1.2.3-4')
-        self.assertEqual(v.epoch, 5)
-        self.assertEqual(v.upstream, '1.2.3')
-        self.assertEqual(v.revision, '4')
-        self.assertEqual(v.complete, '5:1.2.3-4')
-        self.assertEqual(v.complete_noepoch, '1.2.3-4')
-
-    def test_multi_hyphen(self):
-        v = Version('1-2-3')
-        self.assertEqual(v.epoch, None)
-        self.assertEqual(v.upstream, '1-2')
-        self.assertEqual(v.revision, '3')
-        self.assertEqual(v.complete, '1-2-3')
-
-    def test_multi_colon(self):
-        v = Version('1:2:3')
-        self.assertEqual(v.epoch, 1)
-        self.assertEqual(v.upstream, '2:3')
-        self.assertEqual(v.revision, None)
-
-    def test_invalid_epoch(self):
-        with self.assertRaises(RuntimeError):
-            Version('a:1')
-        with self.assertRaises(RuntimeError):
-            Version('-1:1')
-        with self.assertRaises(RuntimeError):
-            Version('1a:1')
-
-    def test_invalid_upstream(self):
-        with self.assertRaises(RuntimeError):
-            Version('1_2')
-        with self.assertRaises(RuntimeError):
-            Version('1/2')
-        with self.assertRaises(RuntimeError):
-            Version('a1')
-        with self.assertRaises(RuntimeError):
-            Version('1 2')
-
-    def test_invalid_revision(self):
-        with self.assertRaises(RuntimeError):
-            Version('1-2_3')
-        with self.assertRaises(RuntimeError):
-            Version('1-2/3')
-        with self.assertRaises(RuntimeError):
-            Version('1-2:3')
-
-
 class VersionLinux(Version):
     _upstream_re = re.compile(r"""
 (?P<version>
@@ -290,117 +216,6 @@ $
         self.linux_revision_security = d['revision_security'] and True
         self.linux_revision_backports = d['revision_backports'] and True
         self.linux_revision_other = d['revision_other'] and True
-
-
-class _VersionLinuxTest(unittest.TestCase):
-    def test_stable(self):
-        v = VersionLinux('1.2.3-4')
-        self.assertEqual(v.linux_version, '1.2')
-        self.assertEqual(v.linux_upstream, '1.2')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertEqual(v.linux_modifier, None)
-        self.assertEqual(v.linux_dfsg, None)
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_rc(self):
-        v = VersionLinux('1.2~rc3-4')
-        self.assertEqual(v.linux_version, '1.2')
-        self.assertEqual(v.linux_upstream, '1.2-rc3')
-        self.assertEqual(v.linux_upstream_full, '1.2-rc3')
-        self.assertEqual(v.linux_modifier, 'rc3')
-        self.assertEqual(v.linux_dfsg, None)
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_dfsg(self):
-        v = VersionLinux('1.2~rc3.dfsg.1-4')
-        self.assertEqual(v.linux_version, '1.2')
-        self.assertEqual(v.linux_upstream, '1.2-rc3')
-        self.assertEqual(v.linux_upstream_full, '1.2-rc3')
-        self.assertEqual(v.linux_modifier, 'rc3')
-        self.assertEqual(v.linux_dfsg, '1')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_experimental(self):
-        v = VersionLinux('1.2~rc3-4~exp5')
-        self.assertEqual(v.linux_upstream_full, '1.2-rc3')
-        self.assertTrue(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_security(self):
-        v = VersionLinux('1.2.3-4+deb10u1')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertTrue(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_backports(self):
-        v = VersionLinux('1.2.3-4~bpo9+10')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertTrue(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_security_backports(self):
-        v = VersionLinux('1.2.3-4+deb10u1~bpo9+10')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertTrue(v.linux_revision_security)
-        self.assertTrue(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_lts_backports(self):
-        # Backport during LTS, as an extra package in the -security
-        # suite.  Since this is not part of a -backports suite it
-        # shouldn't get the linux_revision_backports flag.
-        v = VersionLinux('1.2.3-4~deb9u10')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertTrue(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_lts_backports_2(self):
-        # Same but with two security extensions in the revision.
-        v = VersionLinux('1.2.3-4+deb10u1~deb9u10')
-        self.assertEqual(v.linux_upstream_full, '1.2.3')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertTrue(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_binnmu(self):
-        v = VersionLinux('1.2.3-4+b1')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertFalse(v.linux_revision_other)
-
-    def test_other_revision(self):
-        v = VersionLinux('4.16.5-1+revert+crng+ready')  # from #898087
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertTrue(v.linux_revision_other)
-
-    def test_other_revision_binnmu(self):
-        v = VersionLinux('4.16.5-1+revert+crng+ready+b1')
-        self.assertFalse(v.linux_revision_experimental)
-        self.assertFalse(v.linux_revision_security)
-        self.assertFalse(v.linux_revision_backports)
-        self.assertTrue(v.linux_revision_other)
 
 
 class PackageArchitecture(collections.abc.MutableSet):
@@ -877,7 +692,3 @@ class TestsControl(_ControlFileDict):
         ('Tests-Directory', str),
         ('Classes', str),
     ))
-
-
-if __name__ == '__main__':
-    unittest.main()

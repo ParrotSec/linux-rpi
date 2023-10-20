@@ -1,7 +1,7 @@
 From: Ben Hutchings <ben@decadent.org.uk>
 Date: Wed, 11 Jul 2018 23:40:55 +0100
 Subject: ARM: mm: Export __sync_icache_dcache() for xen-privcmd
-Forwarded: https://marc.info/?l=linux-arm-kernel&m=153134944429241
+Forwarded: https://lore.kernel.org/all/20180711225013.GF14131@decadent.org.uk/
 
 The xen-privcmd driver, which can be modular, calls set_pte_at()
 which in turn may call __sync_icache_dcache().

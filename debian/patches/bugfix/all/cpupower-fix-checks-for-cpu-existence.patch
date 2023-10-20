@@ -1,7 +1,7 @@
 From: Ben Hutchings <ben@decadent.org.uk>
 Date: Thu, 03 Nov 2016 15:25:26 -0600
 Subject: cpupower: Fix checks for CPU existence
-Forwarded: https://marc.info/?l=linux-pm&m=149248268214265
+Forwarded: https://lore.kernel.org/all/20170418023118.GD4152@decadent.org.uk/
 
 Calls to cpufreq_cpu_exists(cpu) were converted to
 cpupower_is_cpu_online(cpu) when libcpupower was introduced and the

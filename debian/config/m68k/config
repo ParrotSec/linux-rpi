@@ -188,7 +188,6 @@ CONFIG_INPUT_MOUSEDEV=y
 ##
 ## file: drivers/input/joystick/Kconfig
 ##
-CONFIG_INPUT_JOYSTICK=y
 # CONFIG_JOYSTICK_ANALOG is not set
 # CONFIG_JOYSTICK_A3D is not set
 # CONFIG_JOYSTICK_ADI is not set
@@ -319,7 +318,6 @@ CONFIG_MAC_EMUMOUSEBTN=m
 ##
 ## file: drivers/mfd/Kconfig
 ##
-# CONFIG_HTC_PASIC3 is not set
 # CONFIG_MFD_SM501 is not set
 
 ##
@@ -470,7 +468,6 @@ CONFIG_PARPORT_ATARI=m
 # CONFIG_RTC_DRV_MSM6242 is not set
 # CONFIG_RTC_DRV_BQ4802 is not set
 CONFIG_RTC_DRV_RP5C01=y
-# CONFIG_RTC_DRV_V3020 is not set
 # CONFIG_RTC_DRV_WM831X is not set
 # CONFIG_RTC_DRV_WM8350 is not set
 CONFIG_RTC_DRV_GENERIC=y

@@ -1,10 +1,10 @@
-Package: linux-kbuild-@version@
+Package: linux-kbuild-@abiname@
 Meta-Rules-Target: kbuild
 Build-Profiles: <!stage1 !pkg.linux.notools>
 Architecture: linux-any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Multi-Arch: foreign
-Description: Kbuild infrastructure for Linux @version@
+Description: Kbuild infrastructure for Linux @abiname@
  This package provides the kbuild infrastructure for the headers packages for Linux kernel version @version@.
 
 Package: linux-bootwrapper-@abiname@

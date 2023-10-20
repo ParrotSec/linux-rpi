@@ -1,5 +1,5 @@
 [abi]
-abiname: 1parrot1
+abiname: 3parrot1
 ignore-changes:
  __cpuhp_*
  __udp_gso_segment
@@ -106,6 +106,8 @@ ignore-changes:
  uv_info
 # Not used in OOT
  xhci_init_driver
+# Not used in OOT, symbol is only defined when DEBUG_INFO_BTF is enabled
+ xfrm_bpf_md_dst
 
 [base]
 arches:
@@ -142,7 +144,7 @@ arches:
  sparc
  sparc64
  x32
-compiler: gcc-10
+compiler: gcc-12
 featuresets:
  none
  rt
@@ -166,7 +168,7 @@ recommends: apparmor
 
 [relations]
 # compilers
-gcc-10: gcc-10 <!stage1 !cross !pkg.linux.nokernel>, gcc-10-@gnu-type-package@ <!stage1 cross !pkg.linux.nokernel>
+gcc-12: gcc-12 <!stage1 !cross !pkg.linux.nokernel>, gcc-12-@gnu-type-package@ <!stage1 cross !pkg.linux.nokernel>
 
 # initramfs-generators
 initramfs-fallback: linux-initramfs-tool

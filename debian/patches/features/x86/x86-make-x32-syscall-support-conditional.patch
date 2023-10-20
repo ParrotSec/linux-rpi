@@ -29,7 +29,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 
 --- a/Documentation/admin-guide/kernel-parameters.txt
 +++ b/Documentation/admin-guide/kernel-parameters.txt
-@@ -5768,6 +5768,10 @@
+@@ -6172,6 +6172,10 @@
  			later by a loaded module cannot be set this way.
  			Example: sysctl.vm.swappiness=40
  
@@ -37,12 +37,12 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 +			an x86_64 kernel where CONFIG_X86_X32 is enabled.
 +			Default depends on CONFIG_X86_X32_DISABLED.
 +
- 	sysfs.deprecated=0|1 [KNL]
- 			Enable/disable old style sysfs layout for old udev
- 			on older distributions. When this option is enabled
+ 	sysrq_always_enabled
+ 			[KNL]
+ 			Ignore sysrq setting - this boot parameter will
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
-@@ -2865,6 +2865,14 @@ config COMPAT_32
+@@ -3058,6 +3058,14 @@ config COMPAT_32
  	select HAVE_UID16
  	select OLD_SIGSUSPEND3
  
@@ -139,7 +139,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  
  typedef unsigned long elf_greg_t;
  
-@@ -161,7 +164,8 @@ do {						\
+@@ -150,7 +153,8 @@ do {						\
  
  #define compat_elf_check_arch(x)					\
  	(elf_check_arch_ia32(x) ||					\
@@ -147,8 +147,8 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 +	 (IS_ENABLED(CONFIG_X86_X32_ABI) && x32_enabled &&		\
 +	  (x)->e_machine == EM_X86_64))
  
- #if __USER32_DS != __USER_DS
- # error "The following code assumes __USER32_DS == __USER_DS"
+ static inline void elf_common_init(struct thread_struct *t,
+ 				   struct pt_regs *regs, const u16 ds)
 --- a/arch/x86/include/asm/syscall.h
 +++ b/arch/x86/include/asm/syscall.h
 @@ -13,6 +13,7 @@

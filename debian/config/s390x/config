@@ -57,6 +57,11 @@ CONFIG_BSD_DISKLABEL=y
 # CONFIG_CDROM_PKTCDVD is not set
 
 ##
+## file: drivers/char/hw_random/Kconfig
+##
+CONFIG_HW_RANDOM_S390=m
+
+##
 ## file: drivers/crypto/Kconfig
 ##
 CONFIG_ZCRYPT=m
@@ -66,6 +71,11 @@ CONFIG_S390_PRNG=m
 ## file: drivers/iio/Kconfig
 ##
 # CONFIG_IIO is not set
+
+##
+## file: drivers/input/joystick/Kconfig
+##
+# CONFIG_INPUT_JOYSTICK is not set
 
 ##
 ## file: drivers/input/touchscreen/Kconfig
@@ -125,7 +135,6 @@ CONFIG_SCM_BLOCK=m
 ## file: drivers/s390/char/Kconfig
 ##
 CONFIG_TN3270=y
-CONFIG_TN3270_TTY=y
 CONFIG_TN3270_FS=m
 CONFIG_TN3270_CONSOLE=y
 CONFIG_TN3215=y
@@ -185,6 +194,14 @@ CONFIG_DIAG288_WATCHDOG=m
 ## choice: Cputime accounting
 CONFIG_VIRT_CPU_ACCOUNTING_NATIVE=y
 ## end choice
+
+##
+## file: lib/Kconfig.debug
+##
+CONFIG_DEBUG_INFO_BTF=y
+#. Workaround module loading of different builds of on-disk modules
+#. vs booted kernel when keeping same ABI, cf. #1003210, #1022202
+CONFIG_MODULE_ALLOW_BTF_MISMATCH=y
 
 ##
 ## file: mm/Kconfig

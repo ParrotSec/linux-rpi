@@ -986,9 +986,9 @@ p527
 g506
 tp528
 (dp529
-Vgcc-13
+Vgcc-12
 p530
-Vgcc-13 <!stage1 !cross !pkg.linux.nokernel>, gcc-13-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, gcc-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, binutils-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>, gcc-13-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>
+Vgcc-12 <!stage1 !cross !pkg.linux.nokernel>, gcc-12-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, gcc-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, binutils-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>, gcc-12-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>
 p531
 ss(Vdescription
 p532
@@ -1012,9 +1012,9 @@ NVparisc
 p541
 tp542
 (dp543
-Vheaders%gcc-13
+Vheaders%gcc-12
 p544
-Vgcc-13
+Vgcc-12
 p545
 ss(Vbase
 p546
@@ -1065,9 +1065,9 @@ NVparisc64
 p569
 tp570
 (dp571
-Vheaders%gcc-13
+Vheaders%gcc-12
 p572
-Vgcc-13-hppa64-linux-gnu
+Vgcc-12-hppa64-linux-gnu
 p573
 ss(g223
 g506
@@ -2770,9 +2770,9 @@ p1483
 g1461
 tp1484
 (dp1485
-Vheaders%gcc-13
+Vheaders%gcc-12
 p1486
-Vlinux-compiler-gcc-13-s390
+Vlinux-compiler-gcc-12-s390
 p1487
 ss(Vdescription
 p1488

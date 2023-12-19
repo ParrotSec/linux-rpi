@@ -5,7 +5,7 @@ Maintainer: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
 Uploaders: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
 Standards-Version: 4.2.0
 Build-Depends: debhelper-compat (= 12), dh-exec, python3:native, python3-jinja2:native, quilt, cpio <!stage1>, xz-utils <!stage1>, dh-python <!stage1>, bison <!stage1>, flex (>= 2.6.1-1.1~) <!stage1>
-Build-Depends-Arch: kernel-wedge (>= 2.102~) <!pkg.linux.nokernel !stage1>, kmod <!pkg.linux.nokernel !stage1>, bc <!pkg.linux.nokernel !stage1>, libssl-dev:native <!pkg.linux.nokernel !stage1>, libssl-dev <!pkg.linux.notools !stage1>, openssl (>= 1.1.0-1~) <!pkg.linux.nokernel !stage1>, libelf-dev:native <!pkg.linux.nokernel !stage1>, libelf-dev <!pkg.linux.notools !stage1>, rsync, lz4 [amd64 arm64] <!pkg.linux.nokernel !stage1>, pahole <!pkg.linux.nokernel !stage1> | dwarves:native (>= 1.16~) <!pkg.linux.nokernel !stage1>, gcc-13 [alpha amd64 arm64 armel armhf hppa i386 ia64 m68k mips mips64 mips64el mips64r6 mips64r6el mipsel mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390x sh4 sparc64] <!cross !pkg.linux.nokernel !stage1>, gcc-13-alpha-linux-gnu [alpha] <cross !pkg.linux.nokernel !stage1>, gcc-13-x86-64-linux-gnu [amd64] <cross !pkg.linux.nokernel !stage1>, gcc-13-aarch64-linux-gnu [arm64] <cross !pkg.linux.nokernel !stage1>, gcc-arm-linux-gnueabihf [arm64] <!pkg.linux.nokernel !stage1>, gcc-13-arm-linux-gnueabi [armel] <cross !pkg.linux.nokernel !stage1>, gcc-13-arm-linux-gnueabihf [armhf] <cross !pkg.linux.nokernel !stage1>, gcc-13-hppa-linux-gnu [hppa] <cross !pkg.linux.nokernel !stage1>, gcc-hppa-linux-gnu [hppa] <cross !pkg.linux.nokernel !stage1>, binutils-hppa64-linux-gnu:native [hppa] <!pkg.linux.nokernel !stage1>, gcc-13-hppa64-linux-gnu:native [hppa] <!pkg.linux.nokernel !stage1>, gcc-13-i686-linux-gnu [i386] <cross !pkg.linux.nokernel !stage1>, gcc-13-ia64-linux-gnu [ia64] <cross !pkg.linux.nokernel !stage1>, gcc-13-m68k-linux-gnu [m68k] <cross !pkg.linux.nokernel !stage1>, gcc-13-mips-linux-gnu [mips] <cross !pkg.linux.nokernel !stage1>, gcc-13-mips64-linux-gnuabi64 [mips64] <cross !pkg.linux.nokernel !stage1>, gcc-13-mips64el-linux-gnuabi64 [mips64el] <cross !pkg.linux.nokernel !stage1>, gcc-13-mipsisa64r6-linux-gnuabi64 [mips64r6] <cross !pkg.linux.nokernel !stage1>, gcc-13-mipsisa64r6el-linux-gnuabi64 [mips64r6el] <cross !pkg.linux.nokernel !stage1>, gcc-13-mipsel-linux-gnu [mipsel] <cross !pkg.linux.nokernel !stage1>, gcc-13-mipsisa32r6-linux-gnu [mipsr6] <cross !pkg.linux.nokernel !stage1>, gcc-13-mipsisa32r6el-linux-gnu [mipsr6el] <cross !pkg.linux.nokernel !stage1>, gcc-13-powerpc-linux-gnu [powerpc] <cross !pkg.linux.nokernel !stage1>, gcc-13-powerpc64-linux-gnu [ppc64] <cross !pkg.linux.nokernel !stage1>, gcc-13-powerpc64le-linux-gnu [ppc64el] <cross !pkg.linux.nokernel !stage1>, gcc-13-riscv64-linux-gnu [riscv64] <cross !pkg.linux.nokernel !stage1>, gcc-13-s390x-linux-gnu [s390x] <cross !pkg.linux.nokernel !stage1>, gcc-13-sh4-linux-gnu [sh4] <cross !pkg.linux.nokernel !stage1>, gcc-13-sparc64-linux-gnu [sparc64] <cross !pkg.linux.nokernel !stage1>, python3-docutils [linux-any] <!nodoc !pkg.linux.notools !stage1>, binutils-dev [hppa] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libelf-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, zlib1g-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libcap-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libpci-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, asciidoctor [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nodoc !nopython !pkg.linux.notools !stage1>, gcc-multilib [amd64 mips64 mips64el mips64r6 mips64r6el ppc64 s390x sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libaudit-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libbabeltrace-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libdw-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libnewt-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libnuma-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libopencsd-dev (>= 1.1.1) [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libperl-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libpython3-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libtraceevent-dev (>= 1:1.5) [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libunwind-dev [amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mipsel powerpc ppc64 ppc64el sh4] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libzstd-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, python3-dev:any [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, python3-setuptools [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, autoconf [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, automake [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtool [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libglib2.0-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libudev-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libwrap0-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtracefs-dev (>= 1.3) [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtraceevent-dev (>= 1:1.5) [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>, python3-docutils [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>
+Build-Depends-Arch: kernel-wedge (>= 2.102~) <!pkg.linux.nokernel !stage1>, kmod <!pkg.linux.nokernel !stage1>, bc <!pkg.linux.nokernel !stage1>, libssl-dev:native <!pkg.linux.nokernel !stage1>, libssl-dev <!pkg.linux.notools !stage1>, openssl (>= 1.1.0-1~) <!pkg.linux.nokernel !stage1>, libelf-dev:native <!pkg.linux.nokernel !stage1>, libelf-dev <!pkg.linux.notools !stage1>, rsync, lz4 [amd64 arm64] <!pkg.linux.nokernel !stage1>, pahole <!pkg.linux.nokernel !stage1> | dwarves:native (>= 1.16~) <!pkg.linux.nokernel !stage1>, gcc-12 [alpha amd64 arm64 armel armhf hppa i386 ia64 m68k mips mips64 mips64el mips64r6 mips64r6el mipsel mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390x sh4 sparc64] <!cross !pkg.linux.nokernel !stage1>, gcc-12-alpha-linux-gnu [alpha] <cross !pkg.linux.nokernel !stage1>, gcc-12-x86-64-linux-gnu [amd64] <cross !pkg.linux.nokernel !stage1>, gcc-12-aarch64-linux-gnu [arm64] <cross !pkg.linux.nokernel !stage1>, gcc-arm-linux-gnueabihf [arm64] <!pkg.linux.nokernel !stage1>, gcc-12-arm-linux-gnueabi [armel] <cross !pkg.linux.nokernel !stage1>, gcc-12-arm-linux-gnueabihf [armhf] <cross !pkg.linux.nokernel !stage1>, gcc-12-hppa-linux-gnu [hppa] <cross !pkg.linux.nokernel !stage1>, gcc-12-i686-linux-gnu [i386] <cross !pkg.linux.nokernel !stage1>, gcc-12-ia64-linux-gnu [ia64] <cross !pkg.linux.nokernel !stage1>, gcc-12-m68k-linux-gnu [m68k] <cross !pkg.linux.nokernel !stage1>, gcc-12-mips-linux-gnu [mips] <cross !pkg.linux.nokernel !stage1>, gcc-12-mips64-linux-gnuabi64 [mips64] <cross !pkg.linux.nokernel !stage1>, gcc-12-mips64el-linux-gnuabi64 [mips64el] <cross !pkg.linux.nokernel !stage1>, gcc-12-mipsisa64r6-linux-gnuabi64 [mips64r6] <cross !pkg.linux.nokernel !stage1>, gcc-12-mipsisa64r6el-linux-gnuabi64 [mips64r6el] <cross !pkg.linux.nokernel !stage1>, gcc-12-mipsel-linux-gnu [mipsel] <cross !pkg.linux.nokernel !stage1>, gcc-12-mipsisa32r6-linux-gnu [mipsr6] <cross !pkg.linux.nokernel !stage1>, gcc-12-mipsisa32r6el-linux-gnu [mipsr6el] <cross !pkg.linux.nokernel !stage1>, gcc-12-powerpc-linux-gnu [powerpc] <cross !pkg.linux.nokernel !stage1>, gcc-12-powerpc64-linux-gnu [ppc64] <cross !pkg.linux.nokernel !stage1>, gcc-12-powerpc64le-linux-gnu [ppc64el] <cross !pkg.linux.nokernel !stage1>, gcc-12-riscv64-linux-gnu [riscv64] <cross !pkg.linux.nokernel !stage1>, gcc-12-s390x-linux-gnu [s390x] <cross !pkg.linux.nokernel !stage1>, gcc-12-sh4-linux-gnu [sh4] <cross !pkg.linux.nokernel !stage1>, gcc-12-sparc64-linux-gnu [sparc64] <cross !pkg.linux.nokernel !stage1>, python3-docutils [linux-any] <!nodoc !pkg.linux.notools !stage1>, binutils-dev [hppa] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libelf-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, zlib1g-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libcap-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libpci-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, asciidoctor [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nodoc !nopython !pkg.linux.notools !stage1>, gcc-multilib [amd64 mips64 mips64el mips64r6 mips64r6el ppc64 s390x sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libaudit-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libbabeltrace-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libdw-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libnewt-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libnuma-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libopencsd-dev (>= 1.1.1) [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libperl-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libpython3-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libtraceevent-dev (>= 1:1.5) [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libunwind-dev [amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mipsel powerpc ppc64 ppc64el sh4] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, libzstd-dev [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, python3-dev:any [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, python3-setuptools [alpha amd64 arm64 armel armhf hppa i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 ppc64el riscv64 s390 s390x sh4 sparc sparc64] <!nopython !pkg.linux.mintools !pkg.linux.notools !stage1>, autoconf [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, automake [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtool [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libglib2.0-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libudev-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libwrap0-dev [linux-any] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtracefs-dev (>= 1.3) [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>, libtraceevent-dev (>= 1:1.5) [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>, python3-docutils [amd64 arm64 armhf i386 x32] <!pkg.linux.mintools !pkg.linux.notools !stage1>
 Build-Depends-Indep: graphviz <!nodoc !pkg.linux.quick !stage1>, python3-sphinx <!nodoc !pkg.linux.quick !stage1>, python3-sphinx-rtd-theme <!nodoc !pkg.linux.quick !stage1>, texlive-latex-base <!nodoc !pkg.linux.quick !stage1>, texlive-latex-extra <!nodoc !pkg.linux.quick !stage1>, dvipng <!nodoc !pkg.linux.quick !stage1>, patchutils <!pkg.linux.nosource !pkg.linux.quick !stage1>
 Rules-Requires-Root: no
 Homepage: https://www.kernel.org/
@@ -737,7 +737,7 @@ Description: Boot wrapper tools for Linux 6.5 on PowerPC
 Package: linux-headers-6.5.0-13parrot1-alpha-generic
 Architecture: alpha
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-alpha-generic
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-alpha-generic, generally used for building
@@ -797,7 +797,7 @@ Description: Debugging symbols for Linux alpha-generic configuration (meta-packa
 Package: linux-headers-6.5.0-13parrot1-alpha-smp
 Architecture: alpha
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-alpha-smp
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-alpha-smp, generally used for building
@@ -1490,7 +1490,7 @@ Description: rfkill modules
 Package: linux-headers-6.5.0-13parrot1-amd64
 Architecture: amd64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-x86
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-x86
 Description: Header files for Linux 6.5.0-13parrot1-amd64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-amd64, generally used for building
@@ -1550,7 +1550,7 @@ Description: Debugging symbols for Linux amd64 configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-cloud-amd64
 Architecture: amd64
 Build-Profiles: <!pkg.linux.nokernel !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-x86
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-x86
 Description: Header files for Linux 6.5.0-13parrot1-cloud-amd64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-cloud-amd64, generally used for building
@@ -2134,7 +2134,7 @@ Description: MTD core
 Package: linux-headers-6.5.0-13parrot1-arm64
 Architecture: arm64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-arm64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-arm64, generally used for building
@@ -2193,7 +2193,7 @@ Description: Debugging symbols for Linux arm64 configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-cloud-arm64
 Architecture: arm64
 Build-Profiles: <!pkg.linux.nokernel !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-cloud-arm64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-cloud-arm64, generally used for building
@@ -2738,7 +2738,7 @@ Description: MTD core
 Package: linux-headers-6.5.0-13parrot1-marvell
 Architecture: armel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-arm
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-arm
 Description: Header files for Linux 6.5.0-13parrot1-marvell
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-marvell, generally used for building
@@ -2798,7 +2798,7 @@ Description: Debugging symbols for Linux marvell configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-rpi
 Architecture: armel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-arm
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-arm
 Description: Header files for Linux 6.5.0-13parrot1-rpi
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-rpi, generally used for building out-of-tree
@@ -3381,7 +3381,7 @@ Description: MTD driver modules
 Package: linux-headers-6.5.0-13parrot1-armmp
 Architecture: armhf
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-arm
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-arm
 Description: Header files for Linux 6.5.0-13parrot1-armmp
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-armmp, generally used for building
@@ -3444,7 +3444,7 @@ Description: Debugging symbols for Linux armmp configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-armmp-lpae
 Architecture: armhf
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-arm
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-arm
 Description: Header files for Linux 6.5.0-13parrot1-armmp-lpae
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-armmp-lpae, generally used for building
@@ -4358,7 +4358,7 @@ Description: Network Block Device modules
 Package: linux-headers-6.5.0-13parrot1-parisc
 Architecture: hppa
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-parisc
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-parisc, generally used for building
@@ -4418,7 +4418,7 @@ Description: Debugging symbols for Linux parisc configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-parisc64
 Architecture: hppa
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13-hppa64-linux-gnu
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-parisc64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-parisc64, generally used for building
@@ -5741,7 +5741,7 @@ Description: rfkill modules
 Package: linux-headers-6.5.0-13parrot1-686
 Architecture: i386
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-x86
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-x86
 Description: Header files for Linux 6.5.0-13parrot1-686
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-686, generally used for building out-of-tree
@@ -5800,7 +5800,7 @@ Description: Debugging symbols for Linux 686 configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-686-pae
 Architecture: i386
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-x86
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-12-x86
 Description: Header files for Linux 6.5.0-13parrot1-686-pae
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-686-pae, generally used for building
@@ -6375,7 +6375,7 @@ Description: MTD core
 Package: linux-headers-6.5.0-13parrot1-itanium
 Architecture: ia64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-itanium
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-itanium, generally used for building
@@ -6435,7 +6435,7 @@ Description: Debugging symbols for Linux itanium configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-mckinley
 Architecture: ia64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mckinley
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mckinley, generally used for building
@@ -6776,7 +6776,7 @@ Description: Network Block Device modules
 Package: linux-headers-6.5.0-13parrot1-m68k
 Architecture: m68k
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-m68k
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-m68k, generally used for building out-of-tree
@@ -8479,7 +8479,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-4kc-malta
 Architecture: mips mipsel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-4kc-malta
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-4kc-malta, generally used for building
@@ -8537,7 +8537,7 @@ Description: Debugging symbols for Linux 4kc-malta configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-mips32r2eb
 Architecture: mips
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips32r2eb
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips32r2eb, generally used for building
@@ -8596,7 +8596,7 @@ Description: Debugging symbols for Linux mips32r2eb configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-octeon
 Architecture: mips mips64 mips64el mipsel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-octeon
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-octeon, generally used for building
@@ -9750,7 +9750,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-5kc-malta
 Architecture: mips64 mips64el
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-5kc-malta
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-5kc-malta, generally used for building
@@ -9808,7 +9808,7 @@ Description: Debugging symbols for Linux 5kc-malta configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-mips64r2eb
 Architecture: mips64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips64r2eb
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips64r2eb, generally used for building
@@ -10963,7 +10963,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips64r2el
 Architecture: mips64el
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips64r2el
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips64r2el, generally used for building
@@ -11022,7 +11022,7 @@ Description: Debugging symbols for Linux mips64r2el configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-loongson-3
 Architecture: mips64el mipsel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-loongson-3
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-loongson-3, generally used for building
@@ -11629,7 +11629,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips64r6eb
 Architecture: mips64r6
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips64r6eb
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips64r6eb, generally used for building
@@ -12236,7 +12236,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips64r6el
 Architecture: mips64r6el
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips64r6el
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips64r6el, generally used for building
@@ -12843,7 +12843,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips32r2el
 Architecture: mipsel
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips32r2el
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips32r2el, generally used for building
@@ -13450,7 +13450,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips32r6eb
 Architecture: mipsr6
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips32r6eb
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips32r6eb, generally used for building
@@ -14057,7 +14057,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-mips32r6el
 Architecture: mipsr6el
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-mips32r6el
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-mips32r6el, generally used for building
@@ -15285,7 +15285,7 @@ Description: Apple powermac fancontrol modules
 Package: linux-headers-6.5.0-13parrot1-powerpc
 Architecture: powerpc
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-powerpc
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-powerpc, generally used for building
@@ -15343,7 +15343,7 @@ Description: Debugging symbols for Linux powerpc configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-powerpc-smp
 Architecture: powerpc
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-powerpc-smp
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-powerpc-smp, generally used for building
@@ -15401,7 +15401,7 @@ Description: Debugging symbols for Linux powerpc-smp configuration (meta-package
 Package: linux-headers-6.5.0-13parrot1-powerpc64
 Architecture: powerpc ppc64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-powerpc64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-powerpc64, generally used for building
@@ -15986,7 +15986,7 @@ Description: Apple powermac fancontrol modules
 Package: linux-headers-6.5.0-13parrot1-powerpc64le
 Architecture: ppc64el
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-powerpc64le
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-powerpc64le, generally used for building
@@ -16533,7 +16533,7 @@ Description: MTD core
 Package: linux-headers-6.5.0-13parrot1-riscv64
 Architecture: riscv64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-riscv64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-riscv64, generally used for building
@@ -16874,7 +16874,7 @@ Description: optional dasd DIAG support
 Package: linux-headers-6.5.0-13parrot1-s390x
 Architecture: s390x
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, linux-compiler-gcc-13-s390
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-s390x
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-s390x, generally used for building
@@ -17736,7 +17736,7 @@ Description: sound support
 Package: linux-headers-6.5.0-13parrot1-sh7751r
 Architecture: sh4
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-sh7751r
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-sh7751r, generally used for building
@@ -17795,7 +17795,7 @@ Description: Debugging symbols for Linux sh7751r configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-sh7785lcr
 Architecture: sh4
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-sh7785lcr
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-sh7785lcr, generally used for building
@@ -18268,7 +18268,7 @@ Description: Network Block Device modules
 Package: linux-headers-6.5.0-13parrot1-sparc64
 Architecture: sparc64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-sparc64
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-sparc64, generally used for building
@@ -18327,7 +18327,7 @@ Description: Debugging symbols for Linux sparc64 configuration (meta-package)
 Package: linux-headers-6.5.0-13parrot1-sparc64-smp
 Architecture: sparc64
 Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick !stage1>
-Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-13
+Depends: linux-headers-6.5.0-13parrot1-common (= ${source:Version}), linux-kbuild-6.5.0-13parrot1, ${misc:Depends}, gcc-12
 Description: Header files for Linux 6.5.0-13parrot1-sparc64-smp
  This package provides the architecture-specific kernel header files for
  Linux kernel 6.5.0-13parrot1-sparc64-smp, generally used for building
@@ -18384,28 +18384,28 @@ Description: Debugging symbols for Linux sparc64-smp configuration (meta-package
  This package depends on the detached debugging symbols for the latest
  Linux kernel sparc64-smp configuration.
 
-Package: linux-compiler-gcc-13-arm
+Package: linux-compiler-gcc-12-arm
 Architecture: armel armhf
 Build-Profiles: <!stage1>
-Depends: gcc-13, ${misc:Depends}
+Depends: gcc-12, ${misc:Depends}
 Multi-Arch: foreign
 Description: Compiler for Linux on ARM (meta-package)
  This package depends on GCC of the appropriate version and architecture
  for Linux on armel and armhf.
 
-Package: linux-compiler-gcc-13-s390
+Package: linux-compiler-gcc-12-s390
 Architecture: s390 s390x
 Build-Profiles: <!stage1>
-Depends: gcc-13, ${misc:Depends}
+Depends: gcc-12, ${misc:Depends}
 Multi-Arch: foreign
 Description: Compiler for Linux on IBM zSeries (meta-package)
  This package depends on GCC of the appropriate version and architecture
  for Linux on s390 and s390x.
 
-Package: linux-compiler-gcc-13-x86
+Package: linux-compiler-gcc-12-x86
 Architecture: amd64 i386 x32
 Build-Profiles: <!stage1>
-Depends: gcc-13, ${misc:Depends}
+Depends: gcc-12, ${misc:Depends}
 Multi-Arch: foreign
 Description: Compiler for Linux on x86 (meta-package)
  This package depends on GCC of the appropriate version and architecture

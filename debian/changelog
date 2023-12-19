@@ -1,6 +1,7 @@
 linux (6.5.13-1parrot1) lory-updates; urgency=medium
 
   * Import new Debian version.
+  * Use gcc-12 instead of gcc-13.
 
  -- Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>  Tue, 19 Dec 2023 19:39:55 +0100
 

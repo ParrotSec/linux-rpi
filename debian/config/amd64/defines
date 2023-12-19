@@ -14,7 +14,7 @@ bootloaders: grub-pc grub-efi-amd64 extlinux
 install-stem: vmlinuz
 
 [relations]
-headers%gcc-13: linux-compiler-gcc-13-x86
+headers%gcc-12: linux-compiler-gcc-12-x86
 
 [amd64_description]
 hardware: 64-bit PCs

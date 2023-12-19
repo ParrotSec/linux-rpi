@@ -144,7 +144,7 @@ arches:
  sparc
  sparc64
  x32
-compiler: gcc-13
+compiler: gcc-12
 featuresets:
  none
  rt
@@ -168,7 +168,7 @@ recommends: apparmor
 
 [relations]
 # compilers
-gcc-13: gcc-13 <!stage1 !cross !pkg.linux.nokernel>, gcc-13-@gnu-type-package@ <!stage1 cross !pkg.linux.nokernel>
+gcc-12: gcc-12 <!stage1 !cross !pkg.linux.nokernel>, gcc-12-@gnu-type-package@ <!stage1 cross !pkg.linux.nokernel>
 
 # initramfs-generators
 initramfs-fallback: linux-initramfs-tool

@@ -3,7 +3,6 @@
 ###########################################################################
 # Posted and applied
 ###########################################################################
-0001-kernel-fork-beware-of-__put_task_struct-calling-cont.patch
 0002-sched-avoid-false-lockdep-splat-in-put_task_struct.patch
 
 # signal_x86__Delay_calling_signals_in_atomic.patch

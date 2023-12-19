@@ -54,3 +54,4 @@ qcom_smd
 qcom_hwspinlock
 icc-osm-l3
 rtc-pm8xxx
+qrtr ?

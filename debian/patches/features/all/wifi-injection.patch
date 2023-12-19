@@ -133,4 +133,3 @@
  
  	/* HW will perform RTS-CTS when only RTS flags is set.
  	 * HW will perform CTS-to-self when both RTS and CTS flags are set.
-

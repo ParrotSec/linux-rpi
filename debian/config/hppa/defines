@@ -11,14 +11,14 @@ suggests: palo
 install-stem: vmlinuz
 
 [relations]
-gcc-12: gcc-12 <!stage1 !cross !pkg.linux.nokernel>, gcc-12-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, gcc-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, binutils-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>, gcc-12-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>
+gcc-13: gcc-13 <!stage1 !cross !pkg.linux.nokernel>, gcc-13-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, gcc-hppa-linux-gnu <!stage1 cross !pkg.linux.nokernel>, binutils-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>, gcc-13-hppa64-linux-gnu:native <!stage1 !pkg.linux.nokernel>
 
 [parisc_description]
 hardware: 32-bit PA-RISC
 hardware-long: HP PA-RISC 32-bit systems with max 4 GB RAM
 
 [parisc_relations]
-headers%gcc-12: gcc-12
+headers%gcc-13: gcc-13
 
 [parisc64_base]
 cflags: -fno-cse-follow-jumps
@@ -33,4 +33,4 @@ hardware: 64-bit PA-RISC
 hardware-long: HP PA-RISC 64-bit systems with support for more than 4 GB RAM
 
 [parisc64_relations]
-headers%gcc-12: gcc-12-hppa64-linux-gnu
+headers%gcc-13: gcc-13-hppa64-linux-gnu

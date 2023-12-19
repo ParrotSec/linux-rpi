@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/irqnr.h>
 #include <linux/pci.h>
+#include <linux/rcupdate.h>
 #include <linux/spinlock.h>
 #include <linux/cpuhotplug.h>
 #include <linux/atomic.h>
@@ -96,6 +97,7 @@ enum xen_irq_type {
 struct irq_info {
 	struct list_head list;
 	struct list_head eoi_list;
+	struct rcu_work rwork;
 	short refcnt;
 	u8 spurious_cnt;
 	u8 is_accounted;
@@ -147,22 +149,12 @@ const struct evtchn_ops *evtchn_ops;
 static DEFINE_MUTEX(irq_mapping_update_lock);
 
 /*
- * Lock protecting event handling loop against removing event channels.
- * Adding of event channels is no issue as the associated IRQ becomes active
- * only after everything is setup (before request_[threaded_]irq() the handler
- * can't be entered for an event, as the event channel will be unmasked only
- * then).
- */
-static DEFINE_RWLOCK(evtchn_rwlock);
-
-/*
  * Lock hierarchy:
  *
  * irq_mapping_update_lock
- *   evtchn_rwlock
- *     IRQ-desc lock
- *       percpu eoi_list_lock
- *         irq_info->lock
+ *   IRQ-desc lock
+ *     percpu eoi_list_lock
+ *       irq_info->lock
  */
 
 static LIST_HEAD(xen_irq_list_head);
@@ -172,6 +164,8 @@ static DEFINE_PER_CPU(int [NR_VIRQS], virq_to_irq) = {[0 ... NR_VIRQS-1] = -1};
 
 /* IRQ <-> IPI mapping */
 static DEFINE_PER_CPU(int [XEN_NR_IPIS], ipi_to_irq) = {[0 ... XEN_NR_IPIS-1] = -1};
+/* Cache for IPI event channels - needed for hot cpu unplug (avoid RCU usage). */
+static DEFINE_PER_CPU(evtchn_port_t [XEN_NR_IPIS], ipi_to_evtchn) = {[0 ... XEN_NR_IPIS-1] = 0};
 
 /* Event channel distribution data */
 static atomic_t channels_on_cpu[NR_CPUS];
@@ -306,6 +300,22 @@ static void channels_on_cpu_inc(struct irq_info *info)
 	info->is_accounted = 1;
 }
 
+static void delayed_free_irq(struct work_struct *work)
+{
+	struct irq_info *info = container_of(to_rcu_work(work), struct irq_info,
+					     rwork);
+	unsigned int irq = info->irq;
+
+	/* Remove the info pointer only now, with no potential users left. */
+	set_info_for_irq(irq, NULL);
+
+	kfree(info);
+
+	/* Legacy IRQ descriptors are managed by the arch. */
+	if (irq >= nr_legacy_irqs())
+		irq_free_desc(irq);
+}
+
 /* Constructors for packed IRQ information. */
 static int xen_irq_info_common_setup(struct irq_info *info,
 				     unsigned irq,
@@ -358,6 +368,7 @@ static int xen_irq_info_ipi_setup(unsigned cpu,
 	info->u.ipi = ipi;
 
 	per_cpu(ipi_to_irq, cpu)[ipi] = irq;
+	per_cpu(ipi_to_evtchn, cpu)[ipi] = evtchn;
 
 	return xen_irq_info_common_setup(info, irq, IRQT_IPI, evtchn, 0);
 }
@@ -593,7 +604,9 @@ static void lateeoi_list_add(struct irq_info *info)
 
 	spin_lock_irqsave(&eoi->eoi_list_lock, flags);
 
-	if (list_empty(&eoi->eoi_list)) {
+	elem = list_first_entry_or_null(&eoi->eoi_list, struct irq_info,
+					eoi_list);
+	if (!elem || info->eoi_time < elem->eoi_time) {
 		list_add(&info->eoi_list, &eoi->eoi_list);
 		mod_delayed_work_on(info->eoi_cpu, system_wq,
 				    &eoi->delayed, delay);
@@ -668,33 +681,36 @@ static void xen_irq_lateeoi_worker(struct work_struct *work)
 
 	eoi = container_of(to_delayed_work(work), struct lateeoi_work, delayed);
 
-	read_lock_irqsave(&evtchn_rwlock, flags);
+	rcu_read_lock();
 
 	while (true) {
-		spin_lock(&eoi->eoi_list_lock);
+		spin_lock_irqsave(&eoi->eoi_list_lock, flags);
 
 		info = list_first_entry_or_null(&eoi->eoi_list, struct irq_info,
 						eoi_list);
 
-		if (info == NULL || now < info->eoi_time) {
-			spin_unlock(&eoi->eoi_list_lock);
+		if (info == NULL)
+			break;
+
+		if (now < info->eoi_time) {
+			mod_delayed_work_on(info->eoi_cpu, system_wq,
+					    &eoi->delayed,
+					    info->eoi_time - now);
 			break;
 		}
 
 		list_del_init(&info->eoi_list);
 
-		spin_unlock(&eoi->eoi_list_lock);
+		spin_unlock_irqrestore(&eoi->eoi_list_lock, flags);
 
 		info->eoi_time = 0;
 
 		xen_irq_lateeoi_locked(info, false);
 	}
 
-	if (info)
-		mod_delayed_work_on(info->eoi_cpu, system_wq,
-				    &eoi->delayed, info->eoi_time - now);
+	spin_unlock_irqrestore(&eoi->eoi_list_lock, flags);
 
-	read_unlock_irqrestore(&evtchn_rwlock, flags);
+	rcu_read_unlock();
 }
 
 static void xen_cpu_init_eoi(unsigned int cpu)
@@ -709,16 +725,15 @@ static void xen_cpu_init_eoi(unsigned int cpu)
 void xen_irq_lateeoi(unsigned int irq, unsigned int eoi_flags)
 {
 	struct irq_info *info;
-	unsigned long flags;
 
-	read_lock_irqsave(&evtchn_rwlock, flags);
+	rcu_read_lock();
 
 	info = info_for_irq(irq);
 
 	if (info)
 		xen_irq_lateeoi_locked(info, eoi_flags & XEN_EOI_FLAG_SPURIOUS);
 
-	read_unlock_irqrestore(&evtchn_rwlock, flags);
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(xen_irq_lateeoi);
 
@@ -732,6 +747,7 @@ static void xen_irq_init(unsigned irq)
 
 	info->type = IRQT_UNBOUND;
 	info->refcnt = -1;
+	INIT_RCU_WORK(&info->rwork, delayed_free_irq);
 
 	set_info_for_irq(irq, info);
 	/*
@@ -789,31 +805,18 @@ static int __must_check xen_allocate_irq_gsi(unsigned gsi)
 static void xen_free_irq(unsigned irq)
 {
 	struct irq_info *info = info_for_irq(irq);
-	unsigned long flags;
 
 	if (WARN_ON(!info))
 		return;
-
-	write_lock_irqsave(&evtchn_rwlock, flags);
 
 	if (!list_empty(&info->eoi_list))
 		lateeoi_list_del(info);
 
 	list_del(&info->list);
 
-	set_info_for_irq(irq, NULL);
-
 	WARN_ON(info->refcnt > 0);
 
-	write_unlock_irqrestore(&evtchn_rwlock, flags);
-
-	kfree(info);
-
-	/* Legacy IRQ descriptors are managed by the arch. */
-	if (irq < nr_legacy_irqs())
-		return;
-
-	irq_free_desc(irq);
+	queue_rcu_work(system_wq, &info->rwork);
 }
 
 /* Not called for lateeoi events. */
@@ -983,6 +986,7 @@ static void __unbind_from_irq(unsigned int irq)
 			break;
 		case IRQT_IPI:
 			per_cpu(ipi_to_irq, cpu)[ipi_from_irq(irq)] = -1;
+			per_cpu(ipi_to_evtchn, cpu)[ipi_from_irq(irq)] = 0;
 			break;
 		case IRQT_EVTCHN:
 			dev = info->u.interdomain;
@@ -1633,7 +1637,7 @@ EXPORT_SYMBOL_GPL(evtchn_put);
 
 void xen_send_IPI_one(unsigned int cpu, enum ipi_vector vector)
 {
-	int irq;
+	evtchn_port_t evtchn;
 
 #ifdef CONFIG_X86
 	if (unlikely(vector == XEN_NMI_VECTOR)) {
@@ -1644,9 +1648,9 @@ void xen_send_IPI_one(unsigned int cpu, enum ipi_vector vector)
 		return;
 	}
 #endif
-	irq = per_cpu(ipi_to_irq, cpu)[vector];
-	BUG_ON(irq < 0);
-	notify_remote_via_irq(irq);
+	evtchn = per_cpu(ipi_to_evtchn, cpu)[vector];
+	BUG_ON(evtchn == 0);
+	notify_remote_via_evtchn(evtchn);
 }
 
 struct evtchn_loop_ctrl {
@@ -1711,7 +1715,14 @@ static int __xen_evtchn_do_upcall(void)
 	int cpu = smp_processor_id();
 	struct evtchn_loop_ctrl ctrl = { 0 };
 
-	read_lock(&evtchn_rwlock);
+	/*
+	 * When closing an event channel the associated IRQ must not be freed
+	 * until all cpus have left the event handling loop. This is ensured
+	 * by taking the rcu_read_lock() while handling events, as freeing of
+	 * the IRQ is handled via queue_rcu_work() _after_ closing the event
+	 * channel.
+	 */
+	rcu_read_lock();
 
 	do {
 		vcpu_info->evtchn_upcall_pending = 0;
@@ -1724,7 +1735,7 @@ static int __xen_evtchn_do_upcall(void)
 
 	} while (vcpu_info->evtchn_upcall_pending);
 
-	read_unlock(&evtchn_rwlock);
+	rcu_read_unlock();
 
 	/*
 	 * Increment irq_epoch only now to defer EOIs only for

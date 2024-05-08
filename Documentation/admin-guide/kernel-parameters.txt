@@ -418,20 +418,20 @@
 	arm64.nobti	[ARM64] Unconditionally disable Branch Target
 			Identification support
 
-	arm64.nopauth	[ARM64] Unconditionally disable Pointer Authentication
-			support
+	arm64.nomops	[ARM64] Unconditionally disable Memory Copy and Memory
+			Set instructions support
 
 	arm64.nomte	[ARM64] Unconditionally disable Memory Tagging Extension
 			support
 
-	arm64.nosve	[ARM64] Unconditionally disable Scalable Vector
-			Extension support
+	arm64.nopauth	[ARM64] Unconditionally disable Pointer Authentication
+			support
 
 	arm64.nosme	[ARM64] Unconditionally disable Scalable Matrix
 			Extension support
 
-	arm64.nomops	[ARM64] Unconditionally disable Memory Copy and Memory
-			Set instructions support
+	arm64.nosve	[ARM64] Unconditionally disable Scalable Vector
+			Extension support
 
 	ataflop=	[HW,M68k]
 
@@ -553,7 +553,7 @@
 			others).
 
 	ccw_timeout_log	[S390]
-			See Documentation/s390/common_io.rst for details.
+			See Documentation/arch/s390/common_io.rst for details.
 
 	cgroup_disable=	[KNL] Disable a particular controller or optional feature
 			Format: {name of the controller(s) or feature(s) to disable}
@@ -580,6 +580,10 @@
 			named mounts. Specifying both "all" and "named" disables
 			all v1 hierarchies.
 
+	cgroup_favordynmods= [KNL] Enable or Disable favordynmods.
+			Format: { "true" | "false" }
+			Defaults to the value of CONFIG_CGROUP_FAVOR_DYNMODS.
+
 	cgroup.memory=	[KNL] Pass options to the cgroup memory controller.
 			Format: <string>
 			nosocket -- Disable socket memory accounting.
@@ -598,7 +602,7 @@
 			Setting checkreqprot to 1 is deprecated.
 
 	cio_ignore=	[S390]
-			See Documentation/s390/common_io.rst for details.
+			See Documentation/arch/s390/common_io.rst for details.
 
 	clearcpuid=X[,X...] [X86]
 			Disable CPUID feature X for the kernel. See
@@ -696,13 +700,24 @@
 			kernel/dma/contiguous.c
 
 	cma_pernuma=nn[MG]
-			[ARM64,KNL,CMA]
+			[KNL,CMA]
 			Sets the size of kernel per-numa memory area for
 			contiguous memory allocations. A value of 0 disables
 			per-numa CMA altogether. And If this option is not
 			specified, the default value is 0.
 			With per-numa CMA enabled, DMA users on node nid will
 			first try to allocate buffer from the pernuma area
+			which is located in node nid, if the allocation fails,
+			they will fallback to the global default memory area.
+
+	numa_cma=<node>:nn[MG][,<node>:nn[MG]]
+			[KNL,CMA]
+			Sets the size of kernel numa memory area for
+			contiguous memory allocations. It will reserve CMA
+			area for the specified node.
+
+			With numa CMA enabled, DMA users on node nid will
+			first try to allocate buffer from the numa area
 			which is located in node nid, if the allocation fails,
 			they will fallback to the global default memory area.
 
@@ -862,7 +877,7 @@
 			memory region [offset, offset + size] for that kernel
 			image. If '@offset' is omitted, then a suitable offset
 			is selected automatically.
-			[KNL, X86-64, ARM64] Select a region under 4G first, and
+			[KNL, X86-64, ARM64, RISCV] Select a region under 4G first, and
 			fall back to reserve region above 4G when '@offset'
 			hasn't been specified.
 			See Documentation/admin-guide/kdump/kdump.rst for further details.
@@ -875,14 +890,14 @@
 			Documentation/admin-guide/kdump/kdump.rst for an example.
 
 	crashkernel=size[KMG],high
-			[KNL, X86-64, ARM64] range could be above 4G. Allow kernel
-			to allocate physical memory region from top, so could
-			be above 4G if system have more than 4G ram installed.
-			Otherwise memory region will be allocated below 4G, if
-			available.
+			[KNL, X86-64, ARM64, RISCV] range could be above 4G.
+			Allow kernel to allocate physical memory region from top,
+			so could be above 4G if system have more than 4G ram
+			installed. Otherwise memory region will be allocated
+			below 4G, if available.
 			It will be ignored if crashkernel=X is specified.
 	crashkernel=size[KMG],low
-			[KNL, X86-64, ARM64] range under 4G. When crashkernel=X,high
+			[KNL, X86-64, ARM64, RISCV] range under 4G. When crashkernel=X,high
 			is passed, kernel could allocate physical memory region
 			above 4G, that cause second kernel crash on system
 			that require some amount of low memory, e.g. swiotlb
@@ -893,6 +908,7 @@
 			size is	platform dependent.
 			  --> x86: max(swiotlb_size_or_default() + 8MiB, 256MiB)
 			  --> arm64: 128MiB
+			  --> riscv: 128MiB
 			This one lets the user specify own low range under 4G
 			for second kernel instead.
 			0: to disable low allocation.
@@ -1121,6 +1137,26 @@
 			The filter can be disabled or changed to another
 			driver later using sysfs.
 
+	reg_file_data_sampling=
+			[X86] Controls mitigation for Register File Data
+			Sampling (RFDS) vulnerability. RFDS is a CPU
+			vulnerability which may allow userspace to infer
+			kernel data values previously stored in floating point
+			registers, vector registers, or integer registers.
+			RFDS only affects Intel Atom processors.
+
+			on:	Turns ON the mitigation.
+			off:	Turns OFF the mitigation.
+
+			This parameter overrides the compile time default set
+			by CONFIG_MITIGATION_RFDS. Mitigation cannot be
+			disabled when other VERW based mitigations (like MDS)
+			are enabled. In order to disable RFDS mitigation all
+			VERW based mitigations need to be disabled.
+
+			For details see:
+			Documentation/admin-guide/hw-vuln/reg-file-data-sampling.rst
+
 	driver_async_probe=  [KNL]
 			List of driver names to be probed asynchronously. *
 			matches with all driver names. If * is specified, the
@@ -1319,6 +1355,7 @@
 			earlyprintk=dbgp[debugController#]
 			earlyprintk=pciserial[,force],bus:device.function[,baudrate]
 			earlyprintk=xdbc[xhciController#]
+			earlyprintk=bios
 
 			earlyprintk is useful when the kernel crashes before
 			the normal console is initialized. It is not enabled by
@@ -1348,6 +1385,8 @@
 			The xen option can only be used in Xen domains.
 
 			The sclp output can only be used on s390.
+
+			The bios output can only be used on SuperH.
 
 			The optional "force" to "pciserial" enables use of a
 			PCI device even when its classcode is not of the
@@ -1437,7 +1476,7 @@
 			See comment before function elanfreq_setup() in
 			arch/x86/kernel/cpu/cpufreq/elanfreq.c.
 
-	elfcorehdr=[size[KMG]@]offset[KMG] [IA64,PPC,SH,X86,S390]
+	elfcorehdr=[size[KMG]@]offset[KMG] [PPC,SH,X86,S390]
 			Specifies physical address of start of kernel core
 			image elf header and optionally the size. Generally
 			kexec loader will pass this option to capture kernel.
@@ -1499,12 +1538,6 @@
 
 	floppy=		[HW]
 			See Documentation/admin-guide/blockdev/floppy.rst.
-
-	force_pal_cache_flush
-			[IA-64] Avoid check_sal_cache_flush which may hang on
-			buggy SAL_CACHE_FLUSH implementations. Using this
-			parameter will force ia64_sal_cache_flush to call
-			ia64_pal_cache_flush instead of SAL_CACHE_FLUSH.
 
 	forcepae	[X86-32]
 			Forcefully enable Physical Address Extension (PAE).
@@ -1881,6 +1914,12 @@
 			 0 -- machine default
 			 1 -- force brightness inversion
 
+	ia32_emulation=	[X86-64]
+			Format: <bool>
+			When true, allows loading 32-bit programs and executing 32-bit
+			syscalls, essentially overriding IA32_EMULATION_DEFAULT_DISABLED at
+			boot time. When false, unconditionally disables IA32 emulation.
+
 	icn=		[HW,ISDN]
 			Format: <io>[,<membase>[,<icn_id>[,<icn_id2>]]]
 
@@ -2208,7 +2247,7 @@
 			  forcing Dual Address Cycle for PCI cards supporting
 			  greater than 32-bit addressing.
 
-	iommu.strict=	[ARM64, X86] Configure TLB invalidation behaviour
+	iommu.strict=	[ARM64, X86, S390] Configure TLB invalidation behaviour
 			Format: { "0" | "1" }
 			0 - Lazy mode.
 			  Request that DMA unmap operations use deferred
@@ -2644,7 +2683,7 @@
 
 	kvm-intel.flexpriority=
 			[KVM,Intel] Control KVM's use of FlexPriority feature
-			(TPR shadow). Default is 1 (enabled). Disalbe by KVM if
+			(TPR shadow). Default is 1 (enabled). Disable by KVM if
 			hardware lacks support for it.
 
 	kvm-intel.nested=
@@ -2901,6 +2940,38 @@
 			to extract confidential information from the kernel
 			are also disabled.
 
+	locktorture.acq_writer_lim= [KNL]
+			Set the time limit in jiffies for a lock
+			acquisition.  Acquisitions exceeding this limit
+			will result in a splat once they do complete.
+
+	locktorture.bind_readers= [KNL]
+			Specify the list of CPUs to which the readers are
+			to be bound.
+
+	locktorture.bind_writers= [KNL]
+			Specify the list of CPUs to which the writers are
+			to be bound.
+
+	locktorture.call_rcu_chains= [KNL]
+			Specify the number of self-propagating call_rcu()
+			chains to set up.  These are used to ensure that
+			there is a high probability of an RCU grace period
+			in progress at any given time.	Defaults to 0,
+			which disables these call_rcu() chains.
+
+	locktorture.long_hold= [KNL]
+			Specify the duration in milliseconds for the
+			occasional long-duration lock hold time.  Defaults
+			to 100 milliseconds.  Select 0 to disable.
+
+	locktorture.nested_locks= [KNL]
+			Specify the maximum lock nesting depth that
+			locktorture is to exercise, up to a limit of 8
+			(MAX_NESTED_LOCKS).  Specify zero to disable.
+			Note that this parameter is ineffective on types
+			of locks that do not support nested acquisition.
+
 	locktorture.nreaders_stress= [KNL]
 			Set the number of locking read-acquisition kthreads.
 			Defaults to being automatically set based on the
@@ -2915,6 +2986,25 @@
 	locktorture.onoff_interval= [KNL]
 			Set time (s) between CPU-hotplug operations, or
 			zero to disable CPU-hotplug testing.
+
+	locktorture.rt_boost= [KNL]
+			Do periodic testing of real-time lock priority
+			boosting.  Select 0 to disable, 1 to boost
+			only rt_mutex, and 2 to boost unconditionally.
+			Defaults to 2, which might seem to be an
+			odd choice, but which should be harmless for
+			non-real-time spinlocks, due to their disabling
+			of preemption.	Note that non-realtime mutexes
+			disable boosting.
+
+	locktorture.rt_boost_factor= [KNL]
+			Number that determines how often and for how
+			long priority boosting is exercised.  This is
+			scaled down by the number of writers, so that the
+			number of boosts per unit time remains roughly
+			constant as the number of writers increases.
+			On the other hand, the duration of each boost
+			increases with the number of writers.
 
 	locktorture.shuffle_interval= [KNL]
 			Set task-shuffle interval (jiffies).  Shuffling
@@ -2938,12 +3028,12 @@
 	locktorture.torture_type= [KNL]
 			Specify the locking implementation to test.
 
+	locktorture.verbose= [KNL]
+			Enable additional printk() statements.
+
 	locktorture.writer_fifo= [KNL]
 			Run the write-side locktorture kthreads at
 			sched_set_fifo() real-time priority.
-
-	locktorture.verbose= [KNL]
-			Enable additional printk() statements.
 
 	logibm.irq=	[HW,MOUSE] Logitech Bus Mouse Driver
 			Format: <irq>
@@ -3129,7 +3219,7 @@
 			[KNL,SH] Allow user to override the default size for
 			per-device physically contiguous DMA buffers.
 
-	memhp_default_state=online/offline
+	memhp_default_state=online/offline/online_kernel/online_movable
 			[KNL] Set the initial state for the memory hotplug
 			onlining policy. If not specified, the default value is
 			set according to the
@@ -3237,9 +3327,7 @@
 
 	mem_encrypt=	[X86-64] AMD Secure Memory Encryption (SME) control
 			Valid arguments: on, off
-			Default (depends on kernel configuration option):
-			  on  (CONFIG_AMD_MEM_ENCRYPT_ACTIVE_BY_DEFAULT=y)
-			  off (CONFIG_AMD_MEM_ENCRYPT_ACTIVE_BY_DEFAULT=n)
+			Default: off
 			mem_encrypt=on:		Activate SME
 			mem_encrypt=off:	Do not activate SME
 
@@ -3262,6 +3350,11 @@
 			problem by letting the user disable the workaround.
 
 	mga=		[HW,DRM]
+
+	microcode.force_minrev=	[X86]
+			Format: <bool>
+			Enable or disable the microcode minimal revision
+			enforcement for the runtime microcode loader.
 
 	min_addr=nn[KMG]	[KNL,BOOT,IA-64] All physical memory below this
 			physical address is ignored.
@@ -3310,6 +3403,7 @@
 					       nospectre_bhb [ARM64]
 					       nospectre_v1 [X86,PPC]
 					       nospectre_v2 [X86,PPC,S390,ARM64]
+					       reg_file_data_sampling=off [X86]
 					       retbleed=off [X86]
 					       spec_store_bypass_disable=off [X86,PPC]
 					       spectre_v2_user=off [X86]
@@ -3520,6 +3614,13 @@
 	nfs.callback_tcpport=
 			[NFS] set the TCP port on which the NFSv4 callback
 			channel should listen.
+
+	nfs.delay_retrans=
+			[NFS] specifies the number of times the NFSv4 client
+			retries the request before returning an EAGAIN error,
+			after a reply of NFS4ERR_DELAY from the server.
+			Only applies if the softerr mount option is enabled,
+			and the specified value is >= 0.
 
 	nfs.enable_ino64=
 			[NFS] enable 64-bit inode numbers.
@@ -3742,7 +3843,7 @@
 
 	nohibernate	[HIBERNATION] Disable hibernation and resume.
 
-	nohlt		[ARM,ARM64,MICROBLAZE,MIPS,SH] Forces the kernel to
+	nohlt		[ARM,ARM64,MICROBLAZE,MIPS,PPC,SH] Forces the kernel to
 			busy wait in do_idle() and not use the arch_cpu_idle()
 			implementation; requires CONFIG_GENERIC_IDLE_POLL_SETUP
 			to be effective. This is useful on platforms where the
@@ -3878,10 +3979,10 @@
 	nosmp		[SMP] Tells an SMP kernel to act as a UP kernel,
 			and disable the IO APIC.  legacy for "maxcpus=0".
 
-	nosmt		[KNL,MIPS,S390] Disable symmetric multithreading (SMT).
+	nosmt		[KNL,MIPS,PPC,S390] Disable symmetric multithreading (SMT).
 			Equivalent to smt=1.
 
-			[KNL,X86] Disable symmetric multithreading (SMT).
+			[KNL,X86,PPC] Disable symmetric multithreading (SMT).
 			nosmt=force: Force disable SMT, cannot be undone
 				     via the sysfs control file.
 
@@ -4062,20 +4163,6 @@
 			timeout < 0: reboot immediately
 			Format: <timeout>
 
-	panic_print=	Bitmask for printing system info when panic happens.
-			User can chose combination of the following bits:
-			bit 0: print all tasks info
-			bit 1: print system memory info
-			bit 2: print timer info
-			bit 3: print locks info if CONFIG_LOCKDEP is on
-			bit 4: print ftrace buffer
-			bit 5: print all printk messages in buffer
-			bit 6: print all CPUs backtrace (if available in the arch)
-			*Be aware* that this option may print a _lot_ of lines,
-			so there are risks of losing older messages in the log.
-			Use this option carefully, maybe worth to setup a
-			bigger log buffer with "log_buf_len" along with this.
-
 	panic_on_taint=	Bitmask for conditionally calling panic() in add_taint()
 			Format: <hex>[,nousertaint]
 			Hexadecimal bitmask representing the set of TAINT flags
@@ -4091,6 +4178,20 @@
 
 	panic_on_warn=1	panic() instead of WARN().  Useful to cause kdump
 			on a WARN().
+
+	panic_print=	Bitmask for printing system info when panic happens.
+			User can chose combination of the following bits:
+			bit 0: print all tasks info
+			bit 1: print system memory info
+			bit 2: print timer info
+			bit 3: print locks info if CONFIG_LOCKDEP is on
+			bit 4: print ftrace buffer
+			bit 5: print all printk messages in buffer
+			bit 6: print all CPUs backtrace (if available in the arch)
+			*Be aware* that this option may print a _lot_ of lines,
+			so there are risks of losing older messages in the log.
+			Use this option carefully, maybe worth to setup a
+			bigger log buffer with "log_buf_len" along with this.
 
 	parkbd.port=	[HW] Parallel port number the keyboard adapter is
 			connected to, default is 0.
@@ -4211,7 +4312,7 @@
 			mode 0, bit 1 is for mode 1, and so on.  Mode 0 only
 			allowed by default.
 
-	pause_on_oops=
+	pause_on_oops=<int>
 			Halt all CPUs after the first oops has been printed for
 			the specified number of seconds.  This is to be used if
 			your oopses keep scrolling off the screen.
@@ -4757,6 +4858,13 @@
 			Set maximum number of finished RCU callbacks to
 			process in one batch.
 
+	rcutree.do_rcu_barrier=	[KNL]
+			Request a call to rcu_barrier().  This is
+			throttled so that userspace tests can safely
+			hammer on the sysfs variable if they so choose.
+			If triggered before the RCU grace-period machinery
+			is fully active, this will error out with EAGAIN.
+
 	rcutree.dump_tree=	[KNL]
 			Dump the structure of the rcu_node combining tree
 			out at early boot.  This is used for diagnostic
@@ -4953,6 +5061,15 @@
 			test until boot completes in order to avoid
 			interference.
 
+	rcuscale.kfree_by_call_rcu= [KNL]
+			In kernels built with CONFIG_RCU_LAZY=y, test
+			call_rcu() instead of kfree_rcu().
+
+	rcuscale.kfree_mult= [KNL]
+			Instead of allocating an object of size kfree_obj,
+			allocate one of kfree_mult * sizeof(kfree_obj).
+			Defaults to 1.
+
 	rcuscale.kfree_rcu_test= [KNL]
 			Set to measure performance of kfree_rcu() flooding.
 
@@ -4978,6 +5095,12 @@
 			Number of loops doing rcuscale.kfree_alloc_num number
 			of allocations and frees.
 
+	rcuscale.minruntime= [KNL]
+			Set the minimum test run time in seconds.  This
+			does not affect the data-collection interval,
+			but instead allows better measurement of things
+			like CPU consumption.
+
 	rcuscale.nreaders= [KNL]
 			Set number of RCU readers.  The value -1 selects
 			N, where N is the number of CPUs.  A value
@@ -4992,7 +5115,7 @@
 			the same as for rcuscale.nreaders.
 			N, where N is the number of CPUs
 
-	rcuscale.perf_type= [KNL]
+	rcuscale.scale_type= [KNL]
 			Specify the RCU implementation to test.
 
 	rcuscale.shutdown= [KNL]
@@ -5007,6 +5130,11 @@
 			Write-side holdoff between grace periods,
 			in microseconds.  The default of zero says
 			no holdoff.
+
+	rcuscale.writer_holdoff_jiffies= [KNL]
+			Additional write-side holdoff between grace
+			periods, but in jiffies.  The default of zero
+			says no holdoff.
 
 	rcutorture.fqs_duration= [KNL]
 			Set duration of force_quiescent_state bursts
@@ -5193,6 +5321,12 @@
 			Dump ftrace buffer after reporting RCU CPU
 			stall warning.
 
+	rcupdate.rcu_cpu_stall_notifiers= [KNL]
+			Provide RCU CPU stall notifiers, but see the
+			warnings in the RCU_CPU_STALL_NOTIFIER Kconfig
+			option's help text.  TL;DR:  You almost certainly
+			do not want rcupdate.rcu_cpu_stall_notifiers.
+
 	rcupdate.rcu_cpu_stall_suppress= [KNL]
 			Suppress RCU CPU stall warning messages.
 
@@ -5289,6 +5423,13 @@
 			number avoids disturbing real-time workloads,
 			but lengthens grace periods.
 
+	rcupdate.rcu_task_lazy_lim= [KNL]
+			Number of callbacks on a given CPU that will
+			cancel laziness on that CPU.  Use -1 to disable
+			cancellation of laziness, but be advised that
+			doing so increases the danger of OOM due to
+			callback flooding.
+
 	rcupdate.rcu_task_stall_info= [KNL]
 			Set initial timeout in jiffies for RCU task stall
 			informational messages, which give some indication
@@ -5317,6 +5458,29 @@
 			than or equal to zero.	Defaults to ten minutes.
 			A change in value does not take effect until
 			the beginning of the next grace period.
+
+	rcupdate.rcu_tasks_lazy_ms= [KNL]
+			Set timeout in milliseconds RCU Tasks asynchronous
+			callback batching for call_rcu_tasks().
+			A negative value will take the default.  A value
+			of zero will disable batching.	Batching is
+			always disabled for synchronize_rcu_tasks().
+
+	rcupdate.rcu_tasks_rude_lazy_ms= [KNL]
+			Set timeout in milliseconds RCU Tasks
+			Rude asynchronous callback batching for
+			call_rcu_tasks_rude().	A negative value
+			will take the default.	A value of zero will
+			disable batching.  Batching is always disabled
+			for synchronize_rcu_tasks_rude().
+
+	rcupdate.rcu_tasks_trace_lazy_ms= [KNL]
+			Set timeout in milliseconds RCU Tasks
+			Trace asynchronous callback batching for
+			call_rcu_tasks_trace().  A negative value
+			will take the default.	A value of zero will
+			disable batching.  Batching is always disabled
+			for synchronize_rcu_tasks_trace().
 
 	rcupdate.rcu_self_test= [KNL]
 			Run the RCU early boot self tests
@@ -5359,6 +5523,12 @@
 			this parameter is to delay the start of the
 			test until boot completes in order to avoid
 			interference.
+
+	refscale.lookup_instances= [KNL]
+			Number of data elements to use for the forms of
+			SLAB_TYPESAFE_BY_RCU testing.  A negative number
+			is negated and multiplied by nr_cpu_ids, while
+			zero specifies nr_cpu_ids.
 
 	refscale.loops= [KNL]
 			Set the number of loops over the synchronization
@@ -5493,6 +5663,13 @@
 			[KNL] Disable ring 3 MONITOR/MWAIT feature on supported
 			CPUs.
 
+	riscv_isa_fallback [RISCV]
+			When CONFIG_RISCV_ISA_FALLBACK is not enabled, permit
+			falling back to detecting extension support by parsing
+			"riscv,isa" property on devicetree systems when the
+			replacement properties are not found. See the Kconfig
+			entry for RISCV_ISA_FALLBACK.
+
 	ro		[KNL] Mount root device read-only on boot
 
 	rodata=		[KNL]
@@ -5526,6 +5703,10 @@
 			Useful for devices that are detected asynchronously
 			(e.g. USB and MMC devices).
 
+	rootwait=	[KNL] Maximum time (in seconds) to wait for root device
+			to show up before attempting to mount the root
+			filesystem.
+
 	rproc_mem=nn[KMG][@address]
 			[KNL,ARM,CMA] Remoteproc physical memory block.
 			Memory area to be used by remote processor image,
@@ -5538,9 +5719,10 @@
 	s390_iommu=	[HW,S390]
 			Set s390 IOTLB flushing mode
 		strict
-			With strict flushing every unmap operation will result in
-			an IOTLB flush. Default is lazy flushing before reuse,
-			which is faster.
+			With strict flushing every unmap operation will result
+			in an IOTLB flush. Default is lazy flushing before
+			reuse, which is faster. Deprecated, equivalent to
+			iommu.strict=1.
 
 	s390_iommu_aperture=	[KNL,S390]
 			Specifies the size of the per device DMA address space
@@ -6347,6 +6529,13 @@
 			This will guarantee that all the other pcrs
 			are saved.
 
+	tpm_tis.interrupts= [HW,TPM]
+			Enable interrupts for the MMIO based physical layer
+			for the FIFO interface. By default it is set to false
+			(0). For more information about TPM hardware interfaces
+			defined by Trusted Computing Group (TCG) see
+			https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/
+
 	tp_printk	[FTRACE]
 			Have the tracepoints sent to printk as well as the
 			tracing ring buffer. This is useful for early boot up
@@ -6646,7 +6835,7 @@
 
 	usbcore.authorized_default=
 			[USB] Default USB device authorization:
-			(default -1 = authorized except for wireless USB,
+			(default -1 = authorized (same as 1),
 			0 = not authorized, 1 = authorized, 2 = authorized
 			if device connected to internal port)
 
@@ -7003,6 +7192,13 @@
 			disables both lockup detectors. Default is 10
 			seconds.
 
+	workqueue.unbound_cpus=
+			[KNL,SMP] Specify to constrain one or some CPUs
+			to use in unbound workqueues.
+			Format: <cpu-list>
+			By default, all online CPUs are available for
+			unbound workqueues.
+
 	workqueue.watchdog_thresh=
 			If CONFIG_WQ_WATCHDOG is configured, workqueue can
 			warn stall conditions and dump internal state to
@@ -7024,15 +7220,6 @@
 			threshold repeatedly. They are likely good
 			candidates for using WQ_UNBOUND workqueues instead.
 
-	workqueue.disable_numa
-			By default, all work items queued to unbound
-			workqueues are affine to the NUMA nodes they're
-			issued on, which results in better behavior in
-			general.  If NUMA affinity needs to be disabled for
-			whatever reason, this option can be used.  Note
-			that this also can be controlled per-workqueue for
-			workqueues visible under /sys/bus/workqueue/.
-
 	workqueue.power_efficient
 			Per-cpu workqueues are generally preferred because
 			they show better performance thanks to cache
@@ -7047,6 +7234,18 @@
 
 			The default value of this parameter is determined by
 			the config option CONFIG_WQ_POWER_EFFICIENT_DEFAULT.
+
+        workqueue.default_affinity_scope=
+			Select the default affinity scope to use for unbound
+			workqueues. Can be one of "cpu", "smt", "cache",
+			"numa" and "system". Default is "cache". For more
+			information, see the Affinity Scopes section in
+			Documentation/core-api/workqueue.rst.
+
+			This can be changed after boot by writing to the
+			matching /sys/module/workqueue/parameters file. All
+			workqueues with the "default" affinity scope will be
+			updated accordignly.
 
 	workqueue.debug_force_rr_cpu
 			Workqueue used to implicitly guarantee that work

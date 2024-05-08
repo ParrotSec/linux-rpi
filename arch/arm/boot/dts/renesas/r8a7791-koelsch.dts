@@ -73,11 +73,6 @@
 		reg = <2 0x00000000 0 0x40000000>;
 	};
 
-	lbsc {
-		#address-cells = <1>;
-		#size-cells = <1>;
-	};
-
 	keyboard {
 		compatible = "gpio-keys";
 
@@ -800,6 +795,7 @@
 		interrupt-parent = <&irqc0>;
 		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-controller;
+		#interrupt-cells = <2>;
 
 		rtc {
 			compatible = "dlg,da9063-rtc";

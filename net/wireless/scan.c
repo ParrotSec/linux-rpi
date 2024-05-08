@@ -830,10 +830,47 @@ static int cfg80211_scan_6ghz(struct cfg80211_registered_device *rdev)
 		list_for_each_entry(intbss, &rdev->bss_list, list) {
 			struct cfg80211_bss *res = &intbss->pub;
 			const struct cfg80211_bss_ies *ies;
+			const struct element *ssid_elem;
+			struct cfg80211_colocated_ap *entry;
+			u32 s_ssid_tmp;
+			int ret;
 
 			ies = rcu_access_pointer(res->ies);
 			count += cfg80211_parse_colocated_ap(ies,
 							     &coloc_ap_list);
+
+			/* In case the scan request specified a specific BSSID
+			 * and the BSS is found and operating on 6GHz band then
+			 * add this AP to the collocated APs list.
+			 * This is relevant for ML probe requests when the lower
+			 * band APs have not been discovered.
+			 */
+			if (is_broadcast_ether_addr(rdev_req->bssid) ||
+			    !ether_addr_equal(rdev_req->bssid, res->bssid) ||
+			    res->channel->band != NL80211_BAND_6GHZ)
+				continue;
+
+			ret = cfg80211_calc_short_ssid(ies, &ssid_elem,
+						       &s_ssid_tmp);
+			if (ret)
+				continue;
+
+			entry = kzalloc(sizeof(*entry) + IEEE80211_MAX_SSID_LEN,
+					GFP_ATOMIC);
+
+			if (!entry)
+				continue;
+
+			memcpy(entry->bssid, res->bssid, ETH_ALEN);
+			entry->short_ssid = s_ssid_tmp;
+			memcpy(entry->ssid, ssid_elem->data,
+			       ssid_elem->datalen);
+			entry->ssid_len = ssid_elem->datalen;
+			entry->short_ssid_valid = true;
+			entry->center_freq = res->channel->center_freq;
+
+			list_add_tail(&entry->list, &coloc_ap_list);
+			count++;
 		}
 		spin_unlock_bh(&rdev->bss_lock);
 	}
@@ -1642,8 +1679,6 @@ static bool cfg80211_combine_bsses(struct cfg80211_registered_device *rdev,
 			continue;
 		if (bss->pub.channel != new->pub.channel)
 			continue;
-		if (bss->pub.scan_width != new->pub.scan_width)
-			continue;
 		if (rcu_access_pointer(bss->pub.beacon_ies))
 			continue;
 		ies = rcu_access_pointer(bss->pub.ies);
@@ -1690,6 +1725,61 @@ static void cfg80211_update_hidden_bsses(struct cfg80211_internal_bss *known,
 	}
 }
 
+static void cfg80211_check_stuck_ecsa(struct cfg80211_registered_device *rdev,
+				      struct cfg80211_internal_bss *known,
+				      const struct cfg80211_bss_ies *old)
+{
+	const struct ieee80211_ext_chansw_ie *ecsa;
+	const struct element *elem_new, *elem_old;
+	const struct cfg80211_bss_ies *new, *bcn;
+
+	if (known->pub.proberesp_ecsa_stuck)
+		return;
+
+	new = rcu_dereference_protected(known->pub.proberesp_ies,
+					lockdep_is_held(&rdev->bss_lock));
+	if (WARN_ON(!new))
+		return;
+
+	if (new->tsf - old->tsf < USEC_PER_SEC)
+		return;
+
+	elem_old = cfg80211_find_elem(WLAN_EID_EXT_CHANSWITCH_ANN,
+				      old->data, old->len);
+	if (!elem_old)
+		return;
+
+	elem_new = cfg80211_find_elem(WLAN_EID_EXT_CHANSWITCH_ANN,
+				      new->data, new->len);
+	if (!elem_new)
+		return;
+
+	bcn = rcu_dereference_protected(known->pub.beacon_ies,
+					lockdep_is_held(&rdev->bss_lock));
+	if (bcn &&
+	    cfg80211_find_elem(WLAN_EID_EXT_CHANSWITCH_ANN,
+			       bcn->data, bcn->len))
+		return;
+
+	if (elem_new->datalen != elem_old->datalen)
+		return;
+	if (elem_new->datalen < sizeof(struct ieee80211_ext_chansw_ie))
+		return;
+	if (memcmp(elem_new->data, elem_old->data, elem_new->datalen))
+		return;
+
+	ecsa = (void *)elem_new->data;
+
+	if (!ecsa->mode)
+		return;
+
+	if (ecsa->new_ch_num !=
+	    ieee80211_frequency_to_channel(known->pub.channel->center_freq))
+		return;
+
+	known->pub.proberesp_ecsa_stuck = 1;
+}
+
 static bool
 cfg80211_update_known_bss(struct cfg80211_registered_device *rdev,
 			  struct cfg80211_internal_bss *known,
@@ -1709,9 +1799,13 @@ cfg80211_update_known_bss(struct cfg80211_registered_device *rdev,
 		/* Override possible earlier Beacon frame IEs */
 		rcu_assign_pointer(known->pub.ies,
 				   new->pub.proberesp_ies);
-		if (old)
+		if (old) {
+			cfg80211_check_stuck_ecsa(rdev, known, old);
 			kfree_rcu((struct cfg80211_bss_ies *)old, rcu_head);
-	} else if (rcu_access_pointer(new->pub.beacon_ies)) {
+		}
+	}
+
+	if (rcu_access_pointer(new->pub.beacon_ies)) {
 		const struct cfg80211_bss_ies *old;
 
 		if (known->pub.hidden_beacon_bss &&
@@ -1829,8 +1923,12 @@ __cfg80211_bss_update(struct cfg80211_registered_device *rdev,
 				list_add(&new->hidden_list,
 					 &hidden->hidden_list);
 				hidden->refcount++;
+
+				ies = (void *)rcu_access_pointer(new->pub.beacon_ies);
 				rcu_assign_pointer(new->pub.beacon_ies,
 						   hidden->pub.beacon_ies);
+				if (ies)
+					kfree_rcu(ies, rcu_head);
 			}
 		} else {
 			/*
@@ -1940,8 +2038,7 @@ EXPORT_SYMBOL(cfg80211_get_ies_channel_number);
  */
 static struct ieee80211_channel *
 cfg80211_get_bss_channel(struct wiphy *wiphy, const u8 *ie, size_t ielen,
-			 struct ieee80211_channel *channel,
-			 enum nl80211_bss_scan_width scan_width)
+			 struct ieee80211_channel *channel)
 {
 	u32 freq;
 	int channel_number;
@@ -1978,16 +2075,6 @@ cfg80211_get_bss_channel(struct wiphy *wiphy, const u8 *ie, size_t ielen,
 		}
 
 		/* No match for the payload channel number - ignore it */
-		return channel;
-	}
-
-	if (scan_width == NL80211_BSS_CHAN_WIDTH_10 ||
-	    scan_width == NL80211_BSS_CHAN_WIDTH_5) {
-		/*
-		 * Ignore channel number in 5 and 10 MHz channels where there
-		 * may not be an n:1 or 1:n mapping between frequencies and
-		 * channel numbers.
-		 */
 		return channel;
 	}
 
@@ -2050,14 +2137,12 @@ cfg80211_inform_single_bss_data(struct wiphy *wiphy,
 	channel = data->channel;
 	if (!channel)
 		channel = cfg80211_get_bss_channel(wiphy, data->ie, data->ielen,
-						   drv_data->chan,
-						   drv_data->scan_width);
+						   drv_data->chan);
 	if (!channel)
 		return NULL;
 
 	memcpy(tmp.pub.bssid, data->bssid, ETH_ALEN);
 	tmp.pub.channel = channel;
-	tmp.pub.scan_width = drv_data->scan_width;
 	if (data->bss_source != BSS_SOURCE_STA_PROFILE)
 		tmp.pub.signal = drv_data->signal;
 	else
@@ -2569,10 +2654,12 @@ cfg80211_tbtt_info_for_mld_ap(const u8 *ie, size_t ielen, u8 mld_id, u8 link_id,
 	return false;
 }
 
-static void cfg80211_parse_ml_sta_data(struct wiphy *wiphy,
-				       struct cfg80211_inform_single_bss_data *tx_data,
-				       struct cfg80211_bss *source_bss,
-				       gfp_t gfp)
+static void
+cfg80211_parse_ml_elem_sta_data(struct wiphy *wiphy,
+				struct cfg80211_inform_single_bss_data *tx_data,
+				struct cfg80211_bss *source_bss,
+				const struct element *elem,
+				gfp_t gfp)
 {
 	struct cfg80211_inform_single_bss_data data = {
 		.drv_data = tx_data->drv_data,
@@ -2581,7 +2668,6 @@ static void cfg80211_parse_ml_sta_data(struct wiphy *wiphy,
 		.bss_source = BSS_SOURCE_STA_PROFILE,
 	};
 	struct ieee80211_multi_link_elem *ml_elem;
-	const struct element *elem;
 	struct cfg80211_mle *mle;
 	u16 control;
 	u8 *new_ie;
@@ -2591,15 +2677,7 @@ static void cfg80211_parse_ml_sta_data(struct wiphy *wiphy,
 	const u8 *pos;
 	u8 i;
 
-	if (!source_bss)
-		return;
-
-	if (tx_data->ftype != CFG80211_BSS_FTYPE_PRESP)
-		return;
-
-	elem = cfg80211_find_ext_elem(WLAN_EID_EXT_EHT_MULTI_LINK,
-				      tx_data->ie, tx_data->ielen);
-	if (!elem || !ieee80211_mle_size_ok(elem->data + 1, elem->datalen - 1))
+	if (!ieee80211_mle_size_ok(elem->data + 1, elem->datalen - 1))
 		return;
 
 	ml_elem = (void *)elem->data + 1;
@@ -2625,8 +2703,11 @@ static void cfg80211_parse_ml_sta_data(struct wiphy *wiphy,
 	/* MLD capabilities and operations */
 	pos += 2;
 
-	/* Not included when the (nontransmitted) AP is responding itself,
-	 * but defined to zero then (Draft P802.11be_D3.0, 9.4.2.170.2)
+	/*
+	 * The MLD ID of the reporting AP is always zero. It is set if the AP
+	 * is part of an MBSSID set and will be non-zero for ML Elements
+	 * relating to a nontransmitted BSS (matching the Multi-BSSID Index,
+	 * Draft P802.11be_D3.2, 35.3.4.2)
 	 */
 	if (u16_get_bits(control, IEEE80211_MLC_BASIC_PRES_MLD_ID)) {
 		mld_id = *pos;
@@ -2731,6 +2812,25 @@ out:
 	kfree(mle);
 }
 
+static void cfg80211_parse_ml_sta_data(struct wiphy *wiphy,
+				       struct cfg80211_inform_single_bss_data *tx_data,
+				       struct cfg80211_bss *source_bss,
+				       gfp_t gfp)
+{
+	const struct element *elem;
+
+	if (!source_bss)
+		return;
+
+	if (tx_data->ftype != CFG80211_BSS_FTYPE_PRESP)
+		return;
+
+	for_each_element_extid(elem, WLAN_EID_EXT_EHT_MULTI_LINK,
+			       tx_data->ie, tx_data->ielen)
+		cfg80211_parse_ml_elem_sta_data(wiphy, tx_data, source_bss,
+						elem, gfp);
+}
+
 struct cfg80211_bss *
 cfg80211_inform_bss_data(struct wiphy *wiphy,
 			 struct cfg80211_inform_bss *data,
@@ -2818,8 +2918,7 @@ cfg80211_inform_single_bss_frame_data(struct wiphy *wiphy,
 			variable = ext->u.s1g_beacon.variable;
 	}
 
-	channel = cfg80211_get_bss_channel(wiphy, variable,
-					   ielen, data->chan, data->scan_width);
+	channel = cfg80211_get_bss_channel(wiphy, variable, ielen, data->chan);
 	if (!channel)
 		return NULL;
 
@@ -2872,7 +2971,6 @@ cfg80211_inform_single_bss_frame_data(struct wiphy *wiphy,
 	tmp.pub.beacon_interval = beacon_int;
 	tmp.pub.capability = capability;
 	tmp.pub.channel = channel;
-	tmp.pub.scan_width = data->scan_width;
 	tmp.pub.signal = data->signal;
 	tmp.ts_boottime = data->boottime_ns;
 	tmp.parent_tsf = data->parent_tsf;
@@ -3426,59 +3524,63 @@ ieee80211_bss(struct wiphy *wiphy, struct iw_request_info *info,
 			cfg = (u8 *)ie + 2;
 			memset(&iwe, 0, sizeof(iwe));
 			iwe.cmd = IWEVCUSTOM;
-			sprintf(buf, "Mesh Network Path Selection Protocol ID: "
-				"0x%02X", cfg[0]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Mesh Network Path Selection Protocol ID: 0x%02X",
+						    cfg[0]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Path Selection Metric ID: 0x%02X",
-				cfg[1]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Path Selection Metric ID: 0x%02X",
+						    cfg[1]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Congestion Control Mode ID: 0x%02X",
-				cfg[2]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Congestion Control Mode ID: 0x%02X",
+						    cfg[2]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Synchronization ID: 0x%02X", cfg[3]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Synchronization ID: 0x%02X",
+						    cfg[3]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Authentication ID: 0x%02X", cfg[4]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Authentication ID: 0x%02X",
+						    cfg[4]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Formation Info: 0x%02X", cfg[5]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Formation Info: 0x%02X",
+						    cfg[5]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
 								&iwe, buf);
 			if (IS_ERR(current_ev))
 				goto unlock;
-			sprintf(buf, "Capabilities: 0x%02X", cfg[6]);
-			iwe.u.data.length = strlen(buf);
+			iwe.u.data.length = sprintf(buf,
+						    "Capabilities: 0x%02X",
+						    cfg[6]);
 			current_ev = iwe_stream_add_point_check(info,
 								current_ev,
 								end_buf,
@@ -3534,17 +3636,16 @@ ieee80211_bss(struct wiphy *wiphy, struct iw_request_info *info,
 
 	memset(&iwe, 0, sizeof(iwe));
 	iwe.cmd = IWEVCUSTOM;
-	sprintf(buf, "tsf=%016llx", (unsigned long long)(ies->tsf));
-	iwe.u.data.length = strlen(buf);
+	iwe.u.data.length = sprintf(buf, "tsf=%016llx",
+				    (unsigned long long)(ies->tsf));
 	current_ev = iwe_stream_add_point_check(info, current_ev, end_buf,
 						&iwe, buf);
 	if (IS_ERR(current_ev))
 		goto unlock;
 	memset(&iwe, 0, sizeof(iwe));
 	iwe.cmd = IWEVCUSTOM;
-	sprintf(buf, " Last beacon: %ums ago",
-		elapsed_jiffies_msecs(bss->ts));
-	iwe.u.data.length = strlen(buf);
+	iwe.u.data.length = sprintf(buf, " Last beacon: %ums ago",
+				    elapsed_jiffies_msecs(bss->ts));
 	current_ev = iwe_stream_add_point_check(info, current_ev,
 						end_buf, &iwe, buf);
 	if (IS_ERR(current_ev))

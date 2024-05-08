@@ -31,7 +31,7 @@
 #include <linux/if_vlan.h>
 #include <linux/kmemleak.h>
 #include <linux/sys_soc.h>
-#include <net/page_pool.h>
+#include <net/page_pool/helpers.h>
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 
@@ -630,6 +630,8 @@ static void cpsw_slave_open(struct cpsw_slave *slave, struct cpsw_priv *priv)
 			return;
 		}
 	}
+
+	phy->mac_managed_pm = true;
 
 	slave->phy = phy;
 

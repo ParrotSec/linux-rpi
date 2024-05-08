@@ -20,7 +20,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/swap.h>
 #include <linux/slab.h>
-#include <linux/hugetlb.h>
 
 static struct bus_type node_subsys = {
 	.name = "node",
@@ -446,8 +445,8 @@ static ssize_t node_read_meminfo(struct device *dev,
 			     "Node %d AnonHugePages:  %8lu kB\n"
 			     "Node %d ShmemHugePages: %8lu kB\n"
 			     "Node %d ShmemPmdMapped: %8lu kB\n"
-			     "Node %d FileHugePages: %8lu kB\n"
-			     "Node %d FilePmdMapped: %8lu kB\n"
+			     "Node %d FileHugePages:  %8lu kB\n"
+			     "Node %d FilePmdMapped:  %8lu kB\n"
 #endif
 #ifdef CONFIG_UNACCEPTED_MEMORY
 			     "Node %d Unaccepted:     %8lu kB\n"
@@ -869,10 +868,14 @@ int __register_one_node(int nid)
 {
 	int error;
 	int cpu;
+	struct node *node;
 
-	node_devices[nid] = kzalloc(sizeof(struct node), GFP_KERNEL);
-	if (!node_devices[nid])
+	node = kzalloc(sizeof(struct node), GFP_KERNEL);
+	if (!node)
 		return -ENOMEM;
+
+	INIT_LIST_HEAD(&node->access_list);
+	node_devices[nid] = node;
 
 	error = register_node(node_devices[nid], nid);
 
@@ -882,7 +885,6 @@ int __register_one_node(int nid)
 			register_cpu_under_node(cpu, nid);
 	}
 
-	INIT_LIST_HEAD(&node_devices[nid]->access_list);
 	node_init_caches(nid);
 
 	return error;

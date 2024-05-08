@@ -5,8 +5,6 @@
 #ifndef _ASM_IO_H
 #define _ASM_IO_H
 
-#define ARCH_HAS_IOREMAP_WC
-
 #include <linux/kernel.h>
 #include <linux/types.h>
 
@@ -72,6 +70,8 @@ extern void __memcpy_fromio(void *to, const volatile void __iomem *from, size_t 
 #define memset_io(c, v, l)     __memset_io((c), (v), (l))
 #define memcpy_fromio(a, c, l) __memcpy_fromio((a), (c), (l))
 #define memcpy_toio(c, a, l)   __memcpy_toio((c), (a), (l))
+
+#define __io_aw() mmiowb()
 
 #include <asm-generic/io.h>
 

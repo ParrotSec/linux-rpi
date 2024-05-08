@@ -15,6 +15,7 @@
 
 struct ucsi;
 struct ucsi_altmode;
+struct dentry;
 
 /* UCSI offsets (Bytes) */
 #define UCSI_VERSION			0
@@ -220,12 +221,12 @@ struct ucsi_cable_property {
 #define UCSI_CABLE_PROP_FLAG_VBUS_IN_CABLE	BIT(0)
 #define UCSI_CABLE_PROP_FLAG_ACTIVE_CABLE	BIT(1)
 #define UCSI_CABLE_PROP_FLAG_DIRECTIONALITY	BIT(2)
-#define UCSI_CABLE_PROP_FLAG_PLUG_TYPE(_f_)	((_f_) & GENMASK(3, 0))
+#define UCSI_CABLE_PROP_FLAG_PLUG_TYPE(_f_)	(((_f_) & GENMASK(4, 3)) >> 3)
 #define   UCSI_CABLE_PROPERTY_PLUG_TYPE_A	0
 #define   UCSI_CABLE_PROPERTY_PLUG_TYPE_B	1
 #define   UCSI_CABLE_PROPERTY_PLUG_TYPE_C	2
 #define   UCSI_CABLE_PROPERTY_PLUG_OTHER	3
-#define UCSI_CABLE_PROP_MODE_SUPPORT		BIT(5)
+#define UCSI_CABLE_PROP_FLAG_MODE_SUPPORT	BIT(5)
 	u8 latency;
 } __packed;
 
@@ -277,6 +278,16 @@ struct ucsi_connector_status {
 
 /* -------------------------------------------------------------------------- */
 
+struct ucsi_debugfs_entry {
+	u64 command;
+	struct ucsi_data {
+		u64 low;
+		u64 high;
+	} response;
+	u32 status;
+	struct dentry *dentry;
+};
+
 struct ucsi {
 	u16 version;
 	struct device *dev;
@@ -286,6 +297,7 @@ struct ucsi {
 
 	struct ucsi_capability cap;
 	struct ucsi_connector *connector;
+	struct ucsi_debugfs_entry *debugfs;
 
 	struct work_struct resume_work;
 	struct delayed_work work;
@@ -387,6 +399,18 @@ ucsi_register_displayport(struct ucsi_connector *con,
 static inline void
 ucsi_displayport_remove_partner(struct typec_altmode *adev) { }
 #endif /* CONFIG_TYPEC_DP_ALTMODE */
+
+#ifdef CONFIG_DEBUG_FS
+void ucsi_debugfs_init(void);
+void ucsi_debugfs_exit(void);
+void ucsi_debugfs_register(struct ucsi *ucsi);
+void ucsi_debugfs_unregister(struct ucsi *ucsi);
+#else
+static inline void ucsi_debugfs_init(void) { }
+static inline void ucsi_debugfs_exit(void) { }
+static inline void ucsi_debugfs_register(struct ucsi *ucsi) { }
+static inline void ucsi_debugfs_unregister(struct ucsi *ucsi) { }
+#endif /* CONFIG_DEBUG_FS */
 
 /*
  * NVIDIA VirtualLink (svid 0x955) has two altmode. VirtualLink

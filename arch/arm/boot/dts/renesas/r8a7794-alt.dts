@@ -90,11 +90,6 @@
 		states = <3300000 1>, <1800000 0>;
 	};
 
-	lbsc {
-		#address-cells = <1>;
-		#size-cells = <1>;
-	};
-
 	keyboard {
 		compatible = "gpio-keys";
 
@@ -458,6 +453,7 @@
 		interrupt-parent = <&gpio3>;
 		interrupts = <31 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-controller;
+		#interrupt-cells = <2>;
 
 		rtc {
 			compatible = "dlg,da9063-rtc";

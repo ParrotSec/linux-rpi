@@ -173,8 +173,9 @@ amdgpu_dm_mst_connector_early_unregister(struct drm_connector *connector)
 		if (dc_link->sink_count)
 			dc_link_remove_remote_sink(dc_link, dc_sink);
 
-		DC_LOG_MST("DM_MST: remove remote sink 0x%p, %d remaining\n",
-			dc_sink, dc_link->sink_count);
+		drm_dbg_dp(connector->dev,
+			   "DM_MST: remove remote sink 0x%p, %d remaining\n",
+			   dc_sink, dc_link->sink_count);
 
 		dc_sink_release(dc_sink);
 		aconnector->dc_sink = NULL;
@@ -296,6 +297,7 @@ static int dm_dp_mst_get_modes(struct drm_connector *connector)
 
 	if (!aconnector->edid) {
 		struct edid *edid;
+
 		edid = drm_dp_mst_get_edid(connector, &aconnector->mst_root->mst_mgr, aconnector->mst_output_port);
 
 		if (!edid) {
@@ -324,8 +326,10 @@ static int dm_dp_mst_get_modes(struct drm_connector *connector)
 					return 0;
 				}
 
-				DC_LOG_MST("DM_MST: add remote sink 0x%p, %d remaining\n",
-					dc_sink, aconnector->dc_link->sink_count);
+				drm_dbg_dp(connector->dev,
+					   "DM_MST: add remote sink 0x%p, %d remaining\n",
+					   dc_sink,
+					   aconnector->dc_link->sink_count);
 
 				dc_sink->priv = aconnector;
 				aconnector->dc_sink = dc_sink;
@@ -360,8 +364,9 @@ static int dm_dp_mst_get_modes(struct drm_connector *connector)
 			return 0;
 		}
 
-		DC_LOG_MST("DM_MST: add remote sink 0x%p, %d remaining\n",
-			dc_sink, aconnector->dc_link->sink_count);
+		drm_dbg_dp(connector->dev,
+			   "DM_MST: add remote sink 0x%p, %d remaining\n",
+			   dc_sink, aconnector->dc_link->sink_count);
 
 		dc_sink->priv = aconnector;
 		/* dc_link_add_remote_sink returns a new reference */
@@ -480,8 +485,10 @@ dm_dp_mst_detect(struct drm_connector *connector,
 		if (aconnector->dc_link->sink_count)
 			dc_link_remove_remote_sink(aconnector->dc_link, aconnector->dc_sink);
 
-		DC_LOG_MST("DM_MST: remove remote sink 0x%p, %d remaining\n",
-			aconnector->dc_link, aconnector->dc_link->sink_count);
+		drm_dbg_dp(connector->dev,
+			   "DM_MST: remove remote sink 0x%p, %d remaining\n",
+			   aconnector->dc_link,
+			   aconnector->dc_link->sink_count);
 
 		dc_sink_release(aconnector->dc_sink);
 		aconnector->dc_sink = NULL;
@@ -827,6 +834,7 @@ static void set_dsc_configs_from_fairness_vars(struct dsc_mst_fairness_params *p
 					&dsc_options,
 					0,
 					params[i].timing,
+					dc_link_get_highest_encoding_format(params[i].aconnector->dc_link),
 					&params[i].timing->dsc_cfg)) {
 			params[i].timing->flags.DSC = 1;
 
@@ -877,7 +885,9 @@ static int bpp_x16_from_pbn(struct dsc_mst_fairness_params param, int pbn)
 			param.sink->ctx->dc->res_pool->dscs[0],
 			&param.sink->dsc_caps.dsc_dec_caps,
 			&dsc_options,
-			(int) kbps, param.timing, &dsc_config);
+			(int) kbps, param.timing,
+			dc_link_get_highest_encoding_format(param.aconnector->dc_link),
+			&dsc_config);
 
 	return dsc_config.bits_per_pixel;
 }
@@ -1115,8 +1125,11 @@ static int compute_mst_dsc_configs_for_link(struct drm_atomic_state *state,
 				dsc_policy.min_target_bpp * 16,
 				dsc_policy.max_target_bpp * 16,
 				&stream->sink->dsc_caps.dsc_dec_caps,
-				&stream->timing, &params[count].bw_range))
-			params[count].bw_range.stream_kbps = dc_bandwidth_in_kbps_from_timing(&stream->timing);
+				&stream->timing,
+				dc_link_get_highest_encoding_format(dc_link),
+				&params[count].bw_range))
+			params[count].bw_range.stream_kbps = dc_bandwidth_in_kbps_from_timing(&stream->timing,
+					dc_link_get_highest_encoding_format(dc_link));
 
 		count++;
 	}
@@ -1487,14 +1500,16 @@ int pre_validate_dsc(struct drm_atomic_state *state,
 		int ind = find_crtc_index_in_state_by_stream(state, stream);
 
 		if (ind >= 0) {
+			struct drm_connector *connector;
 			struct amdgpu_dm_connector *aconnector;
 			struct drm_connector_state *drm_new_conn_state;
 			struct dm_connector_state *dm_new_conn_state;
 			struct dm_crtc_state *dm_old_crtc_state;
 
-			aconnector =
+			connector =
 				amdgpu_dm_find_first_crtc_matching_connector(state,
 									     state->crtcs[ind].ptr);
+			aconnector = to_amdgpu_dm_connector(connector);
 			drm_new_conn_state =
 				drm_atomic_get_new_connector_state(state,
 								   &aconnector->base);
@@ -1576,7 +1591,7 @@ static bool is_dsc_common_config_possible(struct dc_stream_state *stream,
 				       dsc_policy.min_target_bpp * 16,
 				       dsc_policy.max_target_bpp * 16,
 				       &stream->sink->dsc_caps.dsc_dec_caps,
-				       &stream->timing, bw_range);
+				       &stream->timing, dc_link_get_highest_encoding_format(stream->link), bw_range);
 
 	return bw_range->max_target_bpp_x16 && bw_range->min_target_bpp_x16;
 }
@@ -1629,7 +1644,7 @@ enum dc_status dm_dp_mst_is_port_support_mode(
 	} else {
 		/* check if mode could be supported within full_pbn */
 		bpp = convert_dc_color_depth_into_bpc(stream->timing.display_color_depth) * 3;
-		pbn = drm_dp_calc_pbn_mode(stream->timing.pix_clk_100hz / 10, bpp, false);
+		pbn = drm_dp_calc_pbn_mode(stream->timing.pix_clk_100hz / 10, bpp << 4);
 		if (pbn > full_pbn)
 			return DC_FAIL_BANDWIDTH_VALIDATE;
 	}

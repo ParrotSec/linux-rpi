@@ -12,7 +12,7 @@
 #include <linux/clk.h>
 #include <linux/pm_runtime.h>
 #include <linux/pwm.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 
 /* ECAP registers and bits definitions */
 #define CAP1			0x08
@@ -205,7 +205,6 @@ static int ecap_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 
 static const struct pwm_ops ecap_pwm_ops = {
 	.apply = ecap_pwm_apply,
-	.owner = THIS_MODULE,
 };
 
 static const struct of_device_id ecap_of_match[] = {

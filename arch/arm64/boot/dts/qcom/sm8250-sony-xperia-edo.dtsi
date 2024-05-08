@@ -18,7 +18,12 @@
 	qcom,msm-id = <356 0x20001>; /* SM8250 v2.1 */
 	qcom,board-id = <0x10008 0>;
 
+	aliases {
+		serial0 = &uart12;
+	};
+
 	chosen {
+		stdout-path = "serial0:115200n8";
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -498,13 +503,6 @@
 		cirrus,gpio2-output-enable;
 		#sound-dai-cells = <1>;
 	};
-};
-
-&i2c5 {
-	status = "okay";
-	clock-frequency = <400000>;
-
-	/* Dialog SLG51000 CMIC @ 75 */
 };
 
 &i2c9 {

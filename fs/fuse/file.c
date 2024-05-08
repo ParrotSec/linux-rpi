@@ -1428,7 +1428,8 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	int write = flags & FUSE_DIO_WRITE;
 	int cuse = flags & FUSE_DIO_CUSE;
 	struct file *file = io->iocb->ki_filp;
-	struct inode *inode = file->f_mapping->host;
+	struct address_space *mapping = file->f_mapping;
+	struct inode *inode = mapping->host;
 	struct fuse_file *ff = file->private_data;
 	struct fuse_conn *fc = ff->fm->fc;
 	size_t nmax = write ? fc->max_write : fc->max_read;
@@ -1440,18 +1441,34 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 	int err = 0;
 	struct fuse_io_args *ia;
 	unsigned int max_pages;
+	bool fopen_direct_io = ff->open_flags & FOPEN_DIRECT_IO;
 
 	max_pages = iov_iter_npages(iter, fc->max_pages);
 	ia = fuse_io_alloc(io, max_pages);
 	if (!ia)
 		return -ENOMEM;
 
+	if (fopen_direct_io && fc->direct_io_allow_mmap) {
+		res = filemap_write_and_wait_range(mapping, pos, pos + count - 1);
+		if (res) {
+			fuse_io_free(ia);
+			return res;
+		}
+	}
 	if (!cuse && fuse_range_is_writeback(inode, idx_from, idx_to)) {
 		if (!write)
 			inode_lock(inode);
 		fuse_sync_writes(inode);
 		if (!write)
 			inode_unlock(inode);
+	}
+
+	if (fopen_direct_io && write) {
+		res = invalidate_inode_pages2_range(mapping, idx_from, idx_to);
+		if (res) {
+			fuse_io_free(ia);
+			return res;
+		}
 	}
 
 	io->should_dirty = !write && user_backed_iter(iter);
@@ -1557,6 +1574,7 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ssize_t res;
 	bool exclusive_lock =
 		!(ff->open_flags & FOPEN_PARALLEL_DIRECT_WRITES) ||
+		get_fuse_conn(inode)->direct_io_allow_mmap ||
 		iocb->ki_flags & IOCB_APPEND ||
 		fuse_direct_write_extending_i_size(iocb, from);
 
@@ -1564,6 +1582,7 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * Take exclusive lock if
 	 * - Parallel direct writes are disabled - a user space decision
 	 * - Parallel direct writes are enabled and i_size is being extended.
+	 * - Shared mmap on direct_io file is supported (FUSE_DIRECT_IO_ALLOW_MMAP).
 	 *   This might not be needed at all, but needs further investigation.
 	 */
 	if (exclusive_lock)
@@ -2441,19 +2460,26 @@ static const struct vm_operations_struct fuse_file_vm_ops = {
 static int fuse_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct fuse_file *ff = file->private_data;
+	struct fuse_conn *fc = ff->fm->fc;
 
 	/* DAX mmap is superior to direct_io mmap */
 	if (FUSE_IS_DAX(file_inode(file)))
 		return fuse_dax_mmap(file, vma);
 
 	if (ff->open_flags & FOPEN_DIRECT_IO) {
-		/* Can't provide the coherency needed for MAP_SHARED */
-		if (vma->vm_flags & VM_MAYSHARE)
+		/*
+		 * Can't provide the coherency needed for MAP_SHARED
+		 * if FUSE_DIRECT_IO_ALLOW_MMAP isn't set.
+		 */
+		if ((vma->vm_flags & VM_MAYSHARE) && !fc->direct_io_allow_mmap)
 			return -ENODEV;
 
 		invalidate_inode_pages2(file->f_mapping);
 
-		return generic_file_mmap(file, vma);
+		if (!(vma->vm_flags & VM_MAYSHARE)) {
+			/* MAP_PRIVATE */
+			return generic_file_mmap(file, vma);
+		}
 	}
 
 	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))

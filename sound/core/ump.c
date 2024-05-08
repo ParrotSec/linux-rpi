@@ -13,10 +13,10 @@
 #include <sound/ump.h>
 #include <sound/ump_convert.h>
 
-#define ump_err(ump, fmt, args...)	dev_err(&(ump)->core.dev, fmt, ##args)
-#define ump_warn(ump, fmt, args...)	dev_warn(&(ump)->core.dev, fmt, ##args)
-#define ump_info(ump, fmt, args...)	dev_info(&(ump)->core.dev, fmt, ##args)
-#define ump_dbg(ump, fmt, args...)	dev_dbg(&(ump)->core.dev, fmt, ##args)
+#define ump_err(ump, fmt, args...)	dev_err((ump)->core.dev, fmt, ##args)
+#define ump_warn(ump, fmt, args...)	dev_warn((ump)->core.dev, fmt, ##args)
+#define ump_info(ump, fmt, args...)	dev_info((ump)->core.dev, fmt, ##args)
+#define ump_dbg(ump, fmt, args...)	dev_dbg((ump)->core.dev, fmt, ##args)
 
 static int snd_ump_dev_register(struct snd_rawmidi *rmidi);
 static int snd_ump_dev_unregister(struct snd_rawmidi *rmidi);
@@ -985,7 +985,7 @@ static int snd_ump_legacy_open(struct snd_rawmidi_substream *substream)
 	struct snd_ump_endpoint *ump = substream->rmidi->private_data;
 	int dir = substream->stream;
 	int group = ump->legacy_mapping[substream->number];
-	int err;
+	int err = 0;
 
 	mutex_lock(&ump->open_mutex);
 	if (ump->legacy_substreams[dir][group]) {
@@ -1009,7 +1009,7 @@ static int snd_ump_legacy_open(struct snd_rawmidi_substream *substream)
 	spin_unlock_irq(&ump->legacy_locks[dir]);
  unlock:
 	mutex_unlock(&ump->open_mutex);
-	return 0;
+	return err;
 }
 
 static int snd_ump_legacy_close(struct snd_rawmidi_substream *substream)

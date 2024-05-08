@@ -496,7 +496,6 @@ static ssize_t ntfs3_label_write(struct file *file, const char __user *buffer,
 {
 	int err;
 	struct super_block *sb = pde_data(file_inode(file));
-	struct ntfs_sb_info *sbi = sb->s_fs_info;
 	ssize_t ret = count;
 	u8 *label;
 
@@ -515,7 +514,7 @@ static ssize_t ntfs3_label_write(struct file *file, const char __user *buffer,
 	while (ret > 0 && label[ret - 1] == '\n')
 		ret -= 1;
 
-	err = ntfs_set_label(sbi, label, ret);
+	err = ntfs_set_label(sb->s_fs_info, label, ret);
 
 	if (err < 0) {
 		ntfs_err(sb, "failed (%d) to write label", err);
@@ -582,31 +581,37 @@ static void init_once(void *foo)
 }
 
 /*
- * put_ntfs - Noinline to reduce binary size.
+ * Noinline to reduce binary size.
  */
-static noinline void put_ntfs(struct ntfs_sb_info *sbi)
+static noinline void ntfs3_put_sbi(struct ntfs_sb_info *sbi)
 {
-	kfree(sbi->new_rec);
-	kvfree(ntfs_put_shared(sbi->upcase));
-	kfree(sbi->def_table);
-
 	wnd_close(&sbi->mft.bitmap);
 	wnd_close(&sbi->used.bitmap);
 
-	if (sbi->mft.ni)
+	if (sbi->mft.ni) {
 		iput(&sbi->mft.ni->vfs_inode);
+		sbi->mft.ni = NULL;
+	}
 
-	if (sbi->security.ni)
+	if (sbi->security.ni) {
 		iput(&sbi->security.ni->vfs_inode);
+		sbi->security.ni = NULL;
+	}
 
-	if (sbi->reparse.ni)
+	if (sbi->reparse.ni) {
 		iput(&sbi->reparse.ni->vfs_inode);
+		sbi->reparse.ni = NULL;
+	}
 
-	if (sbi->objid.ni)
+	if (sbi->objid.ni) {
 		iput(&sbi->objid.ni->vfs_inode);
+		sbi->objid.ni = NULL;
+	}
 
-	if (sbi->volume.ni)
+	if (sbi->volume.ni) {
 		iput(&sbi->volume.ni->vfs_inode);
+		sbi->volume.ni = NULL;
+	}
 
 	ntfs_update_mftmirr(sbi, 0);
 
@@ -614,6 +619,13 @@ static noinline void put_ntfs(struct ntfs_sb_info *sbi)
 	indx_clear(&sbi->security.index_sdh);
 	indx_clear(&sbi->reparse.index_r);
 	indx_clear(&sbi->objid.index_o);
+}
+
+static void ntfs3_free_sbi(struct ntfs_sb_info *sbi)
+{
+	kfree(sbi->new_rec);
+	kvfree(ntfs_put_shared(sbi->upcase));
+	kvfree(sbi->def_table);
 	kfree(sbi->compress.lznt);
 #ifdef CONFIG_NTFS3_LZX_XPRESS
 	xpress_free_decompressor(sbi->compress.xpress);
@@ -638,12 +650,7 @@ static void ntfs_put_super(struct super_block *sb)
 
 	/* Mark rw ntfs as clear, if possible. */
 	ntfs_set_state(sbi, NTFS_DIRTY_CLEAR);
-
-	put_mount_options(sbi->options);
-	put_ntfs(sbi);
-	sb->s_fs_info = NULL;
-
-	sync_blockdev(sb->s_bdev);
+	ntfs3_put_sbi(sbi);
 }
 
 static int ntfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -708,6 +715,14 @@ static int ntfs_show_options(struct seq_file *m, struct dentry *root)
 }
 
 /*
+ * ntfs_shutdown - super_operations::shutdown
+ */
+static void ntfs_shutdown(struct super_block *sb)
+{
+	set_bit(NTFS_FLAGS_SHUTDOWN_BIT, &ntfs_sb(sb)->flags);
+}
+
+/*
  * ntfs_sync_fs - super_operations::sync_fs
  */
 static int ntfs_sync_fs(struct super_block *sb, int wait)
@@ -716,6 +731,9 @@ static int ntfs_sync_fs(struct super_block *sb, int wait)
 	struct ntfs_sb_info *sbi = sb->s_fs_info;
 	struct ntfs_inode *ni;
 	struct inode *inode;
+
+	if (unlikely(ntfs3_forced_shutdown(sb)))
+		return -EIO;
 
 	ni = sbi->security.ni;
 	if (ni) {
@@ -756,6 +774,7 @@ static const struct super_operations ntfs_sops = {
 	.put_super = ntfs_put_super,
 	.statfs = ntfs_statfs,
 	.show_options = ntfs_show_options,
+	.shutdown = ntfs_shutdown,
 	.sync_fs = ntfs_sync_fs,
 	.write_inode = ntfs3_write_inode,
 };
@@ -804,6 +823,7 @@ static int ntfs_nfs_commit_metadata(struct inode *inode)
 }
 
 static const struct export_operations ntfs_export_ops = {
+	.encode_fh = generic_encode_ino32_fh,
 	.fh_to_dentry = ntfs_fh_to_dentry,
 	.fh_to_parent = ntfs_fh_to_parent,
 	.get_parent = ntfs3_get_parent,
@@ -858,6 +878,7 @@ static int ntfs_init_from_boot(struct super_block *sb, u32 sector_size,
 	u16 fn, ao;
 	u8 cluster_bits;
 	u32 boot_off = 0;
+	sector_t boot_block = 0;
 	const char *hint = "Primary boot";
 
 	/* Save original dev_size. Used with alternative boot. */
@@ -865,11 +886,11 @@ static int ntfs_init_from_boot(struct super_block *sb, u32 sector_size,
 
 	sbi->volume.blocks = dev_size >> PAGE_SHIFT;
 
-	bh = ntfs_bread(sb, 0);
+read_boot:
+	bh = ntfs_bread(sb, boot_block);
 	if (!bh)
-		return -EIO;
+		return boot_block ? -EINVAL : -EIO;
 
-check_boot:
 	err = -EINVAL;
 
 	/* Corrupted image; do not read OOB */
@@ -1092,34 +1113,32 @@ check_boot:
 
 	if (bh->b_blocknr && !sb_rdonly(sb)) {
 		/*
-	     * Alternative boot is ok but primary is not ok.
-	     * Do not update primary boot here 'cause it may be faked boot.
-	     * Let ntfs to be mounted and update boot later.
-	     */
+	 	 * Alternative boot is ok but primary is not ok.
+	 	 * Do not update primary boot here 'cause it may be faked boot.
+	 	 * Let ntfs to be mounted and update boot later.
+		 */
 		*boot2 = kmemdup(boot, sizeof(*boot), GFP_NOFS | __GFP_NOWARN);
 	}
 
 out:
-	if (err == -EINVAL && !bh->b_blocknr && dev_size0 > PAGE_SHIFT) {
+	brelse(bh);
+
+	if (err == -EINVAL && !boot_block && dev_size0 > PAGE_SHIFT) {
 		u32 block_size = min_t(u32, sector_size, PAGE_SIZE);
 		u64 lbo = dev_size0 - sizeof(*boot);
 
-		/*
-	 	 * Try alternative boot (last sector)
-		 */
-		brelse(bh);
-
-		sb_set_blocksize(sb, block_size);
-		bh = ntfs_bread(sb, lbo >> blksize_bits(block_size));
-		if (!bh)
-			return -EINVAL;
-
+		boot_block = lbo >> blksize_bits(block_size);
 		boot_off = lbo & (block_size - 1);
-		hint = "Alternative boot";
-		dev_size = dev_size0; /* restore original size. */
-		goto check_boot;
+		if (boot_block && block_size >= boot_off + sizeof(*boot)) {
+			/*
+			 * Try alternative boot (last sector)
+			 */
+			sb_set_blocksize(sb, block_size);
+			hint = "Alternative boot";
+			dev_size = dev_size0; /* restore original size. */
+			goto read_boot;
+		}
 	}
-	brelse(bh);
 
 	return err;
 }
@@ -1559,9 +1578,9 @@ load_root:
 
 	if (boot2) {
 		/*
-	     * Alternative boot is ok but primary is not ok.
-	     * Volume is recognized as NTFS. Update primary boot.
-	     */
+	 	 * Alternative boot is ok but primary is not ok.
+	 	 * Volume is recognized as NTFS. Update primary boot.
+		 */
 		struct buffer_head *bh0 = sb_getblk(sb, 0);
 		if (bh0) {
 			if (buffer_locked(bh0))
@@ -1600,15 +1619,9 @@ load_root:
 put_inode_out:
 	iput(inode);
 out:
-	/*
-	 * Free resources here.
-	 * ntfs_fs_free will be called with fc->s_fs_info = NULL
-	 */
-	put_mount_options(sbi->options);
-	put_ntfs(sbi);
-	sb->s_fs_info = NULL;
+	ntfs3_put_sbi(sbi);
 	kfree(boot2);
-
+	ntfs3_put_sbi(sbi);
 	return err;
 }
 
@@ -1694,8 +1707,10 @@ static void ntfs_fs_free(struct fs_context *fc)
 	struct ntfs_mount_options *opts = fc->fs_private;
 	struct ntfs_sb_info *sbi = fc->s_fs_info;
 
-	if (sbi)
-		put_ntfs(sbi);
+	if (sbi) {
+		ntfs3_put_sbi(sbi);
+		ntfs3_free_sbi(sbi);
+	}
 
 	if (opts)
 		put_mount_options(opts);
@@ -1764,13 +1779,24 @@ free_opts:
 	return -ENOMEM;
 }
 
+static void ntfs3_kill_sb(struct super_block *sb)
+{
+	struct ntfs_sb_info *sbi = sb->s_fs_info;
+
+	kill_block_super(sb);
+
+	if (sbi->options)
+		put_mount_options(sbi->options);
+	ntfs3_free_sbi(sbi);
+}
+
 // clang-format off
 static struct file_system_type ntfs_fs_type = {
 	.owner			= THIS_MODULE,
 	.name			= "ntfs3",
 	.init_fs_context	= ntfs_init_fs_context,
 	.parameters		= ntfs_fs_parameters,
-	.kill_sb		= kill_block_super,
+	.kill_sb		= ntfs3_kill_sb,
 	.fs_flags		= FS_REQUIRES_DEV | FS_ALLOW_IDMAP,
 };
 // clang-format on
@@ -1788,7 +1814,6 @@ static int __init init_ntfs_fs(void)
 			"ntfs3: Warning: Activated 64 bits per cluster. Windows does not support this\n");
 	if (IS_ENABLED(CONFIG_NTFS3_LZX_XPRESS))
 		pr_info("ntfs3: Read-only LZX/Xpress compression included\n");
-
 
 #ifdef CONFIG_PROC_FS
 	/* Create "/proc/fs/ntfs3" */
@@ -1831,7 +1856,6 @@ static void __exit exit_ntfs_fs(void)
 	if (proc_info_root)
 		remove_proc_entry("fs/ntfs3", NULL);
 #endif
-
 }
 
 MODULE_LICENSE("GPL");

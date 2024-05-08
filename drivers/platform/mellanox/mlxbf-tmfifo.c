@@ -47,13 +47,16 @@
 /* Message with data needs at least two words (for header & data). */
 #define MLXBF_TMFIFO_DATA_MIN_WORDS		2
 
+/* Tx timeout in milliseconds. */
+#define TMFIFO_TX_TIMEOUT			2000
+
 /* ACPI UID for BlueField-3. */
 #define TMFIFO_BF3_UID				1
 
 struct mlxbf_tmfifo;
 
 /**
- * mlxbf_tmfifo_vring - Structure of the TmFifo virtual ring
+ * struct mlxbf_tmfifo_vring - Structure of the TmFifo virtual ring
  * @va: virtual address of the ring
  * @dma: dma address of the ring
  * @vq: pointer to the virtio virtqueue
@@ -62,12 +65,14 @@ struct mlxbf_tmfifo;
  * @drop_desc: dummy desc for packet dropping
  * @cur_len: processed length of the current descriptor
  * @rem_len: remaining length of the pending packet
+ * @rem_padding: remaining bytes to send as paddings
  * @pkt_len: total length of the pending packet
  * @next_avail: next avail descriptor id
  * @num: vring size (number of descriptors)
  * @align: vring alignment size
  * @index: vring index
  * @vdev_id: vring virtio id (VIRTIO_ID_xxx)
+ * @tx_timeout: expire time of last tx packet
  * @fifo: pointer to the tmfifo structure
  */
 struct mlxbf_tmfifo_vring {
@@ -79,12 +84,14 @@ struct mlxbf_tmfifo_vring {
 	struct vring_desc drop_desc;
 	int cur_len;
 	int rem_len;
+	int rem_padding;
 	u32 pkt_len;
 	u16 next_avail;
 	int num;
 	int align;
 	int index;
 	int vdev_id;
+	unsigned long tx_timeout;
 	struct mlxbf_tmfifo *fifo;
 };
 
@@ -113,12 +120,13 @@ enum {
 };
 
 /**
- * mlxbf_tmfifo_vdev - Structure of the TmFifo virtual device
+ * struct mlxbf_tmfifo_vdev - Structure of the TmFifo virtual device
  * @vdev: virtio device, in which the vdev.id.device field has the
  *        VIRTIO_ID_xxx id to distinguish the virtual device.
  * @status: status of the device
  * @features: supported features of the device
  * @vrings: array of tmfifo vrings of this device
+ * @config: non-anonymous union for cons and net
  * @config.cons: virtual console config -
  *               select if vdev.id.device is VIRTIO_ID_CONSOLE
  * @config.net: virtual network config -
@@ -138,7 +146,7 @@ struct mlxbf_tmfifo_vdev {
 };
 
 /**
- * mlxbf_tmfifo_irq_info - Structure of the interrupt information
+ * struct mlxbf_tmfifo_irq_info - Structure of the interrupt information
  * @fifo: pointer to the tmfifo structure
  * @irq: interrupt number
  * @index: index into the interrupt array
@@ -150,7 +158,7 @@ struct mlxbf_tmfifo_irq_info {
 };
 
 /**
- * mlxbf_tmfifo_io - Structure of the TmFifo IO resource (for both rx & tx)
+ * struct mlxbf_tmfifo_io - Structure of the TmFifo IO resource (for both rx & tx)
  * @ctl: control register offset (TMFIFO_RX_CTL / TMFIFO_TX_CTL)
  * @sts: status register offset (TMFIFO_RX_STS / TMFIFO_TX_STS)
  * @data: data register offset (TMFIFO_RX_DATA / TMFIFO_TX_DATA)
@@ -162,7 +170,7 @@ struct mlxbf_tmfifo_io {
 };
 
 /**
- * mlxbf_tmfifo - Structure of the TmFifo
+ * struct mlxbf_tmfifo - Structure of the TmFifo
  * @vdev: array of the virtual devices running over the TmFifo
  * @lock: lock to protect the TmFifo access
  * @res0: mapped resource block 0
@@ -198,7 +206,7 @@ struct mlxbf_tmfifo {
 };
 
 /**
- * mlxbf_tmfifo_msg_hdr - Structure of the TmFifo message header
+ * struct mlxbf_tmfifo_msg_hdr - Structure of the TmFifo message header
  * @type: message type
  * @len: payload length in network byte order. Messages sent into the FIFO
  *       will be read by the other side as data stream in the same byte order.
@@ -208,6 +216,7 @@ struct mlxbf_tmfifo {
 struct mlxbf_tmfifo_msg_hdr {
 	u8 type;
 	__be16 len;
+	/* private: */
 	u8 unused[5];
 } __packed __aligned(sizeof(u64));
 
@@ -817,6 +826,50 @@ mlxbf_tmfifo_desc_done:
 	return true;
 }
 
+static void mlxbf_tmfifo_check_tx_timeout(struct mlxbf_tmfifo_vring *vring)
+{
+	unsigned long flags;
+
+	/* Only handle Tx timeout for network vdev. */
+	if (vring->vdev_id != VIRTIO_ID_NET)
+		return;
+
+	/* Initialize the timeout or return if not expired. */
+	if (!vring->tx_timeout) {
+		/* Initialize the timeout. */
+		vring->tx_timeout = jiffies +
+			msecs_to_jiffies(TMFIFO_TX_TIMEOUT);
+		return;
+	} else if (time_before(jiffies, vring->tx_timeout)) {
+		/* Return if not timeout yet. */
+		return;
+	}
+
+	/*
+	 * Drop the packet after timeout. The outstanding packet is
+	 * released and the remaining bytes will be sent with padding byte 0x00
+	 * as a recovery. On the peer(host) side, the padding bytes 0x00 will be
+	 * either dropped directly, or appended into existing outstanding packet
+	 * thus dropped as corrupted network packet.
+	 */
+	vring->rem_padding = round_up(vring->rem_len, sizeof(u64));
+	mlxbf_tmfifo_release_pkt(vring);
+	vring->cur_len = 0;
+	vring->rem_len = 0;
+	vring->fifo->vring[0] = NULL;
+
+	/*
+	 * Make sure the load/store are in order before
+	 * returning back to virtio.
+	 */
+	virtio_mb(false);
+
+	/* Notify upper layer. */
+	spin_lock_irqsave(&vring->fifo->spin_lock[0], flags);
+	vring_interrupt(0, vring->vq);
+	spin_unlock_irqrestore(&vring->fifo->spin_lock[0], flags);
+}
+
 /* Rx & Tx processing of a queue. */
 static void mlxbf_tmfifo_rxtx(struct mlxbf_tmfifo_vring *vring, bool is_rx)
 {
@@ -839,6 +892,7 @@ static void mlxbf_tmfifo_rxtx(struct mlxbf_tmfifo_vring *vring, bool is_rx)
 		return;
 
 	do {
+retry:
 		/* Get available FIFO space. */
 		if (avail == 0) {
 			if (is_rx)
@@ -847,6 +901,17 @@ static void mlxbf_tmfifo_rxtx(struct mlxbf_tmfifo_vring *vring, bool is_rx)
 				avail = mlxbf_tmfifo_get_tx_avail(fifo, devid);
 			if (avail <= 0)
 				break;
+		}
+
+		/* Insert paddings for discarded Tx packet. */
+		if (!is_rx) {
+			vring->tx_timeout = 0;
+			while (vring->rem_padding >= sizeof(u64)) {
+				writeq(0, vring->fifo->tx.data);
+				vring->rem_padding -= sizeof(u64);
+				if (--avail == 0)
+					goto retry;
+			}
 		}
 
 		/* Console output always comes from the Tx buffer. */
@@ -858,6 +923,10 @@ static void mlxbf_tmfifo_rxtx(struct mlxbf_tmfifo_vring *vring, bool is_rx)
 		/* Handle one descriptor. */
 		more = mlxbf_tmfifo_rxtx_one_desc(vring, is_rx, &avail);
 	} while (more);
+
+	/* Check Tx timeout. */
+	if (avail <= 0 && !is_rx)
+		mlxbf_tmfifo_check_tx_timeout(vring);
 }
 
 /* Handle Rx or Tx queues. */
@@ -1362,13 +1431,11 @@ fail:
 }
 
 /* Device remove function. */
-static int mlxbf_tmfifo_remove(struct platform_device *pdev)
+static void mlxbf_tmfifo_remove(struct platform_device *pdev)
 {
 	struct mlxbf_tmfifo *fifo = platform_get_drvdata(pdev);
 
 	mlxbf_tmfifo_cleanup(fifo);
-
-	return 0;
 }
 
 static const struct acpi_device_id mlxbf_tmfifo_acpi_match[] = {
@@ -1379,7 +1446,7 @@ MODULE_DEVICE_TABLE(acpi, mlxbf_tmfifo_acpi_match);
 
 static struct platform_driver mlxbf_tmfifo_driver = {
 	.probe = mlxbf_tmfifo_probe,
-	.remove = mlxbf_tmfifo_remove,
+	.remove_new = mlxbf_tmfifo_remove,
 	.driver = {
 		.name = "bf-tmfifo",
 		.acpi_match_table = mlxbf_tmfifo_acpi_match,

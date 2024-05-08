@@ -342,9 +342,9 @@ static int hisi_ptt_register_irq(struct hisi_ptt *hisi_ptt)
 		return ret;
 
 	hisi_ptt->trace_irq = pci_irq_vector(pdev, HISI_PTT_TRACE_DMA_IRQ);
-	ret = devm_request_threaded_irq(&pdev->dev, hisi_ptt->trace_irq,
-					NULL, hisi_ptt_isr, 0,
-					DRV_NAME, hisi_ptt);
+	ret = devm_request_irq(&pdev->dev, hisi_ptt->trace_irq, hisi_ptt_isr,
+				IRQF_NOBALANCING | IRQF_NO_THREAD, DRV_NAME,
+				hisi_ptt);
 	if (ret) {
 		pci_err(pdev, "failed to request irq %d, ret = %d\n",
 			hisi_ptt->trace_irq, ret);
@@ -618,13 +618,13 @@ static int hisi_ptt_notifier_call(struct notifier_block *nb, unsigned long actio
 	if (!root_port)
 		return 0;
 
-	port_devid = PCI_DEVID(root_port->bus->number, root_port->devfn);
+	port_devid = pci_dev_id(root_port);
 	if (port_devid < hisi_ptt->lower_bdf ||
 	    port_devid > hisi_ptt->upper_bdf)
 		return 0;
 
 	info.is_port = pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT;
-	info.devid = PCI_DEVID(pdev->bus->number, pdev->devfn);
+	info.devid = pci_dev_id(pdev);
 
 	switch (action) {
 	case BUS_NOTIFY_ADD_DEVICE:
@@ -664,7 +664,7 @@ static int hisi_ptt_init_filters(struct pci_dev *pdev, void *data)
 	if (!root_port)
 		return 0;
 
-	port_devid = PCI_DEVID(root_port->bus->number, root_port->devfn);
+	port_devid = pci_dev_id(root_port);
 	if (port_devid < hisi_ptt->lower_bdf ||
 	    port_devid > hisi_ptt->upper_bdf)
 		return 0;
@@ -674,7 +674,7 @@ static int hisi_ptt_init_filters(struct pci_dev *pdev, void *data)
 	 * should be partial initialized and users would know which filter fails
 	 * through the log. Other functions of PTT device are still available.
 	 */
-	filter = hisi_ptt_alloc_add_filter(hisi_ptt, PCI_DEVID(pdev->bus->number, pdev->devfn),
+	filter = hisi_ptt_alloc_add_filter(hisi_ptt, pci_dev_id(pdev),
 					    pci_pcie_type(pdev) == PCI_EXP_TYPE_ROOT_PORT);
 	if (!filter)
 		return -ENOMEM;
@@ -995,13 +995,16 @@ static int hisi_ptt_pmu_event_init(struct perf_event *event)
 	int ret;
 	u32 val;
 
+	if (event->attr.type != hisi_ptt->hisi_ptt_pmu.type)
+		return -ENOENT;
+
 	if (event->cpu < 0) {
 		dev_dbg(event->pmu->dev, "Per-task mode not supported\n");
 		return -EOPNOTSUPP;
 	}
 
-	if (event->attr.type != hisi_ptt->hisi_ptt_pmu.type)
-		return -ENOENT;
+	if (event->attach_state & PERF_ATTACH_TASK)
+		return -EOPNOTSUPP;
 
 	ret = hisi_ptt_trace_valid_filter(hisi_ptt, event->attr.config);
 	if (ret < 0)
@@ -1178,6 +1181,10 @@ static void hisi_ptt_pmu_del(struct perf_event *event, int flags)
 	hisi_ptt_pmu_stop(event, PERF_EF_UPDATE);
 }
 
+static void hisi_ptt_pmu_read(struct perf_event *event)
+{
+}
+
 static void hisi_ptt_remove_cpuhp_instance(void *hotplug_node)
 {
 	cpuhp_state_remove_instance_nocalls(hisi_ptt_pmu_online, hotplug_node);
@@ -1221,6 +1228,7 @@ static int hisi_ptt_register_pmu(struct hisi_ptt *hisi_ptt)
 		.stop		= hisi_ptt_pmu_stop,
 		.add		= hisi_ptt_pmu_add,
 		.del		= hisi_ptt_pmu_del,
+		.read		= hisi_ptt_pmu_read,
 	};
 
 	reg = readl(hisi_ptt->iobase + HISI_PTT_LOCATION);

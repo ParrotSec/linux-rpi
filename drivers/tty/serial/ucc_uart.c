@@ -17,18 +17,18 @@
  */
 
 #include <linux/module.h>
+#include <linux/platform_device.h>
 #include <linux/serial.h>
 #include <linux/serial_core.h>
 #include <linux/slab.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/io.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
-#include <linux/of_platform.h>
 #include <linux/dma-mapping.h>
 
-#include <linux/fs_uart_pd.h>
 #include <soc/fsl/qe/ucc_slow.h>
 
 #include <linux/firmware.h>
@@ -931,7 +931,7 @@ static void qe_uart_set_termios(struct uart_port *port,
 	baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);
 
 	/* Do we really need a spinlock here? */
-	spin_lock_irqsave(&port->lock, flags);
+	uart_port_lock_irqsave(port, &flags);
 
 	/* Update the per-port timeout. */
 	uart_update_timeout(port, termios->c_cflag, baud);
@@ -949,7 +949,7 @@ static void qe_uart_set_termios(struct uart_port *port,
 		qe_setbrg(qe_port->us_info.tx_clock, baud, 16);
 	}
 
-	spin_unlock_irqrestore(&port->lock, flags);
+	uart_port_unlock_irqrestore(port, flags);
 }
 
 /*

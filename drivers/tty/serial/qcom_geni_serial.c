@@ -11,7 +11,6 @@
 #include <linux/irq.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/pm_opp.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -483,9 +482,9 @@ static void qcom_geni_serial_console_write(struct console *co, const char *s,
 
 	uport = &port->uport;
 	if (oops_in_progress)
-		locked = spin_trylock_irqsave(&uport->lock, flags);
+		locked = uart_port_trylock_irqsave(uport, &flags);
 	else
-		spin_lock_irqsave(&uport->lock, flags);
+		uart_port_lock_irqsave(uport, &flags);
 
 	geni_status = readl(uport->membase + SE_GENI_STATUS);
 
@@ -521,7 +520,7 @@ static void qcom_geni_serial_console_write(struct console *co, const char *s,
 		qcom_geni_serial_setup_tx(uport, port->tx_remaining);
 
 	if (locked)
-		spin_unlock_irqrestore(&uport->lock, flags);
+		uart_port_unlock_irqrestore(uport, flags);
 }
 
 static void handle_rx_console(struct uart_port *uport, u32 bytes, bool drop)
@@ -852,19 +851,21 @@ static void qcom_geni_serial_stop_tx(struct uart_port *uport)
 }
 
 static void qcom_geni_serial_send_chunk_fifo(struct uart_port *uport,
-					     unsigned int remaining)
+					     unsigned int chunk)
 {
 	struct qcom_geni_serial_port *port = to_dev_port(uport);
 	struct circ_buf *xmit = &uport->state->xmit;
-	unsigned int tx_bytes;
+	unsigned int tx_bytes, c, remaining = chunk;
 	u8 buf[BYTES_PER_FIFO_WORD];
 
 	while (remaining) {
 		memset(buf, 0, sizeof(buf));
 		tx_bytes = min(remaining, BYTES_PER_FIFO_WORD);
 
-		memcpy(buf, &xmit->buf[xmit->tail], tx_bytes);
-		uart_xmit_advance(uport, tx_bytes);
+		for (c = 0; c < tx_bytes ; c++) {
+			buf[c] = xmit->buf[xmit->tail];
+			uart_xmit_advance(uport, 1);
+		}
 
 		iowrite32_rep(uport->membase + SE_GENI_TX_FIFOn, buf, 1);
 
@@ -971,7 +972,7 @@ static irqreturn_t qcom_geni_serial_isr(int isr, void *dev)
 	if (uport->suspended)
 		return IRQ_NONE;
 
-	spin_lock(&uport->lock);
+	uart_port_lock(uport);
 
 	m_irq_status = readl(uport->membase + SE_GENI_M_IRQ_STATUS);
 	s_irq_status = readl(uport->membase + SE_GENI_S_IRQ_STATUS);
@@ -1243,7 +1244,7 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 		goto out_restart_rx;
 	}
 
-	dev_dbg(port->se.dev, "desired_rate-%u, clk_rate-%lu, clk_div-%u\n",
+	dev_dbg(port->se.dev, "desired_rate = %u, clk_rate = %lu, clk_div = %u\n",
 			baud * sampling_rate, clk_rate, clk_div);
 
 	uport->uartclk = clk_rate;
@@ -1752,7 +1753,7 @@ static int qcom_geni_serial_sys_hib_resume(struct device *dev)
 	private_data = uport->private_data;
 
 	if (uart_console(uport)) {
-		geni_icc_set_tag(&port->se, 0x7);
+		geni_icc_set_tag(&port->se, QCOM_ICC_TAG_ALWAYS);
 		geni_icc_set_bw(&port->se);
 		ret = uart_resume_port(private_data->drv, uport);
 		/*

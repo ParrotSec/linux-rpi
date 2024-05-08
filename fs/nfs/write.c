@@ -668,8 +668,10 @@ static int nfs_writepage_locked(struct folio *folio,
 	int err;
 
 	if (wbc->sync_mode == WB_SYNC_NONE &&
-	    NFS_SERVER(inode)->write_congested)
+	    NFS_SERVER(inode)->write_congested) {
+		folio_redirty_for_writepage(wbc, folio);
 		return AOP_WRITEPAGE_ACTIVATE;
+	}
 
 	nfs_inc_stats(inode, NFSIOS_VFSWRITEPAGE);
 	nfs_pageio_init_write(&pgio, inode, 0, false,
@@ -739,6 +741,8 @@ int nfs_writepages(struct address_space *mapping, struct writeback_control *wbc)
 					&pgio);
 		pgio.pg_error = 0;
 		nfs_pageio_complete(&pgio);
+		if (err == -EAGAIN && mntflags & NFS_MOUNT_SOFTERR)
+			break;
 	} while (err < 0 && !nfs_error_is_fatal(err));
 	nfs_io_completion_put(ioc);
 
@@ -1659,7 +1663,7 @@ static int wait_on_commit(struct nfs_mds_commit_info *cinfo)
 				       !atomic_read(&cinfo->rpcs_out));
 }
 
-static void nfs_commit_begin(struct nfs_mds_commit_info *cinfo)
+void nfs_commit_begin(struct nfs_mds_commit_info *cinfo)
 {
 	atomic_inc(&cinfo->rpcs_out);
 }

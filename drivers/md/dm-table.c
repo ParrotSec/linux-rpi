@@ -129,7 +129,12 @@ static int alloc_targets(struct dm_table *t, unsigned int num)
 int dm_table_create(struct dm_table **result, blk_mode_t mode,
 		    unsigned int num_targets, struct mapped_device *md)
 {
-	struct dm_table *t = kzalloc(sizeof(*t), GFP_KERNEL);
+	struct dm_table *t;
+
+	if (num_targets > DM_MAX_TARGETS)
+		return -EOVERFLOW;
+
+	t = kzalloc(sizeof(*t), GFP_KERNEL);
 
 	if (!t)
 		return -ENOMEM;
@@ -144,7 +149,7 @@ int dm_table_create(struct dm_table **result, blk_mode_t mode,
 
 	if (!num_targets) {
 		kfree(t);
-		return -ENOMEM;
+		return -EOVERFLOW;
 	}
 
 	if (alloc_targets(t, num_targets)) {
@@ -844,7 +849,8 @@ static bool dm_table_supports_dax(struct dm_table *t,
 		if (!ti->type->direct_access)
 			return false;
 
-		if (!ti->type->iterate_devices ||
+		if (dm_target_is_wildcard(ti->type) ||
+		    !ti->type->iterate_devices ||
 		    ti->type->iterate_devices(ti, iterate_fn, NULL))
 			return false;
 	}
@@ -1587,6 +1593,14 @@ static int device_not_zoned_model(struct dm_target *ti, struct dm_dev *dev,
 	return blk_queue_zoned_model(q) != *zoned_model;
 }
 
+static int device_is_zoned_model(struct dm_target *ti, struct dm_dev *dev,
+				 sector_t start, sector_t len, void *data)
+{
+	struct request_queue *q = bdev_get_queue(dev->bdev);
+
+	return blk_queue_zoned_model(q) != BLK_ZONED_NONE;
+}
+
 /*
  * Check the device zoned model based on the target feature flag. If the target
  * has the DM_TARGET_ZONED_HM feature flag set, host-managed zoned devices are
@@ -1599,6 +1613,18 @@ static bool dm_table_supports_zoned_model(struct dm_table *t,
 {
 	for (unsigned int i = 0; i < t->num_targets; i++) {
 		struct dm_target *ti = dm_table_get_target(t, i);
+
+		/*
+		 * For the wildcard target (dm-error), if we do not have a
+		 * backing device, we must always return false. If we have a
+		 * backing device, the result must depend on checking zoned
+		 * model, like for any other target. So for this, check directly
+		 * if the target backing device is zoned as we get "false" when
+		 * dm-error was set without a backing device.
+		 */
+		if (dm_target_is_wildcard(ti->type) &&
+		    !ti->type->iterate_devices(ti, device_is_zoned_model, NULL))
+			return false;
 
 		if (dm_target_supports_zoned_hm(ti->type)) {
 			if (!ti->type->iterate_devices ||

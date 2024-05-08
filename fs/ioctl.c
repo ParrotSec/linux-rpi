@@ -397,8 +397,8 @@ static int ioctl_fsfreeze(struct file *filp)
 
 	/* Freeze */
 	if (sb->s_op->freeze_super)
-		return sb->s_op->freeze_super(sb);
-	return freeze_super(sb);
+		return sb->s_op->freeze_super(sb, FREEZE_HOLDER_USERSPACE);
+	return freeze_super(sb, FREEZE_HOLDER_USERSPACE);
 }
 
 static int ioctl_fsthaw(struct file *filp)
@@ -410,8 +410,8 @@ static int ioctl_fsthaw(struct file *filp)
 
 	/* Thaw */
 	if (sb->s_op->thaw_super)
-		return sb->s_op->thaw_super(sb);
-	return thaw_super(sb);
+		return sb->s_op->thaw_super(sb, FREEZE_HOLDER_USERSPACE);
+	return thaw_super(sb, FREEZE_HOLDER_USERSPACE);
 }
 
 static int ioctl_file_dedupe_range(struct file *file,
@@ -920,8 +920,7 @@ COMPAT_SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd,
 	if (!f.file)
 		return -EBADF;
 
-	/* RED-PEN how should LSM module know it's handling 32bit? */
-	error = security_file_ioctl(f.file, cmd, arg);
+	error = security_file_ioctl_compat(f.file, cmd, arg);
 	if (error)
 		goto out;
 

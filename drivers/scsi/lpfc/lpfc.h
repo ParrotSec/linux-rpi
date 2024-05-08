@@ -33,6 +33,7 @@
 struct lpfc_sli2_slim;
 
 #define ELX_MODEL_NAME_SIZE	80
+#define ELX_FW_NAME_SIZE	84
 
 #define LPFC_PCI_DEV_LP		0x1
 #define LPFC_PCI_DEV_OC		0x2
@@ -309,7 +310,6 @@ struct lpfc_hba;
 #define LPFC_VMID_TIMER   300	/* timer interval in seconds */
 
 #define LPFC_MAX_VMID_SIZE      256
-#define LPFC_COMPRESS_VMID_SIZE 16
 
 union lpfc_vmid_io_tag {
 	u32 app_id;	/* App Id vmid */
@@ -667,7 +667,7 @@ struct lpfc_vport {
 	uint32_t cfg_first_burst_size;
 	uint32_t dev_loss_tmo_changed;
 	/* VMID parameters */
-	u8 lpfc_vmid_host_uuid[LPFC_COMPRESS_VMID_SIZE];
+	u8 lpfc_vmid_host_uuid[16];
 	u32 max_vmid;	/* maximum VMIDs allowed per port */
 	u32 cur_vmid_cnt;	/* Current VMID count */
 #define LPFC_MIN_VMID	4
@@ -1709,6 +1709,25 @@ lpfc_next_online_cpu(const struct cpumask *mask, unsigned int start)
 
 	return cpu_it;
 }
+/**
+ * lpfc_next_present_cpu - Finds next present CPU after n
+ * @n: the cpu prior to search
+ *
+ * Note: If no next present cpu, then fallback to first present cpu.
+ *
+ **/
+static inline unsigned int lpfc_next_present_cpu(int n)
+{
+	unsigned int cpu;
+
+	cpu = cpumask_next(n, cpu_present_mask);
+
+	if (cpu >= nr_cpu_ids)
+		cpu = cpumask_first(cpu_present_mask);
+
+	return cpu;
+}
+
 /**
  * lpfc_sli4_mod_hba_eq_delay - update EQ delay
  * @phba: Pointer to HBA context object.

@@ -460,11 +460,11 @@ static int x25_getsockopt(struct socket *sock, int level, int optname,
 	if (get_user(len, optlen))
 		goto out;
 
-	len = min_t(unsigned int, len, sizeof(int));
-
 	rc = -EINVAL;
 	if (len < 0)
 		goto out;
+
+	len = min_t(unsigned int, len, sizeof(int));
 
 	rc = -EFAULT;
 	if (put_user(len, optlen))
@@ -598,7 +598,7 @@ static struct sock *x25_make_new(struct sock *osk)
 	x25 = x25_sk(sk);
 
 	sk->sk_type        = osk->sk_type;
-	sk->sk_priority    = osk->sk_priority;
+	sk->sk_priority    = READ_ONCE(osk->sk_priority);
 	sk->sk_protocol    = osk->sk_protocol;
 	sk->sk_rcvbuf      = osk->sk_rcvbuf;
 	sk->sk_sndbuf      = osk->sk_sndbuf;

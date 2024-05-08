@@ -177,6 +177,8 @@ static bool ip6_parse_tlv(bool hopbyhop,
 				case IPV6_TLV_IOAM:
 					if (!ipv6_hop_ioam(skb, off))
 						return false;
+
+					nh = skb_network_header(skb);
 					break;
 				case IPV6_TLV_JUMBO:
 					if (!ipv6_hop_jumbo(skb, off))
@@ -612,8 +614,6 @@ looped_back:
 
 	kfree(buf);
 
-	skb_dst_drop(skb);
-
 	ip6_route_input(skb);
 
 	if (skb_dst(skb)->error) {
@@ -650,7 +650,6 @@ static int ipv6_rthdr_rcv(struct sk_buff *skb)
 	struct inet6_dev *idev = __in6_dev_get(skb->dev);
 	struct inet6_skb_parm *opt = IP6CB(skb);
 	struct in6_addr *addr = NULL;
-	struct in6_addr daddr;
 	int n, i;
 	struct ipv6_rt_hdr *hdr;
 	struct rt0_hdr *rthdr;
@@ -798,9 +797,7 @@ looped_back:
 		return -1;
 	}
 
-	daddr = *addr;
-	*addr = ipv6_hdr(skb)->daddr;
-	ipv6_hdr(skb)->daddr = daddr;
+	swap(*addr, ipv6_hdr(skb)->daddr);
 
 	ip6_route_input(skb);
 	if (skb_dst(skb)->error) {
@@ -947,6 +944,14 @@ static bool ipv6_hop_ioam(struct sk_buff *skb, int optoff)
 
 		if (!skb_valid_dst(skb))
 			ip6_route_input(skb);
+
+		/* About to mangle packet header */
+		if (skb_ensure_writable(skb, optoff + 2 + hdr->opt_len))
+			goto drop;
+
+		/* Trace pointer may have changed */
+		trace = (struct ioam6_trace_hdr *)(skb_network_header(skb)
+						   + optoff + sizeof(*hdr));
 
 		ioam6_fill_trace_data(skb, ns, trace, true);
 		break;

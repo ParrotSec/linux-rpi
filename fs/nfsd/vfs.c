@@ -337,6 +337,24 @@ out:
 	return err;
 }
 
+static void
+commit_reset_write_verifier(struct nfsd_net *nn, struct svc_rqst *rqstp,
+			    int err)
+{
+	switch (err) {
+	case -EAGAIN:
+	case -ESTALE:
+		/*
+		 * Neither of these are the result of a problem with
+		 * durable storage, so avoid a write verifier reset.
+		 */
+		break;
+	default:
+		nfsd_reset_write_verifier(nn);
+		trace_nfsd_writeverf_reset(nn, rqstp, err);
+	}
+}
+
 /*
  * Commit metadata changes to stable storage.
  */
@@ -520,7 +538,7 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	nfsd_sanitize_attrs(inode, iap);
 
-	if (check_guard && guardtime != inode->i_ctime.tv_sec)
+	if (check_guard && guardtime != inode_get_ctime_sec(inode))
 		return nfserr_notsync;
 
 	/*
@@ -647,8 +665,7 @@ __be32 nfsd4_clone_file_range(struct svc_rqst *rqstp,
 					&nfsd4_get_cstate(rqstp)->current_fh,
 					dst_pos,
 					count, status);
-			nfsd_reset_write_verifier(nn);
-			trace_nfsd_writeverf_reset(nn, rqstp, status);
+			commit_reset_write_verifier(nn, rqstp, status);
 			ret = nfserrno(status);
 		}
 	}
@@ -884,7 +901,6 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 	int host_err;
 	bool retried = false;
 
-	validate_process_creds();
 	/*
 	 * If we get here, then the client has already done an "open",
 	 * and (hopefully) checked permission - so allow OWNER_OVERRIDE
@@ -909,7 +925,6 @@ retry:
 		}
 		err = nfserrno(host_err);
 	}
-	validate_process_creds();
 	return err;
 }
 
@@ -926,12 +941,7 @@ int
 nfsd_open_verified(struct svc_rqst *rqstp, struct svc_fh *fhp, int may_flags,
 		   struct file **filp)
 {
-	int err;
-
-	validate_process_creds();
-	err = __nfsd_open(rqstp, fhp, S_IFREG, may_flags, filp);
-	validate_process_creds();
-	return err;
+	return __nfsd_open(rqstp, fhp, S_IFREG, may_flags, filp);
 }
 
 /*
@@ -1170,8 +1180,7 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	host_err = vfs_iter_write(file, &iter, &pos, flags);
 	file_end_write(file);
 	if (host_err < 0) {
-		nfsd_reset_write_verifier(nn);
-		trace_nfsd_writeverf_reset(nn, rqstp, host_err);
+		commit_reset_write_verifier(nn, rqstp, host_err);
 		goto out_nfserr;
 	}
 	*cnt = host_err;
@@ -1183,10 +1192,8 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 
 	if (stable && use_wgather) {
 		host_err = wait_for_concurrent_writes(file);
-		if (host_err < 0) {
-			nfsd_reset_write_verifier(nn);
-			trace_nfsd_writeverf_reset(nn, rqstp, host_err);
-		}
+		if (host_err < 0)
+			commit_reset_write_verifier(nn, rqstp, host_err);
 	}
 
 out_nfserr:
@@ -1329,8 +1336,7 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 			err = nfserr_notsupp;
 			break;
 		default:
-			nfsd_reset_write_verifier(nn);
-			trace_nfsd_writeverf_reset(nn, rqstp, err2);
+			commit_reset_write_verifier(nn, rqstp, err2);
 			err = nfserrno(err2);
 		}
 	} else
@@ -1538,7 +1544,9 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	dput(dchild);
 	if (err)
 		goto out_unlock;
-	fh_fill_pre_attrs(fhp);
+	err = fh_fill_pre_attrs(fhp);
+	if (err != nfs_ok)
+		goto out_unlock;
 	err = nfsd_create_locked(rqstp, fhp, attrs, type, rdev, resfhp);
 	fh_fill_post_attrs(fhp);
 out_unlock:
@@ -1633,13 +1641,16 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		inode_unlock(dentry->d_inode);
 		goto out_drop_write;
 	}
-	fh_fill_pre_attrs(fhp);
+	err = fh_fill_pre_attrs(fhp);
+	if (err != nfs_ok)
+		goto out_unlock;
 	host_err = vfs_symlink(&nop_mnt_idmap, d_inode(dentry), dnew, path);
 	err = nfserrno(host_err);
 	cerr = fh_compose(resfhp, fhp->fh_export, dnew, fhp);
 	if (!err)
 		nfsd_create_setattr(rqstp, fhp, resfhp, attrs);
 	fh_fill_post_attrs(fhp);
+out_unlock:
 	inode_unlock(dentry->d_inode);
 	if (!err)
 		err = nfserrno(commit_metadata(fhp));
@@ -1701,7 +1712,9 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	err = nfserr_noent;
 	if (d_really_is_negative(dold))
 		goto out_dput;
-	fh_fill_pre_attrs(ffhp);
+	err = fh_fill_pre_attrs(ffhp);
+	if (err != nfs_ok)
+		goto out_dput;
 	host_err = vfs_link(dold, &nop_mnt_idmap, dirp, dnew, NULL);
 	fh_fill_post_attrs(ffhp);
 	inode_unlock(dirp);
@@ -1793,8 +1806,12 @@ retry:
 	}
 
 	trap = lock_rename(tdentry, fdentry);
-	fh_fill_pre_attrs(ffhp);
-	fh_fill_pre_attrs(tfhp);
+	err = fh_fill_pre_attrs(ffhp);
+	if (err != nfs_ok)
+		goto out_unlock;
+	err = fh_fill_pre_attrs(tfhp);
+	if (err != nfs_ok)
+		goto out_unlock;
 
 	odentry = lookup_one_len(fname, fdentry, flen);
 	host_err = PTR_ERR(odentry);
@@ -1855,6 +1872,7 @@ retry:
 		fh_fill_post_attrs(ffhp);
 		fh_fill_post_attrs(tfhp);
 	}
+out_unlock:
 	unlock_rename(tdentry, fdentry);
 	fh_drop_write(ffhp);
 
@@ -1914,12 +1932,14 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 		goto out_unlock;
 	}
 	rinode = d_inode(rdentry);
-	ihold(rinode);
+	err = fh_fill_pre_attrs(fhp);
+	if (err != nfs_ok)
+		goto out_unlock;
 
+	ihold(rinode);
 	if (!type)
 		type = d_inode(rdentry)->i_mode & S_IFMT;
 
-	fh_fill_pre_attrs(fhp);
 	if (type != S_IFDIR) {
 		int retries;
 
@@ -2339,16 +2359,18 @@ nfsd_removexattr(struct svc_rqst *rqstp, struct svc_fh *fhp, char *name)
 		return nfserrno(ret);
 
 	inode_lock(fhp->fh_dentry->d_inode);
-	fh_fill_pre_attrs(fhp);
-
+	err = fh_fill_pre_attrs(fhp);
+	if (err != nfs_ok)
+		goto out_unlock;
 	ret = __vfs_removexattr_locked(&nop_mnt_idmap, fhp->fh_dentry,
 				       name, NULL);
-
+	err = nfsd_xattr_errno(ret);
 	fh_fill_post_attrs(fhp);
+out_unlock:
 	inode_unlock(fhp->fh_dentry->d_inode);
 	fh_drop_write(fhp);
 
-	return nfsd_xattr_errno(ret);
+	return err;
 }
 
 __be32
@@ -2366,15 +2388,17 @@ nfsd_setxattr(struct svc_rqst *rqstp, struct svc_fh *fhp, char *name,
 	if (ret)
 		return nfserrno(ret);
 	inode_lock(fhp->fh_dentry->d_inode);
-	fh_fill_pre_attrs(fhp);
-
-	ret = __vfs_setxattr_locked(&nop_mnt_idmap, fhp->fh_dentry, name, buf,
-				    len, flags, NULL);
+	err = fh_fill_pre_attrs(fhp);
+	if (err != nfs_ok)
+		goto out_unlock;
+	ret = __vfs_setxattr_locked(&nop_mnt_idmap, fhp->fh_dentry,
+				    name, buf, len, flags, NULL);
 	fh_fill_post_attrs(fhp);
+	err = nfsd_xattr_errno(ret);
+out_unlock:
 	inode_unlock(fhp->fh_dentry->d_inode);
 	fh_drop_write(fhp);
-
-	return nfsd_xattr_errno(ret);
+	return err;
 }
 #endif
 

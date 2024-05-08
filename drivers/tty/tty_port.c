@@ -20,47 +20,45 @@
 #include <linux/serdev.h>
 #include "tty.h"
 
-static int tty_port_default_receive_buf(struct tty_port *port,
-					const unsigned char *p,
-					const unsigned char *f, size_t count)
+static size_t tty_port_default_receive_buf(struct tty_port *port, const u8 *p,
+					   const u8 *f, size_t count)
 {
-	int ret;
 	struct tty_struct *tty;
-	struct tty_ldisc *disc;
+	struct tty_ldisc *ld;
 
 	tty = READ_ONCE(port->itty);
 	if (!tty)
 		return 0;
 
-	disc = tty_ldisc_ref(tty);
-	if (!disc)
+	ld = tty_ldisc_ref(tty);
+	if (!ld)
 		return 0;
 
-	ret = tty_ldisc_receive_buf(disc, p, (char *)f, count);
+	count = tty_ldisc_receive_buf(ld, p, f, count);
 
-	tty_ldisc_deref(disc);
+	tty_ldisc_deref(ld);
 
-	return ret;
+	return count;
 }
 
-static void tty_port_default_lookahead_buf(struct tty_port *port, const unsigned char *p,
-					   const unsigned char *f, unsigned int count)
+static void tty_port_default_lookahead_buf(struct tty_port *port, const u8 *p,
+					   const u8 *f, size_t count)
 {
 	struct tty_struct *tty;
-	struct tty_ldisc *disc;
+	struct tty_ldisc *ld;
 
 	tty = READ_ONCE(port->itty);
 	if (!tty)
 		return;
 
-	disc = tty_ldisc_ref(tty);
-	if (!disc)
+	ld = tty_ldisc_ref(tty);
+	if (!ld)
 		return;
 
-	if (disc->ops->lookahead_buf)
-		disc->ops->lookahead_buf(disc->tty, p, f, count);
+	if (ld->ops->lookahead_buf)
+		ld->ops->lookahead_buf(ld->tty, p, f, count);
 
-	tty_ldisc_deref(disc);
+	tty_ldisc_deref(ld);
 }
 
 static void tty_port_default_wakeup(struct tty_port *port)
@@ -81,7 +79,7 @@ const struct tty_port_client_operations tty_port_default_client_ops = {
 EXPORT_SYMBOL_GPL(tty_port_default_client_ops);
 
 /**
- * tty_port_init -- initialize tty_port
+ * tty_port_init - initialize tty_port
  * @port: tty_port to initialize
  *
  * Initializes the state of struct tty_port. When a port was initialized using
@@ -269,7 +267,7 @@ void tty_port_free_xmit_buf(struct tty_port *port)
 EXPORT_SYMBOL(tty_port_free_xmit_buf);
 
 /**
- * tty_port_destroy -- destroy inited port
+ * tty_port_destroy - destroy inited port
  * @port: tty port to be destroyed
  *
  * When a port was initialized using tty_port_init(), one has to destroy the
@@ -299,7 +297,7 @@ static void tty_port_destructor(struct kref *kref)
 }
 
 /**
- * tty_port_put -- drop a reference to tty_port
+ * tty_port_put - drop a reference to tty_port
  * @port: port to drop a reference of (can be NULL)
  *
  * The final put will destroy and free up the @port using

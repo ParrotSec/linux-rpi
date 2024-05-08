@@ -146,6 +146,14 @@ config IPQ_GCC_4019
 	  Say Y if you want to use peripheral devices such as UART, SPI,
 	  i2c, USB, SD/eMMC, etc.
 
+config IPQ_GCC_5018
+	tristate "IPQ5018 Global Clock Controller"
+	depends on ARM64 || COMPILE_TEST
+	help
+	  Support for global clock controller on ipq5018 devices.
+	  Say Y if you want to use peripheral devices such as UART, SPI,
+	  i2c, USB, SD/eMMC, etc.
+
 config IPQ_GCC_5332
 	tristate "IPQ5332 Global Clock Controller"
 	depends on ARM64 || COMPILE_TEST
@@ -248,11 +256,11 @@ config MSM_GCC_8960
 	  i2c, USB, SD/eMMC, SATA, PCIe, etc.
 
 config MSM_LCC_8960
-	tristate "APQ8064/MSM8960 LPASS Clock Controller"
+	tristate "APQ8064/MSM8960/MDM9650 LPASS Clock Controller"
 	depends on ARM || COMPILE_TEST
-	select MSM_GCC_8960
 	help
-	  Support for the LPASS clock controller on apq8064/msm8960 devices.
+	  Support for the LPASS clock controller on apq8064/msm8960/mdm9650
+	  devices.
 	  Say Y if you want to use audio devices such as i2s, pcm,
 	  SLIMBus, etc.
 
@@ -271,15 +279,6 @@ config MDM_GCC_9615
 	  Support for the global clock controller on mdm9615 devices.
 	  Say Y if you want to use peripheral devices such as UART, SPI,
 	  i2c, USB, SD/eMMC, etc.
-
-config MDM_LCC_9615
-	tristate "MDM9615 LPASS Clock Controller"
-	depends on ARM || COMPILE_TEST
-	select MDM_GCC_9615
-	help
-	  Support for the LPASS clock controller on mdm9615 devices.
-	  Say Y if you want to use audio devices such as i2s, pcm,
-	  SLIMBus, etc.
 
 config MSM_MMCC_8960
 	tristate "MSM8960 Multimedia Clock Controller"
@@ -766,6 +765,14 @@ config SM_CAMCC_8450
 	  Support for the camera clock controller on SM8450 devices.
 	  Say Y if you want to support camera devices and camera functionality.
 
+config SM_CAMCC_8550
+	tristate "SM8550 Camera Clock Controller"
+	depends on ARM64 || COMPILE_TEST
+	select SM_GCC_8550
+	help
+	  Support for the camera clock controller on SM8550 devices.
+	  Say Y if you want to support camera devices and camera functionality.
+
 config SM_DISPCC_6115
 	tristate "SM6115 Display Clock Controller"
 	depends on ARM64 || COMPILE_TEST
@@ -835,6 +842,15 @@ config SM_DISPCC_8550
 	  SM8550 devices.
 	  Say Y if you want to support display devices and functionality such as
 	  splash screen.
+
+config SM_GCC_4450
+	tristate "SM4450 Global Clock Controller"
+	depends on ARM64 || COMPILE_TEST
+	select QCOM_GDSC
+	help
+	  Support for the global clock controller on SM4450 devices.
+	  Say Y if you want to use peripheral devices such as UART, SPI,
+	  I2C, USB, SD/UFS, PCIe, etc.
 
 config SM_GCC_6115
 	tristate "SM6115 and SM4250 Global Clock Controller"

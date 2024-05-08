@@ -1380,9 +1380,8 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	memcpy(page_address(fio.encrypted_page),
 				page_address(mpage), PAGE_SIZE);
 	f2fs_put_page(mpage, 1);
-	invalidate_mapping_pages(META_MAPPING(fio.sbi),
-				fio.old_blkaddr, fio.old_blkaddr);
-	f2fs_invalidate_compress_page(fio.sbi, fio.old_blkaddr);
+
+	f2fs_invalidate_internal_cache(fio.sbi, fio.old_blkaddr);
 
 	set_page_dirty(fio.encrypted_page);
 	if (clear_page_dirty_for_io(fio.encrypted_page))
@@ -1405,8 +1404,6 @@ static int move_data_block(struct inode *inode, block_t bidx,
 
 	f2fs_update_data_blkaddr(&dn, newaddr);
 	set_inode_flag(inode, FI_APPEND_WRITE);
-	if (page->index == 0)
-		set_inode_flag(inode, FI_FIRST_BLOCK_WRITTEN);
 put_page_out:
 	f2fs_put_page(fio.encrypted_page, 1);
 recover_block:
@@ -2186,12 +2183,14 @@ out_drop_write:
 	if (err)
 		return err;
 
-	err = freeze_super(sbi->sb);
+	err = freeze_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
 	if (err)
 		return err;
 
 	if (f2fs_readonly(sbi->sb)) {
-		thaw_super(sbi->sb);
+		err = thaw_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
+		if (err)
+			return err;
 		return -EROFS;
 	}
 
@@ -2246,6 +2245,6 @@ recover_out:
 out_err:
 	f2fs_up_write(&sbi->cp_global_sem);
 	f2fs_up_write(&sbi->gc_lock);
-	thaw_super(sbi->sb);
+	thaw_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
 	return err;
 }

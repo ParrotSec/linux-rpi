@@ -16,6 +16,9 @@
 
 #define MBOX_SIZE		SZ_64K
 
+#define MBOX_DOWN_MSG		1
+#define MBOX_UP_MSG		2
+
 /* AF/PF: PF initiated, PF/VF VF initiated */
 #define MBOX_DOWN_RX_START	0
 #define MBOX_DOWN_RX_SIZE	(46 * SZ_1K)
@@ -101,6 +104,7 @@ int otx2_mbox_regions_init(struct otx2_mbox *mbox, void __force **hwbase,
 			   struct pci_dev *pdev, void __force *reg_base,
 			   int direction, int ndevs, unsigned long *bmap);
 void otx2_mbox_msg_send(struct otx2_mbox *mbox, int devid);
+void otx2_mbox_msg_send_up(struct otx2_mbox *mbox, int devid);
 int otx2_mbox_wait_for_rsp(struct otx2_mbox *mbox, int devid);
 int otx2_mbox_busy_poll_for_rsp(struct otx2_mbox *mbox, int devid);
 struct mbox_msghdr *otx2_mbox_alloc_msg_rsp(struct otx2_mbox *mbox, int devid,
@@ -117,6 +121,8 @@ static inline struct mbox_msghdr *otx2_mbox_alloc_msg(struct otx2_mbox *mbox,
 {
 	return otx2_mbox_alloc_msg_rsp(mbox, devid, size, 0);
 }
+
+bool otx2_mbox_wait_for_zero(struct otx2_mbox *mbox, int devid);
 
 /* Mailbox message types */
 #define MBOX_MSG_MASK				0xFFFF
@@ -136,6 +142,7 @@ M(GET_HW_CAP,		0x008, get_hw_cap, msg_req, get_hw_cap_rsp)	\
 M(LMTST_TBL_SETUP,	0x00a, lmtst_tbl_setup, lmtst_tbl_setup_req,    \
 				msg_rsp)				\
 M(SET_VF_PERM,		0x00b, set_vf_perm, set_vf_perm, msg_rsp)	\
+M(PTP_GET_CAP,		0x00c, ptp_get_cap, msg_req, ptp_get_cap_rsp)	\
 /* CGX mbox IDs (range 0x200 - 0x3FF) */				\
 M(CGX_START_RXTX,	0x200, cgx_start_rxtx, msg_req, msg_rsp)	\
 M(CGX_STOP_RXTX,	0x201, cgx_stop_rxtx, msg_req, msg_rsp)		\
@@ -235,7 +242,7 @@ M(NPC_GET_KEX_CFG,	  0x600c, npc_get_kex_cfg,			\
 M(NPC_INSTALL_FLOW,	  0x600d, npc_install_flow,			       \
 				  npc_install_flow_req, npc_install_flow_rsp)  \
 M(NPC_DELETE_FLOW,	  0x600e, npc_delete_flow,			\
-				  npc_delete_flow_req, msg_rsp)		\
+				  npc_delete_flow_req, npc_delete_flow_rsp)		\
 M(NPC_MCAM_READ_ENTRY,	  0x600f, npc_mcam_read_entry,			\
 				  npc_mcam_read_entry_req,		\
 				  npc_mcam_read_entry_rsp)		\
@@ -1437,6 +1444,12 @@ struct npc_get_kex_cfg_rsp {
 	u8 mkex_pfl_name[MKEX_NAME_LEN];
 };
 
+struct ptp_get_cap_rsp {
+	struct mbox_msghdr hdr;
+#define        PTP_CAP_HW_ATOMIC_UPDATE BIT_ULL(0)
+	u64 cap;
+};
+
 struct flow_msg {
 	unsigned char dmac[6];
 	unsigned char smac[6];
@@ -1451,6 +1464,10 @@ struct flow_msg {
 		__be32 ip4dst;
 		__be32 ip6dst[4];
 	};
+	union {
+		__be32 spi;
+	};
+
 	u8 tos;
 	u8 ip_ver;
 	u8 ip_proto;
@@ -1461,6 +1478,13 @@ struct flow_msg {
 		u8 ip_flag;
 		u8 next_header;
 	};
+	__be16 vlan_itci;
+#define OTX2_FLOWER_MASK_MPLS_LB		GENMASK(31, 12)
+#define OTX2_FLOWER_MASK_MPLS_TC		GENMASK(11, 9)
+#define OTX2_FLOWER_MASK_MPLS_BOS		BIT(8)
+#define OTX2_FLOWER_MASK_MPLS_TTL		GENMASK(7, 0)
+#define OTX2_FLOWER_MASK_MPLS_NON_TTL		GENMASK(31, 8)
+	u32 mpls_lse[4];
 };
 
 struct npc_install_flow_req {
@@ -1491,6 +1515,8 @@ struct npc_install_flow_req {
 	u8  vtag0_op;
 	u16 vtag1_def;
 	u8  vtag1_op;
+	/* old counter value */
+	u16 cntr_val;
 };
 
 struct npc_install_flow_rsp {
@@ -1504,6 +1530,11 @@ struct npc_delete_flow_req {
 	u16 start;/*Disable range of entries */
 	u16 end;
 	u8 all; /* PF + VFs */
+};
+
+struct npc_delete_flow_rsp {
+	struct mbox_msghdr hdr;
+	u16 cntr_val;
 };
 
 struct npc_mcam_read_entry_req {
@@ -1555,7 +1586,9 @@ enum ptp_op {
 	PTP_OP_GET_CLOCK = 1,
 	PTP_OP_GET_TSTMP = 2,
 	PTP_OP_SET_THRESH = 3,
-	PTP_OP_EXTTS_ON = 4,
+	PTP_OP_PPS_ON = 4,
+	PTP_OP_ADJTIME = 5,
+	PTP_OP_SET_CLOCK = 6,
 };
 
 struct ptp_req {
@@ -1563,12 +1596,16 @@ struct ptp_req {
 	u8 op;
 	s64 scaled_ppm;
 	u64 thresh;
-	int extts_on;
+	u64 period;
+	int pps_on;
+	s64 delta;
+	u64 clk;
 };
 
 struct ptp_rsp {
 	struct mbox_msghdr hdr;
 	u64 clk;
+	u64 tsc;
 };
 
 struct npc_get_field_status_req {
@@ -1914,7 +1951,7 @@ struct mcs_hw_info {
 	u8 tcam_entries;	/* RX/TX Tcam entries per mcs block */
 	u8 secy_entries;	/* RX/TX SECY entries per mcs block */
 	u8 sc_entries;		/* RX/TX SC CAM entries per mcs block */
-	u8 sa_entries;		/* PN table entries = SA entries */
+	u16 sa_entries;		/* PN table entries = SA entries */
 	u64 rsvd[16];
 };
 

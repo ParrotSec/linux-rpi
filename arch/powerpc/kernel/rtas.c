@@ -310,8 +310,13 @@ static struct rtas_function rtas_function_table[] __ro_after_init = {
 	[RTAS_FNIDX__IBM_REMOVE_PE_DMA_WINDOW] = {
 		.name = "ibm,remove-pe-dma-window",
 	},
-	[RTAS_FNIDX__IBM_RESET_PE_DMA_WINDOWS] = {
-		.name = "ibm,reset-pe-dma-windows",
+	[RTAS_FNIDX__IBM_RESET_PE_DMA_WINDOW] = {
+		/*
+		 * Note: PAPR+ v2.13 7.3.31.4.1 spells this as
+		 * "ibm,reset-pe-dma-windows" (plural), but RTAS
+		 * implementations use the singular form in practice.
+		 */
+		.name = "ibm,reset-pe-dma-window",
 	},
 	[RTAS_FNIDX__IBM_SCAN_LOG_DUMP] = {
 		.name = "ibm,scan-log-dump",
@@ -544,6 +549,21 @@ static int __init rtas_token_to_function_xarray_init(void)
 }
 arch_initcall(rtas_token_to_function_xarray_init);
 
+/*
+ * For use by sys_rtas(), where the token value is provided by user
+ * space and we don't want to warn on failed lookups.
+ */
+static const struct rtas_function *rtas_token_to_function_untrusted(s32 token)
+{
+	return xa_load(&rtas_token_to_function_xarray, token);
+}
+
+/*
+ * Reverse lookup for deriving the function descriptor from a
+ * known-good token value in contexts where the former is not already
+ * available. @token must be valid, e.g. derived from the result of a
+ * prior lookup against the function table.
+ */
 static const struct rtas_function *rtas_token_to_function(s32 token)
 {
 	const struct rtas_function *func;
@@ -551,7 +571,7 @@ static const struct rtas_function *rtas_token_to_function(s32 token)
 	if (WARN_ONCE(token < 0, "invalid token %d", token))
 		return NULL;
 
-	func = xa_load(&rtas_token_to_function_xarray, token);
+	func = rtas_token_to_function_untrusted(token);
 
 	if (WARN_ONCE(!func, "unexpected failed lookup for token %d", token))
 		return NULL;
@@ -1330,33 +1350,34 @@ bool __ref rtas_busy_delay(int status)
 }
 EXPORT_SYMBOL_GPL(rtas_busy_delay);
 
-static int rtas_error_rc(int rtas_rc)
+int rtas_error_rc(int rtas_rc)
 {
 	int rc;
 
 	switch (rtas_rc) {
-		case -1: 		/* Hardware Error */
-			rc = -EIO;
-			break;
-		case -3:		/* Bad indicator/domain/etc */
-			rc = -EINVAL;
-			break;
-		case -9000:		/* Isolation error */
-			rc = -EFAULT;
-			break;
-		case -9001:		/* Outstanding TCE/PTE */
-			rc = -EEXIST;
-			break;
-		case -9002:		/* No usable slot */
-			rc = -ENODEV;
-			break;
-		default:
-			pr_err("%s: unexpected error %d\n", __func__, rtas_rc);
-			rc = -ERANGE;
-			break;
+	case RTAS_HARDWARE_ERROR:	/* Hardware Error */
+		rc = -EIO;
+		break;
+	case RTAS_INVALID_PARAMETER:	/* Bad indicator/domain/etc */
+		rc = -EINVAL;
+		break;
+	case -9000:			/* Isolation error */
+		rc = -EFAULT;
+		break;
+	case -9001:			/* Outstanding TCE/PTE */
+		rc = -EEXIST;
+		break;
+	case -9002:			/* No usable slot */
+		rc = -ENODEV;
+		break;
+	default:
+		pr_err("%s: unexpected error %d\n", __func__, rtas_rc);
+		rc = -ERANGE;
+		break;
 	}
 	return rc;
 }
+EXPORT_SYMBOL_GPL(rtas_error_rc);
 
 int rtas_get_power_level(int powerdomain, int *level)
 {
@@ -1587,6 +1608,7 @@ static bool ibm_extended_os_term;
 void rtas_os_term(char *str)
 {
 	s32 token = rtas_function_token(RTAS_FN_IBM_OS_TERM);
+	static struct rtas_args args;
 	int status;
 
 	/*
@@ -1607,7 +1629,8 @@ void rtas_os_term(char *str)
 	 * schedules.
 	 */
 	do {
-		status = rtas_call(token, 1, 1, NULL, __pa(rtas_os_term_buf));
+		rtas_call_unlocked(&args, token, 1, 1, NULL, __pa(rtas_os_term_buf));
+		status = be32_to_cpu(args.rets[0]);
 	} while (rtas_busy_delay_time(status));
 
 	if (status != 0)
@@ -1723,7 +1746,7 @@ static bool block_rtas_call(int token, int nargs,
 	 * If this token doesn't correspond to a function the kernel
 	 * understands, you're not allowed to call it.
 	 */
-	func = rtas_token_to_function(token);
+	func = rtas_token_to_function_untrusted(token);
 	if (!func)
 		goto err;
 	/*

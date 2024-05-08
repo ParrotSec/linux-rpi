@@ -157,7 +157,7 @@ static int die_owner = -1;
 static unsigned int die_nest_count;
 static int die_counter;
 
-extern void panic_flush_kmsg_start(void)
+void panic_flush_kmsg_start(void)
 {
 	/*
 	 * These are mostly taken from kernel/panic.c, but tries to do
@@ -170,7 +170,7 @@ extern void panic_flush_kmsg_start(void)
 	bust_spinlocks(1);
 }
 
-extern void panic_flush_kmsg_end(void)
+void panic_flush_kmsg_end(void)
 {
 	kmsg_dump(KMSG_DUMP_PANIC);
 	bust_spinlocks(0);
@@ -1158,7 +1158,7 @@ DEFINE_INTERRUPT_HANDLER(single_step_exception)
  * pretend we got a single-step exception.  This was pointed out
  * by Kumar Gala.  -- paulus
  */
-static void emulate_single_step(struct pt_regs *regs)
+void emulate_single_step(struct pt_regs *regs)
 {
 	if (single_stepping(regs))
 		__single_step_exception(regs);
@@ -1439,10 +1439,12 @@ static int emulate_instruction(struct pt_regs *regs)
 	return -EINVAL;
 }
 
+#ifdef CONFIG_GENERIC_BUG
 int is_valid_bugaddr(unsigned long addr)
 {
 	return is_kernel_addr(addr);
 }
+#endif
 
 #ifdef CONFIG_MATH_EMULATION
 static int emulate_math(struct pt_regs *regs)
@@ -2243,21 +2245,10 @@ void __noreturn unrecoverable_exception(struct pt_regs *regs)
 }
 
 #if defined(CONFIG_BOOKE_WDT) || defined(CONFIG_40x)
-/*
- * Default handler for a Watchdog exception,
- * spins until a reboot occurs
- */
-void __attribute__ ((weak)) WatchdogHandler(struct pt_regs *regs)
-{
-	/* Generic WatchdogHandler, implement your own */
-	mtspr(SPRN_TCR, mfspr(SPRN_TCR)&(~TCR_WIE));
-	return;
-}
-
 DEFINE_INTERRUPT_HANDLER_NMI(WatchdogException)
 {
 	printk (KERN_EMERG "PowerPC Book-E Watchdog Exception\n");
-	WatchdogHandler(regs);
+	mtspr(SPRN_TCR, mfspr(SPRN_TCR) & ~TCR_WIE);
 	return 0;
 }
 #endif

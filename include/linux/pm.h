@@ -463,6 +463,15 @@ const struct dev_pm_ops __maybe_unused name = { \
 	SET_RUNTIME_PM_OPS(suspend_fn, resume_fn, idle_fn) \
 }
 
+/*
+ * Use this if you want to have the suspend and resume callbacks be called
+ * with IRQs disabled.
+ */
+#define DEFINE_NOIRQ_DEV_PM_OPS(name, suspend_fn, resume_fn) \
+const struct dev_pm_ops name = { \
+	NOIRQ_SYSTEM_SLEEP_PM_OPS(suspend_fn, resume_fn) \
+}
+
 #define pm_ptr(_ptr) PTR_IF(IS_ENABLED(CONFIG_PM), (_ptr))
 #define pm_sleep_ptr(_ptr) PTR_IF(IS_ENABLED(CONFIG_PM_SLEEP), (_ptr))
 
@@ -725,6 +734,7 @@ extern void dev_pm_put_subsys_data(struct device *dev);
  * @activate: Called before executing probe routines for bus types and drivers.
  * @sync: Called after successful driver probe.
  * @dismiss: Called after unsuccessful driver probe and after driver removal.
+ * @set_performance_state: Called to request a new performance state.
  *
  * Power domains provide callbacks that are executed during system suspend,
  * hibernation, system resume and during runtime PM transitions instead of
@@ -737,6 +747,7 @@ struct dev_pm_domain {
 	int (*activate)(struct device *dev);
 	void (*sync)(struct device *dev);
 	void (*dismiss)(struct device *dev);
+	int (*set_performance_state)(struct device *dev, unsigned int state);
 };
 
 /*

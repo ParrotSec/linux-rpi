@@ -32,6 +32,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/i2c-pxa.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 
 /* I2C register field definitions */
@@ -1255,10 +1256,8 @@ static int i2c_pxa_probe_dt(struct platform_device *pdev, struct pxa_i2c *i2c,
 			    enum pxa_i2c_types *i2c_types)
 {
 	struct device_node *np = pdev->dev.of_node;
-	const struct of_device_id *of_id =
-			of_match_device(i2c_pxa_dt_ids, &pdev->dev);
 
-	if (!of_id)
+	if (!pdev->dev.of_node)
 		return 1;
 
 	/* For device tree we always use the dynamic or alias-assigned ID */
@@ -1267,7 +1266,7 @@ static int i2c_pxa_probe_dt(struct platform_device *pdev, struct pxa_i2c *i2c,
 	i2c->use_pio = of_property_read_bool(np, "mrvl,i2c-polling");
 	i2c->fast_mode = of_property_read_bool(np, "mrvl,i2c-fast-mode");
 
-	*i2c_types = (enum pxa_i2c_types)(of_id->data);
+	*i2c_types = (enum pxa_i2c_types)device_get_match_data(&pdev->dev);
 
 	return 0;
 }
@@ -1422,7 +1421,7 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	struct i2c_pxa_platform_data *plat = dev_get_platdata(&dev->dev);
 	enum pxa_i2c_types i2c_type;
 	struct pxa_i2c *i2c;
-	struct resource *res = NULL;
+	struct resource *res;
 	int ret, irq;
 
 	i2c = devm_kzalloc(&dev->dev, sizeof(struct pxa_i2c), GFP_KERNEL);
@@ -1439,8 +1438,7 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	i2c->adap.dev.of_node = dev->dev.of_node;
 #endif
 
-	res = platform_get_resource(dev, IORESOURCE_MEM, 0);
-	i2c->reg_base = devm_ioremap_resource(&dev->dev, res);
+	i2c->reg_base = devm_platform_get_and_ioremap_resource(dev, 0, &res);
 	if (IS_ERR(i2c->reg_base))
 		return PTR_ERR(i2c->reg_base);
 
@@ -1464,10 +1462,9 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	strscpy(i2c->adap.name, "pxa_i2c-i2c", sizeof(i2c->adap.name));
 
 	i2c->clk = devm_clk_get(&dev->dev, NULL);
-	if (IS_ERR(i2c->clk)) {
-		dev_err(&dev->dev, "failed to get the clk: %ld\n", PTR_ERR(i2c->clk));
-		return PTR_ERR(i2c->clk);
-	}
+	if (IS_ERR(i2c->clk))
+		return dev_err_probe(&dev->dev, PTR_ERR(i2c->clk),
+				     "failed to get the clk\n");
 
 	i2c->reg_ibmr = i2c->reg_base + pxa_reg_layout[i2c_type].ibmr;
 	i2c->reg_idbr = i2c->reg_base + pxa_reg_layout[i2c_type].idbr;
@@ -1551,7 +1548,6 @@ static void i2c_pxa_remove(struct platform_device *dev)
 	clk_disable_unprepare(i2c->clk);
 }
 
-#ifdef CONFIG_PM
 static int i2c_pxa_suspend_noirq(struct device *dev)
 {
 	struct pxa_i2c *i2c = dev_get_drvdata(dev);
@@ -1576,17 +1572,12 @@ static const struct dev_pm_ops i2c_pxa_dev_pm_ops = {
 	.resume_noirq = i2c_pxa_resume_noirq,
 };
 
-#define I2C_PXA_DEV_PM_OPS (&i2c_pxa_dev_pm_ops)
-#else
-#define I2C_PXA_DEV_PM_OPS NULL
-#endif
-
 static struct platform_driver i2c_pxa_driver = {
 	.probe		= i2c_pxa_probe,
 	.remove_new	= i2c_pxa_remove,
 	.driver		= {
 		.name	= "pxa2xx-i2c",
-		.pm	= I2C_PXA_DEV_PM_OPS,
+		.pm	= pm_sleep_ptr(&i2c_pxa_dev_pm_ops),
 		.of_match_table = i2c_pxa_dt_ids,
 	},
 	.id_table	= i2c_pxa_id_table,

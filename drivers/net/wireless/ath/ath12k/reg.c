@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include <linux/rtnetlink.h>
 #include "core.h"
@@ -103,7 +103,7 @@ int ath12k_reg_update_chan_list(struct ath12k *ar)
 
 	bands = hw->wiphy->bands;
 	for (band = 0; band < NUM_NL80211_BANDS; band++) {
-		if (!bands[band])
+		if (!(ar->mac.sbands[band].channels && bands[band]))
 			continue;
 
 		for (i = 0; i < bands[band]->n_channels; i++) {
@@ -129,7 +129,7 @@ int ath12k_reg_update_chan_list(struct ath12k *ar)
 	ch = arg->channel;
 
 	for (band = 0; band < NUM_NL80211_BANDS; band++) {
-		if (!bands[band])
+		if (!(ar->mac.sbands[band].channels && bands[band]))
 			continue;
 
 		for (i = 0; i < bands[band]->n_channels; i++) {
@@ -310,6 +310,19 @@ static u32 ath12k_map_fw_reg_flags(u16 reg_flags)
 
 	if (reg_flags & REGULATORY_CHAN_NO_160MHZ)
 		flags |= NL80211_RRF_NO_160MHZ;
+
+	return flags;
+}
+
+static u32 ath12k_map_fw_phy_flags(u32 phy_flags)
+{
+	u32 flags = 0;
+
+	if (phy_flags & ATH12K_REG_PHY_BITMAP_NO11AX)
+		flags |= NL80211_RRF_NO_HE;
+
+	if (phy_flags & ATH12K_REG_PHY_BITMAP_NO11BE)
+		flags |= NL80211_RRF_NO_EHT;
 
 	return flags;
 }
@@ -638,6 +651,7 @@ ath12k_reg_build_regd(struct ath12k_base *ab,
 		}
 
 		flags |= ath12k_map_fw_reg_flags(reg_rule->flags);
+		flags |= ath12k_map_fw_phy_flags(reg_info->phybitmap);
 
 		ath12k_reg_update_rule(tmp_regd->reg_rules + i,
 				       reg_rule->start_freq,

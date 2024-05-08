@@ -192,6 +192,9 @@ void f2fs_abort_atomic_write(struct inode *inode, bool clean)
 	if (!f2fs_is_atomic_file(inode))
 		return;
 
+	if (clean)
+		truncate_inode_pages_final(inode->i_mapping);
+
 	release_atomic_write_cnt(inode);
 	clear_inode_flag(inode, FI_ATOMIC_COMMITTED);
 	clear_inode_flag(inode, FI_ATOMIC_REPLACE);
@@ -201,7 +204,6 @@ void f2fs_abort_atomic_write(struct inode *inode, bool clean)
 	F2FS_I(inode)->atomic_write_task = NULL;
 
 	if (clean) {
-		truncate_inode_pages_final(inode->i_mapping);
 		f2fs_i_size_write(inode, fi->original_i_size);
 		fi->original_i_size = 0;
 	}
@@ -248,7 +250,7 @@ retry:
 	} else {
 		blkcnt_t count = 1;
 
-		err = inc_valid_block_count(sbi, inode, &count);
+		err = inc_valid_block_count(sbi, inode, &count, true);
 		if (err) {
 			f2fs_put_dnode(&dn);
 			return err;
@@ -2495,8 +2497,7 @@ void f2fs_invalidate_blocks(struct f2fs_sb_info *sbi, block_t addr)
 	if (addr == NEW_ADDR || addr == COMPRESS_ADDR)
 		return;
 
-	invalidate_mapping_pages(META_MAPPING(sbi), addr, addr);
-	f2fs_invalidate_compress_page(sbi, addr);
+	f2fs_invalidate_internal_cache(sbi, addr);
 
 	/* add it into sit main buffer */
 	down_write(&sit_i->sentry_lock);
@@ -3490,12 +3491,12 @@ void f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	locate_dirty_segment(sbi, GET_SEGNO(sbi, old_blkaddr));
 	locate_dirty_segment(sbi, GET_SEGNO(sbi, *new_blkaddr));
 
-	if (IS_DATASEG(type))
+	if (IS_DATASEG(curseg->seg_type))
 		atomic64_inc(&sbi->allocated_data_blocks);
 
 	up_write(&sit_i->sentry_lock);
 
-	if (page && IS_NODESEG(type)) {
+	if (page && IS_NODESEG(curseg->seg_type)) {
 		fill_node_footer_blkaddr(page, NEXT_FREE_BLKADDR(sbi, curseg));
 
 		f2fs_inode_chksum_set(sbi, page);
@@ -3557,11 +3558,8 @@ static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio)
 reallocate:
 	f2fs_allocate_data_block(fio->sbi, fio->page, fio->old_blkaddr,
 			&fio->new_blkaddr, sum, type, fio);
-	if (GET_SEGNO(fio->sbi, fio->old_blkaddr) != NULL_SEGNO) {
-		invalidate_mapping_pages(META_MAPPING(fio->sbi),
-					fio->old_blkaddr, fio->old_blkaddr);
-		f2fs_invalidate_compress_page(fio->sbi, fio->old_blkaddr);
-	}
+	if (GET_SEGNO(fio->sbi, fio->old_blkaddr) != NULL_SEGNO)
+		f2fs_invalidate_internal_cache(fio->sbi, fio->old_blkaddr);
 
 	/* writeout dirty page into bdev */
 	f2fs_submit_page_write(fio);
@@ -3655,8 +3653,7 @@ int f2fs_inplace_write_data(struct f2fs_io_info *fio)
 	}
 
 	if (fio->post_read)
-		invalidate_mapping_pages(META_MAPPING(sbi),
-				fio->new_blkaddr, fio->new_blkaddr);
+		f2fs_truncate_meta_inode_pages(sbi, fio->new_blkaddr, 1);
 
 	stat_inc_inplace_blocks(fio->sbi);
 
@@ -3757,9 +3754,7 @@ void f2fs_do_replace_block(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 		update_sit_entry(sbi, new_blkaddr, 1);
 	}
 	if (GET_SEGNO(sbi, old_blkaddr) != NULL_SEGNO) {
-		invalidate_mapping_pages(META_MAPPING(sbi),
-					old_blkaddr, old_blkaddr);
-		f2fs_invalidate_compress_page(sbi, old_blkaddr);
+		f2fs_invalidate_internal_cache(sbi, old_blkaddr);
 		if (!from_gc)
 			update_segment_mtime(sbi, old_blkaddr, 0);
 		update_sit_entry(sbi, old_blkaddr, -1);
@@ -3848,7 +3843,7 @@ void f2fs_wait_on_block_writeback_range(struct inode *inode, block_t blkaddr,
 	for (i = 0; i < len; i++)
 		f2fs_wait_on_block_writeback(inode, blkaddr + i);
 
-	invalidate_mapping_pages(META_MAPPING(sbi), blkaddr, blkaddr + len - 1);
+	f2fs_truncate_meta_inode_pages(sbi, blkaddr, len);
 }
 
 static int read_compacted_summaries(struct f2fs_sb_info *sbi)
@@ -4910,22 +4905,31 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 	}
 
 	/*
-	 * The write pointer matches with the valid blocks or
-	 * already points to the end of the zone.
+	 * When safely unmounted in the previous mount, we can trust write
+	 * pointers. Otherwise, finish zones.
 	 */
-	if ((last_valid_block + 1 == wp_block) ||
-			(zone->wp == zone->start + zone->len))
-		return 0;
+	if (is_set_ckpt_flags(sbi, CP_UMOUNT_FLAG)) {
+		/*
+		 * The write pointer matches with the valid blocks or
+		 * already points to the end of the zone.
+		 */
+		if ((last_valid_block + 1 == wp_block) ||
+				(zone->wp == zone->start + zone->len))
+			return 0;
+	}
 
 	if (last_valid_block + 1 == zone_block) {
-		/*
-		 * If there is no valid block in the zone and if write pointer
-		 * is not at zone start, reset the write pointer.
-		 */
-		f2fs_notice(sbi,
-			    "Zone without valid block has non-zero write "
-			    "pointer. Reset the write pointer: wp[0x%x,0x%x]",
-			    wp_segno, wp_blkoff);
+		if (is_set_ckpt_flags(sbi, CP_UMOUNT_FLAG)) {
+			/*
+			 * If there is no valid block in the zone and if write
+			 * pointer is not at zone start, reset the write
+			 * pointer.
+			 */
+			f2fs_notice(sbi,
+			      "Zone without valid block has non-zero write "
+			      "pointer. Reset the write pointer: wp[0x%x,0x%x]",
+			      wp_segno, wp_blkoff);
+		}
 		ret = __f2fs_issue_discard_zone(sbi, fdev->bdev, zone_block,
 					zone->len >> log_sectors_per_block);
 		if (ret)
@@ -4935,25 +4939,34 @@ static int check_zone_write_pointer(struct f2fs_sb_info *sbi,
 		return ret;
 	}
 
-	/*
-	 * If there are valid blocks and the write pointer doesn't
-	 * match with them, we need to report the inconsistency and
-	 * fill the zone till the end to close the zone. This inconsistency
-	 * does not cause write error because the zone will not be selected
-	 * for write operation until it get discarded.
-	 */
-	f2fs_notice(sbi, "Valid blocks are not aligned with write pointer: "
-		    "valid block[0x%x,0x%x] wp[0x%x,0x%x]",
-		    GET_SEGNO(sbi, last_valid_block),
-		    GET_BLKOFF_FROM_SEG0(sbi, last_valid_block),
-		    wp_segno, wp_blkoff);
+	if (is_set_ckpt_flags(sbi, CP_UMOUNT_FLAG)) {
+		/*
+		 * If there are valid blocks and the write pointer doesn't match
+		 * with them, we need to report the inconsistency and fill
+		 * the zone till the end to close the zone. This inconsistency
+		 * does not cause write error because the zone will not be
+		 * selected for write operation until it get discarded.
+		 */
+		f2fs_notice(sbi, "Valid blocks are not aligned with write "
+			    "pointer: valid block[0x%x,0x%x] wp[0x%x,0x%x]",
+			    GET_SEGNO(sbi, last_valid_block),
+			    GET_BLKOFF_FROM_SEG0(sbi, last_valid_block),
+			    wp_segno, wp_blkoff);
+	}
 
-	ret = blkdev_issue_zeroout(fdev->bdev, zone->wp,
-				zone->len - (zone->wp - zone->start),
-				GFP_NOFS, 0);
-	if (ret)
-		f2fs_err(sbi, "Fill up zone failed: %s (errno=%d)",
-			 fdev->path, ret);
+	ret = blkdev_zone_mgmt(fdev->bdev, REQ_OP_ZONE_FINISH,
+				zone->start, zone->len, GFP_NOFS);
+	if (ret == -EOPNOTSUPP) {
+		ret = blkdev_issue_zeroout(fdev->bdev, zone->wp,
+					zone->len - (zone->wp - zone->start),
+					GFP_NOFS, 0);
+		if (ret)
+			f2fs_err(sbi, "Fill up zone failed: %s (errno=%d)",
+					fdev->path, ret);
+	} else if (ret) {
+		f2fs_err(sbi, "Finishing zone failed: %s (errno=%d)",
+				fdev->path, ret);
+	}
 
 	return ret;
 }
@@ -5013,18 +5026,27 @@ static int fix_curseg_write_pointer(struct f2fs_sb_info *sbi, int type)
 	if (zone.type != BLK_ZONE_TYPE_SEQWRITE_REQ)
 		return 0;
 
-	wp_block = zbd->start_blk + (zone.wp >> log_sectors_per_block);
-	wp_segno = GET_SEGNO(sbi, wp_block);
-	wp_blkoff = wp_block - START_BLOCK(sbi, wp_segno);
-	wp_sector_off = zone.wp & GENMASK(log_sectors_per_block - 1, 0);
+	/*
+	 * When safely unmounted in the previous mount, we could use current
+	 * segments. Otherwise, allocate new sections.
+	 */
+	if (is_set_ckpt_flags(sbi, CP_UMOUNT_FLAG)) {
+		wp_block = zbd->start_blk + (zone.wp >> log_sectors_per_block);
+		wp_segno = GET_SEGNO(sbi, wp_block);
+		wp_blkoff = wp_block - START_BLOCK(sbi, wp_segno);
+		wp_sector_off = zone.wp & GENMASK(log_sectors_per_block - 1, 0);
 
-	if (cs->segno == wp_segno && cs->next_blkoff == wp_blkoff &&
-		wp_sector_off == 0)
-		return 0;
+		if (cs->segno == wp_segno && cs->next_blkoff == wp_blkoff &&
+				wp_sector_off == 0)
+			return 0;
 
-	f2fs_notice(sbi, "Unaligned curseg[%d] with write pointer: "
-		    "curseg[0x%x,0x%x] wp[0x%x,0x%x]",
-		    type, cs->segno, cs->next_blkoff, wp_segno, wp_blkoff);
+		f2fs_notice(sbi, "Unaligned curseg[%d] with write pointer: "
+			    "curseg[0x%x,0x%x] wp[0x%x,0x%x]", type, cs->segno,
+			    cs->next_blkoff, wp_segno, wp_blkoff);
+	} else {
+		f2fs_notice(sbi, "Not successfully unmounted in the previous "
+			    "mount");
+	}
 
 	f2fs_notice(sbi, "Assign new section to curseg[%d]: "
 		    "curseg[0x%x,0x%x]", type, cs->segno, cs->next_blkoff);

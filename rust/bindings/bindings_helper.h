@@ -6,11 +6,13 @@
  * Sorted alphabetically.
  */
 
+#include <kunit/test.h>
 #include <linux/errname.h>
 #include <linux/slab.h>
 #include <linux/refcount.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
+#include <linux/workqueue.h>
 
 /* `bindgen` gets confused at certain things. */
 const size_t BINDINGS_ARCH_SLAB_MINALIGN = ARCH_SLAB_MINALIGN;

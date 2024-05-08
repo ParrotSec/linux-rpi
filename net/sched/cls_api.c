@@ -1536,6 +1536,9 @@ tcf_block_playback_offloads(struct tcf_block *block, flow_setup_cb_t *cb,
 	     chain_prev = chain,
 		     chain = __tcf_get_next_chain(block, chain),
 		     tcf_chain_put(chain_prev)) {
+		if (chain->tmplt_ops && add)
+			chain->tmplt_ops->tmplt_reoffload(chain, true, cb,
+							  cb_priv);
 		for (tp = __tcf_get_next_proto(chain, NULL); tp;
 		     tp_prev = tp,
 			     tp = __tcf_get_next_proto(chain, tp),
@@ -1551,6 +1554,9 @@ tcf_block_playback_offloads(struct tcf_block *block, flow_setup_cb_t *cb,
 				goto err_playback_remove;
 			}
 		}
+		if (chain->tmplt_ops && !add)
+			chain->tmplt_ops->tmplt_reoffload(chain, false, cb,
+							  cb_priv);
 	}
 
 	return 0;
@@ -1658,6 +1664,7 @@ static inline int __tcf_classify(struct sk_buff *skb,
 				 int act_index,
 				 u32 *last_executed_chain)
 {
+	u32 orig_reason = res->drop_reason;
 #ifdef CONFIG_NET_CLS_ACT
 	const int max_reclassify_loop = 16;
 	const struct tcf_proto *first_tp;
@@ -1681,12 +1688,16 @@ reclassify:
 			 * time we got here with a cookie from hardware.
 			 */
 			if (unlikely(n->tp != tp || n->tp->chain != n->chain ||
-				     !tp->ops->get_exts))
+				     !tp->ops->get_exts)) {
+				tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 				return TC_ACT_SHOT;
+			}
 
 			exts = tp->ops->get_exts(tp, n->handle);
-			if (unlikely(!exts || n->exts != exts))
+			if (unlikely(!exts || n->exts != exts)) {
+				tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 				return TC_ACT_SHOT;
+			}
 
 			n = NULL;
 			err = tcf_exts_exec_ex(skb, exts, act_index, res);
@@ -1708,12 +1719,20 @@ reclassify:
 			goto reset;
 		}
 #endif
-		if (err >= 0)
+		if (err >= 0) {
+			/* Policy drop or drop reason is over-written by
+			 * classifiers with a bogus value(0) */
+			if (err == TC_ACT_SHOT &&
+			    res->drop_reason == SKB_NOT_DROPPED_YET)
+				tcf_set_drop_reason(res, orig_reason);
 			return err;
+		}
 	}
 
-	if (unlikely(n))
+	if (unlikely(n)) {
+		tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 		return TC_ACT_SHOT;
+	}
 
 	return TC_ACT_UNSPEC; /* signal: continue lookup */
 #ifdef CONFIG_NET_CLS_ACT
@@ -1723,6 +1742,7 @@ reset:
 				       tp->chain->block->index,
 				       tp->prio & 0xffff,
 				       ntohs(tp->protocol));
+		tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 		return TC_ACT_SHOT;
 	}
 
@@ -1759,8 +1779,10 @@ int tcf_classify(struct sk_buff *skb,
 			if (ext->act_miss) {
 				n = tcf_exts_miss_cookie_lookup(ext->act_miss_cookie,
 								&act_index);
-				if (!n)
+				if (!n) {
+					tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 					return TC_ACT_SHOT;
+				}
 
 				chain = n->chain_index;
 			} else {
@@ -1768,8 +1790,10 @@ int tcf_classify(struct sk_buff *skb,
 			}
 
 			fchain = tcf_chain_lookup_rcu(block, chain);
-			if (!fchain)
+			if (!fchain) {
+				tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 				return TC_ACT_SHOT;
+			}
 
 			/* Consume, so cloned/redirect skbs won't inherit ext */
 			skb_ext_del(skb, TC_SKB_EXT);
@@ -1788,8 +1812,11 @@ int tcf_classify(struct sk_buff *skb,
 			struct tc_skb_cb *cb = tc_skb_cb(skb);
 
 			ext = tc_skb_ext_alloc(skb);
-			if (WARN_ON_ONCE(!ext))
+			if (WARN_ON_ONCE(!ext)) {
+				tcf_set_drop_reason(res, SKB_DROP_REASON_TC_ERROR);
 				return TC_ACT_SHOT;
+			}
+
 			ext->chain = last_executed_chain;
 			ext->mru = cb->mru;
 			ext->post_ct = cb->post_ct;
@@ -2950,7 +2977,8 @@ static int tc_chain_tmplt_add(struct tcf_chain *chain, struct net *net,
 	ops = tcf_proto_lookup_ops(name, true, extack);
 	if (IS_ERR(ops))
 		return PTR_ERR(ops);
-	if (!ops->tmplt_create || !ops->tmplt_destroy || !ops->tmplt_dump) {
+	if (!ops->tmplt_create || !ops->tmplt_destroy || !ops->tmplt_dump ||
+	    !ops->tmplt_reoffload) {
 		NL_SET_ERR_MSG(extack, "Chain templates are not supported with specified classifier");
 		module_put(ops->owner);
 		return -EOPNOTSUPP;

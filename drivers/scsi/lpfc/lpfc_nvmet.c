@@ -1586,7 +1586,7 @@ lpfc_nvmet_setup_io_context(struct lpfc_hba *phba)
 		wqe = &nvmewqe->wqe;
 
 		/* Initialize WQE */
-		memset(wqe, 0, sizeof(union lpfc_wqe));
+		memset(wqe, 0, sizeof(*wqe));
 
 		ctx_buf->iocbq->cmd_dmabuf = NULL;
 		spin_lock(&phba->sli4_hba.sgl_list_lock);
@@ -1620,10 +1620,7 @@ lpfc_nvmet_setup_io_context(struct lpfc_hba *phba)
 			cpu = cpumask_first(cpu_present_mask);
 			continue;
 		}
-		cpu = cpumask_next(cpu, cpu_present_mask);
-		if (cpu == nr_cpu_ids)
-			cpu = cpumask_first(cpu_present_mask);
-
+		cpu = lpfc_next_present_cpu(cpu);
 	}
 
 	for_each_present_cpu(i) {

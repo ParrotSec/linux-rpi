@@ -16,7 +16,6 @@
 #include "backref.h"
 #include "extent_io.h"
 #include "dev-replace.h"
-#include "check-integrity.h"
 #include "raid56.h"
 #include "block-group.h"
 #include "zoned.h"
@@ -24,6 +23,7 @@
 #include "accessors.h"
 #include "file-item.h"
 #include "scrub.h"
+#include "raid-stripe-tree.h"
 
 /*
  * This is only the first step towards a full-features scrub. It reads all
@@ -897,7 +897,7 @@ static void scrub_stripe_report_errors(struct scrub_ctx *sctx,
 		ASSERT(stripe->mirror_num >= 1);
 		ret = btrfs_map_block(fs_info, BTRFS_MAP_GET_READ_MIRRORS,
 				      stripe->logical, &mapped_len, &bioc,
-				      NULL, NULL, 1);
+				      NULL, NULL);
 		/*
 		 * If we failed, dev will be NULL, and later detailed reports
 		 * will just be skipped.
@@ -990,6 +990,9 @@ skip:
 	spin_unlock(&sctx->stat_lock);
 }
 
+static void scrub_write_sectors(struct scrub_ctx *sctx, struct scrub_stripe *stripe,
+				unsigned long write_bitmap, bool dev_replace);
+
 /*
  * The main entrance for all read related scrub work, including:
  *
@@ -998,13 +1001,16 @@ skip:
  * - Go through the remaining mirrors and try to read as large blocksize as
  *   possible
  * - Go through all mirrors (including the failed mirror) sector-by-sector
+ * - Submit writeback for repaired sectors
  *
- * Writeback does not happen here, it needs extra synchronization.
+ * Writeback for dev-replace does not happen here, it needs extra
+ * synchronization for zoned devices.
  */
 static void scrub_stripe_read_repair_worker(struct work_struct *work)
 {
 	struct scrub_stripe *stripe = container_of(work, struct scrub_stripe, work);
-	struct btrfs_fs_info *fs_info = stripe->bg->fs_info;
+	struct scrub_ctx *sctx = stripe->sctx;
+	struct btrfs_fs_info *fs_info = sctx->fs_info;
 	int num_copies = btrfs_num_copies(fs_info, stripe->bg->start,
 					  stripe->bg->length);
 	int mirror;
@@ -1069,7 +1075,23 @@ static void scrub_stripe_read_repair_worker(struct work_struct *work)
 			goto out;
 	}
 out:
-	scrub_stripe_report_errors(stripe->sctx, stripe);
+	/*
+	 * Submit the repaired sectors.  For zoned case, we cannot do repair
+	 * in-place, but queue the bg to be relocated.
+	 */
+	if (btrfs_is_zoned(fs_info)) {
+		if (!bitmap_empty(&stripe->error_bitmap, stripe->nr_sectors))
+			btrfs_repair_one_zone(fs_info, sctx->stripes[0].bg->start);
+	} else if (!sctx->readonly) {
+		unsigned long repaired;
+
+		bitmap_andnot(&repaired, &stripe->init_error_bitmap,
+			      &stripe->error_bitmap, stripe->nr_sectors);
+		scrub_write_sectors(sctx, stripe, repaired, false);
+		wait_scrub_stripe_io(stripe);
+	}
+
+	scrub_stripe_report_errors(sctx, stripe);
 	set_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state);
 	wake_up(&stripe->repair_wait);
 }
@@ -1077,12 +1099,22 @@ out:
 static void scrub_read_endio(struct btrfs_bio *bbio)
 {
 	struct scrub_stripe *stripe = bbio->private;
+	struct bio_vec *bvec;
+	int sector_nr = calc_sector_number(stripe, bio_first_bvec_all(&bbio->bio));
+	int num_sectors;
+	u32 bio_size = 0;
+	int i;
+
+	ASSERT(sector_nr < stripe->nr_sectors);
+	bio_for_each_bvec_all(bvec, &bbio->bio, i)
+		bio_size += bvec->bv_len;
+	num_sectors = bio_size >> stripe->bg->fs_info->sectorsize_bits;
 
 	if (bbio->bio.bi_status) {
-		bitmap_set(&stripe->io_error_bitmap, 0, stripe->nr_sectors);
-		bitmap_set(&stripe->error_bitmap, 0, stripe->nr_sectors);
+		bitmap_set(&stripe->io_error_bitmap, sector_nr, num_sectors);
+		bitmap_set(&stripe->error_bitmap, sector_nr, num_sectors);
 	} else {
-		bitmap_clear(&stripe->io_error_bitmap, 0, stripe->nr_sectors);
+		bitmap_clear(&stripe->io_error_bitmap, sector_nr, num_sectors);
 	}
 	bio_put(&bbio->bio);
 	if (atomic_dec_and_test(&stripe->pending_io)) {
@@ -1282,7 +1314,6 @@ static int get_raid56_logic_offset(u64 physical, int num,
 
 		/* Work out the disk rotation on this stripe-set */
 		rot = stripe_nr % map->num_stripes;
-		stripe_nr /= map->num_stripes;
 		/* calculate which stripe this data locates */
 		rot += i;
 		stripe_index = rot % map->num_stripes;
@@ -1614,28 +1645,103 @@ static void scrub_reset_stripe(struct scrub_stripe *stripe)
 	}
 }
 
+static void scrub_submit_extent_sector_read(struct scrub_ctx *sctx,
+					    struct scrub_stripe *stripe)
+{
+	struct btrfs_fs_info *fs_info = stripe->bg->fs_info;
+	struct btrfs_bio *bbio = NULL;
+	u64 stripe_len = BTRFS_STRIPE_LEN;
+	int mirror = stripe->mirror_num;
+	int i;
+
+	atomic_inc(&stripe->pending_io);
+
+	for_each_set_bit(i, &stripe->extent_sector_bitmap, stripe->nr_sectors) {
+		struct page *page = scrub_stripe_get_page(stripe, i);
+		unsigned int pgoff = scrub_stripe_get_page_offset(stripe, i);
+
+		/* The current sector cannot be merged, submit the bio. */
+		if (bbio &&
+		    ((i > 0 &&
+		      !test_bit(i - 1, &stripe->extent_sector_bitmap)) ||
+		     bbio->bio.bi_iter.bi_size >= stripe_len)) {
+			ASSERT(bbio->bio.bi_iter.bi_size);
+			atomic_inc(&stripe->pending_io);
+			btrfs_submit_bio(bbio, mirror);
+			bbio = NULL;
+		}
+
+		if (!bbio) {
+			struct btrfs_io_stripe io_stripe = {};
+			struct btrfs_io_context *bioc = NULL;
+			const u64 logical = stripe->logical +
+					    (i << fs_info->sectorsize_bits);
+			int err;
+
+			bbio = btrfs_bio_alloc(stripe->nr_sectors, REQ_OP_READ,
+					       fs_info, scrub_read_endio, stripe);
+			bbio->bio.bi_iter.bi_sector = logical >> SECTOR_SHIFT;
+
+			io_stripe.is_scrub = true;
+			err = btrfs_map_block(fs_info, BTRFS_MAP_READ, logical,
+					      &stripe_len, &bioc, &io_stripe,
+					      &mirror);
+			btrfs_put_bioc(bioc);
+			if (err) {
+				btrfs_bio_end_io(bbio,
+						 errno_to_blk_status(err));
+				return;
+			}
+		}
+
+		__bio_add_page(&bbio->bio, page, fs_info->sectorsize, pgoff);
+	}
+
+	if (bbio) {
+		ASSERT(bbio->bio.bi_iter.bi_size);
+		atomic_inc(&stripe->pending_io);
+		btrfs_submit_bio(bbio, mirror);
+	}
+
+	if (atomic_dec_and_test(&stripe->pending_io)) {
+		wake_up(&stripe->io_wait);
+		INIT_WORK(&stripe->work, scrub_stripe_read_repair_worker);
+		queue_work(stripe->bg->fs_info->scrub_workers, &stripe->work);
+	}
+}
+
 static void scrub_submit_initial_read(struct scrub_ctx *sctx,
 				      struct scrub_stripe *stripe)
 {
 	struct btrfs_fs_info *fs_info = sctx->fs_info;
 	struct btrfs_bio *bbio;
+	unsigned int nr_sectors = min(BTRFS_STRIPE_LEN, stripe->bg->start +
+				      stripe->bg->length - stripe->logical) >>
+				  fs_info->sectorsize_bits;
 	int mirror = stripe->mirror_num;
 
 	ASSERT(stripe->bg);
 	ASSERT(stripe->mirror_num > 0);
 	ASSERT(test_bit(SCRUB_STRIPE_FLAG_INITIALIZED, &stripe->state));
 
+	if (btrfs_need_stripe_tree_update(fs_info, stripe->bg->flags)) {
+		scrub_submit_extent_sector_read(sctx, stripe);
+		return;
+	}
+
 	bbio = btrfs_bio_alloc(SCRUB_STRIPE_PAGES, REQ_OP_READ, fs_info,
 			       scrub_read_endio, stripe);
 
-	/* Read the whole stripe. */
 	bbio->bio.bi_iter.bi_sector = stripe->logical >> SECTOR_SHIFT;
-	for (int i = 0; i < BTRFS_STRIPE_LEN >> PAGE_SHIFT; i++) {
+	/* Read the whole range inside the chunk boundary. */
+	for (unsigned int cur = 0; cur < nr_sectors; cur++) {
+		struct page *page = scrub_stripe_get_page(stripe, cur);
+		unsigned int pgoff = scrub_stripe_get_page_offset(stripe, cur);
 		int ret;
 
-		ret = bio_add_page(&bbio->bio, stripe->pages[i], PAGE_SIZE, 0);
+		ret = bio_add_page(&bbio->bio, page, fs_info->sectorsize, pgoff);
 		/* We should have allocated enough bio vectors. */
-		ASSERT(ret == PAGE_SIZE);
+		ASSERT(ret == fs_info->sectorsize);
 	}
 	atomic_inc(&stripe->pending_io);
 
@@ -1719,32 +1825,6 @@ static int flush_scrub_stripes(struct scrub_ctx *sctx)
 
 		wait_event(stripe->repair_wait,
 			   test_bit(SCRUB_STRIPE_FLAG_REPAIR_DONE, &stripe->state));
-	}
-
-	/*
-	 * Submit the repaired sectors.  For zoned case, we cannot do repair
-	 * in-place, but queue the bg to be relocated.
-	 */
-	if (btrfs_is_zoned(fs_info)) {
-		for (int i = 0; i < nr_stripes; i++) {
-			stripe = &sctx->stripes[i];
-
-			if (!bitmap_empty(&stripe->error_bitmap, stripe->nr_sectors)) {
-				btrfs_repair_one_zone(fs_info,
-						      sctx->stripes[0].bg->start);
-				break;
-			}
-		}
-	} else if (!sctx->readonly) {
-		for (int i = 0; i < nr_stripes; i++) {
-			unsigned long repaired;
-
-			stripe = &sctx->stripes[i];
-
-			bitmap_andnot(&repaired, &stripe->init_error_bitmap,
-				      &stripe->error_bitmap, stripe->nr_sectors);
-			scrub_write_sectors(sctx, stripe, repaired, false);
-		}
 	}
 
 	/* Submit for dev-replace. */
@@ -1921,24 +2001,6 @@ static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 	/* For now, no zoned support for RAID56. */
 	ASSERT(!btrfs_is_zoned(sctx->fs_info));
 
-	/* Writeback for the repaired sectors. */
-	for (int i = 0; i < data_stripes; i++) {
-		unsigned long repaired;
-
-		stripe = &sctx->raid56_data_stripes[i];
-
-		bitmap_andnot(&repaired, &stripe->init_error_bitmap,
-			      &stripe->error_bitmap, stripe->nr_sectors);
-		scrub_write_sectors(sctx, stripe, repaired, false);
-	}
-
-	/* Wait for the above writebacks to finish. */
-	for (int i = 0; i < data_stripes; i++) {
-		stripe = &sctx->raid56_data_stripes[i];
-
-		wait_scrub_stripe_io(stripe);
-	}
-
 	/*
 	 * Now all data stripes are properly verified. Check if we have any
 	 * unrepaired, if so abort immediately or we could further corrupt the
@@ -1977,7 +2039,7 @@ static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 
 	btrfs_bio_counter_inc_blocked(fs_info);
 	ret = btrfs_map_block(fs_info, BTRFS_MAP_WRITE, full_stripe_start,
-			      &length, &bioc, NULL, NULL, 1);
+			      &length, &bioc, NULL, NULL);
 	if (ret < 0) {
 		btrfs_put_bioc(bioc);
 		btrfs_bio_counter_dec(fs_info);
@@ -2027,16 +2089,12 @@ static int scrub_simple_mirror(struct scrub_ctx *sctx,
 {
 	struct btrfs_fs_info *fs_info = sctx->fs_info;
 	const u64 logical_end = logical_start + logical_length;
-	/* An artificial limit, inherit from old scrub behavior */
-	struct btrfs_path path = { 0 };
 	u64 cur_logical = logical_start;
 	int ret;
 
 	/* The range must be inside the bg */
 	ASSERT(logical_start >= bg->start && logical_end <= bg->start + bg->length);
 
-	path.search_commit_root = 1;
-	path.skip_locking = 1;
 	/* Go through each extent items inside the logical range */
 	while (cur_logical < logical_end) {
 		u64 found_logical = U64_MAX;
@@ -2081,7 +2139,6 @@ static int scrub_simple_mirror(struct scrub_ctx *sctx,
 		/* Don't hold CPU for too long time */
 		cond_resched();
 	}
-	btrfs_release_path(&path);
 	return ret;
 }
 
@@ -2749,10 +2806,20 @@ static noinline_for_stack int scrub_supers(struct scrub_ctx *sctx,
 	if (scrub_dev->fs_devices != fs_info->fs_devices)
 		gen = scrub_dev->generation;
 	else
-		gen = fs_info->last_trans_committed;
+		gen = btrfs_get_last_trans_committed(fs_info);
 
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
-		bytenr = btrfs_sb_offset(i);
+		ret = btrfs_sb_log_location(scrub_dev, i, 0, &bytenr);
+		if (ret == -ENOENT)
+			break;
+
+		if (ret) {
+			spin_lock(&sctx->stat_lock);
+			sctx->stat.super_errors++;
+			spin_unlock(&sctx->stat_lock);
+			continue;
+		}
+
 		if (bytenr + BTRFS_SUPER_INFO_SIZE >
 		    scrub_dev->commit_total_bytes)
 			break;
@@ -2787,8 +2854,7 @@ static void scrub_workers_put(struct btrfs_fs_info *fs_info)
 /*
  * get a reference count on fs_info->scrub_workers. start worker if necessary
  */
-static noinline_for_stack int scrub_workers_get(struct btrfs_fs_info *fs_info,
-						int is_dev_replace)
+static noinline_for_stack int scrub_workers_get(struct btrfs_fs_info *fs_info)
 {
 	struct workqueue_struct *scrub_workers = NULL;
 	unsigned int flags = WQ_FREEZABLE | WQ_UNBOUND;
@@ -2798,10 +2864,7 @@ static noinline_for_stack int scrub_workers_get(struct btrfs_fs_info *fs_info,
 	if (refcount_inc_not_zero(&fs_info->scrub_workers_refcnt))
 		return 0;
 
-	if (is_dev_replace)
-		scrub_workers = alloc_ordered_workqueue("btrfs-scrub", flags);
-	else
-		scrub_workers = alloc_workqueue("btrfs-scrub", flags, max_active);
+	scrub_workers = alloc_workqueue("btrfs-scrub", flags, max_active);
 	if (!scrub_workers)
 		return -ENOMEM;
 
@@ -2853,7 +2916,7 @@ int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
 	if (IS_ERR(sctx))
 		return PTR_ERR(sctx);
 
-	ret = scrub_workers_get(fs_info, is_dev_replace);
+	ret = scrub_workers_get(fs_info);
 	if (ret)
 		goto out_free_ctx;
 

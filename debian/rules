@@ -1,11 +1,11 @@
 #!/usr/bin/make -f
 
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/pkg-info.mk
+
+DEB_VERSION_SOURCE = $(shell echo '$(DEB_VERSION)' | sed -re 's/\+b([0-9]+)$$//')
+
 SHELL    := sh -e
-SOURCE := $(shell dpkg-parsechangelog -SSource)
-VERSION := $(shell dpkg-parsechangelog -SVersion)
-VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
-VERSION_BINNMU := $(shell echo "$(VERSION)" | sed -rne 's,.*\+b([0-9]+)$$,\1,p')
-VERSION_SOURCE := $(patsubst %+b$(VERSION_BINNMU),%,$(VERSION))
 
 include debian/rules.defs
 
@@ -75,12 +75,12 @@ binary-indep: build-indep
 	dh_testdir
 	$(MAKE) -f debian/rules.gen binary-indep
 
-DIR_ORIG = ../orig/$(SOURCE)-$(VERSION_UPSTREAM)
-TAR_ORIG_NAME = $(SOURCE)_$(VERSION_UPSTREAM).orig.tar.xz
+DIR_ORIG = ../orig/$(DEB_SOURCE)-$(DEB_VERSION_EPOCH_UPSTREAM)
+TAR_ORIG_NAME = $(DEB_SOURCE)_$(DEB_VERSION_EPOCH_UPSTREAM).orig.tar.xz
 TAR_ORIG = $(firstword $(wildcard ../$(TAR_ORIG_NAME)) $(wildcard ../orig/$(TAR_ORIG_NAME)))
 
 orig: $(DIR_ORIG)
-	rsync --delete --exclude /debian --exclude .svk --exclude .svn --exclude .git --link-dest=$(DIR_ORIG)/ -a $(DIR_ORIG)/ .
+	rsync --delete --exclude /debian --exclude .git --link-dest=$(DIR_ORIG)/ -a $(DIR_ORIG)/ .
 	QUILT_PATCHES='$(CURDIR)/debian/patches' QUILT_PC=.pc quilt push --quiltrc - -a -q --fuzz=0
 
 $(DIR_ORIG):
@@ -96,9 +96,8 @@ CLEAN_PATTERNS := $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_linux/*.py
 maintainerclean:
 	rm -rf $(CLEAN_PATTERNS)
 # We cannot use dh_clean here because it requires debian/control to exist
-	rm -rf debian/.debhelper debian/*.debhelper* debian/files
+	rm -rf debian/.debhelper debian/*.debhelper* debian/files debian/generated.*
 	rm -f \
-		debian/config.defines.dump \
 		debian/control \
 		debian/control.md5sum \
 		debian/linux-doc.maintscript \
@@ -115,7 +114,7 @@ maintainerclean:
 		debian/linux-source.maintscript \
 		debian/rules.gen \
 		debian/tests/control
-	rm -rf $(filter-out debian .svk .svn .git, $(wildcard * .[^.]*))
+	rm -rf $(filter-out debian .git, $(wildcard * .[^.]*))
 
 clean: debian/control
 	dh_testdir
@@ -123,8 +122,8 @@ clean: debian/control
 	dh_clean
 
 CONTROL_FILES = $(BUILD_DIR)/version-info $(wildcard debian/templates/*.in)
-CONTROL_FILES += debian/config/defines $(wildcard debian/config/*/defines) $(wildcard debian/config/*/*/defines)
-CONTROL_FILES += debian/installer/kernel-versions debian/installer/package-list
+CONTROL_FILES += debian/config/defines.toml $(wildcard debian/config/*/defines.toml)
+CONTROL_FILES += debian/installer/package-list
 
 # debian/bin/gencontrol.py uses debian/changelog as input, but the
 # output only depends on the source name and version.  To avoid
@@ -132,7 +131,8 @@ CONTROL_FILES += debian/installer/kernel-versions debian/installer/package-list
 # in the checksum.
 $(BUILD_DIR)/version-info: debian/changelog
 	mkdir -p $(@D)
-	printf >$@ 'Source: %s\nVersion: %s\n' $(SOURCE) $(VERSION_SOURCE)
+# Use DEB_VERSION_SOURCE to allow binNMU
+	printf >$@ 'Source: %s\nVersion: %s\n' $(DEB_SOURCE) $(DEB_VERSION)
 
 debian/control debian/rules.gen: debian/bin/gencontrol.py $(CONTROL_FILES)
 ifeq ($(wildcard debian/control.md5sum),)

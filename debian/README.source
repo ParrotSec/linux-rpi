@@ -114,33 +114,33 @@ number of files under debian/config and (if it exists)
 debian/config.local.  They are read in the following order, such that
 files later on the list can override settings from earlier files.
 Files in debian/config.local can also override settings from the
-corresponding file in debian/config.  Most of the files are optional
-and the filenames can generally be overridden by explicit lists
-(possibly empty) specified in the 'defines' files.
+corresponding file in debian/config.
 
 1. Common:
    - Default filename: config
-   - Filename list: [image]configs in defines
+   - Filename list: [build.config]
 2. Per kernel architecture:
-   - Filename: kernelarch-<karch>/config (optional)
-3. Per architecture:
+   - Default filename: kernelarch-<karch>/config
+   - Filename list: [kernelarch.build.config]
+3. Per Debian architecture:
    - Default filename: <arch>/config
-   - Filename list: [image]configs in <arch>/defines
-4. Per architecture and flavour:
-   - Default filename: <arch>/config.<flavour> (optional)
-   - Filename list: [<flavour>_image]configs in <arch>/defines
+   - Filename list: [kernelarch.debianarch.build.config]
+4. Per Debian architecture and flavour:
+   - Default filename: <arch>/config.<flavour>
+   - Filename list: [kernelarch.debianarch.flavour.build.config]
 5. Per featureset:
-   - Default filename: featureset-<fset>/config (optional)
-   - Filename list: [image]configs in featureset-<fset>/defines
-6. Per architecture and featureset:
-   - Default filename: <arch>/<fset>/config (optional)
-   - Filename list: [image]configs in <arch>/<fset>/defines
-7. Per architecture, featureset, and flavour:
-   - Default filename: <arch>/<fset>/config.<flavour> (optional)
-   - Filename list: [<flavour>_image]configs in <arch>/<fset>/defines
+   - Default filename: featureset-<fset>/config
+   - Filename list: [featureset.build.config]
+6. Per Debian architecture and featureset:
+   - Default filename: <arch>/<fset>/config
+   - Filename list: [kernelarch.debianarch.featureset.build.config]
+7. Per Debian architecture, featureset, and flavour:
+   - Default filename: <arch>/<fset>/config.<flavour>
+   - Filename list:
+     [kernelarch.debianarch.featureset.flavour.build.config]
 
 You can check the final list of configuration files by reading
-debian/rules.gen.  Each binary-arch_<arch>_<fset>_<flavour>_real
+debian/rules.gen.  Each binary-arch_<arch>_<fset>_<flavour>_image
 rule passes the list to debian/rules.real as the KCONFIG variable.
 
 These files should be kept in order using the kconfigeditor2
@@ -159,7 +159,7 @@ The master control file debian/control must be generated before
 the package is uploaded. debian/rules contains the debian/control 
 target, which generates the control file by invoking the 
 debian/bin/gencontrol.py script, which combines the templates from
-the templates directory and architecture-specific defines file to
+the templates directory and architecture-specific defines.toml file to
 produce the debian/control file. Note that this target is intentionally
 made to fail with a non-zero exit code to make sure that it is never
 run during an automatic build. The following variables are substituted
@@ -177,10 +177,9 @@ into the templates:
 	       this is unset, it will default to @class@.
 @desc@         (Potentially) multi-line verbiage that's appended to
                -image descriptions.
-@abiname@      Current abiname, a single digit.
 
 Normally, the arch-specific contents should be controlled by
-adjusting the corresponding defines file.
+adjusting the corresponding defines.toml file.
 
 Build-dependencies that relate to specific binary packages can be
 specified in a Build-Depends field in the template for that binary
@@ -224,15 +223,12 @@ Build profiles
 
 Several build profiles are understood and supported:
 
-- stage1: Needed when bootstrapping an architecture.  A stage1 build
-  produces only the linux-libc-dev package and has no host
-  build-dependencies.
 - nodoc: Exclude most documentation
 - noudeb: Exclude installer udeb packages
 - pkg.linux.notools: Exclude userland tool packages (linux-kbuild-<version>,
   linux-perf, etc.)
 - pkg.linux.mintools: Build minimal set of userland tool packages
-  (linux-kbuild-<version>, linux-bootwrapper-<abiname> on powerpc/ppc64)
+  (linux-kbuild-<version>)
 - pkg.linux.nokernel: Exclude kernel image and header packages
 - pkg.linux.nokerneldbg: Exclude kernel debug packages
 - pkg.linux.nokerneldbginfo: Build kernel without debug symbols (also disables
@@ -241,8 +237,8 @@ Several build profiles are understood and supported:
 - cross: Needed when cross-building.
 - nopython: Disable Python bindings.  This currently disables building the
   linux-perf-<version> package, as the perf program embeds Python.
-- pkg.linux.nometa: Exclude most meta-packages.  The linux-compiler-* and
-  linux-headers-*-all* packages can still be built.
+- pkg.linux.nometa: Exclude most meta-packages.  The linux-headers-*-all*
+  packages can still be built.
 - pkg.linux.quick: Perform a limited build that should provide good
   coverage yet be quick enough for use in CI.
 

@@ -1,7 +1,7 @@
 Subject: x86: Allow to enable RT
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Wed Aug  7 18:15:38 2019 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -22,6 +22,6 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	select ARCH_SUPPORTS_INT128 if CC_HAS_INT128
  	select ARCH_SUPPORTS_PER_VMA_LOCK
 +	select ARCH_SUPPORTS_RT
- 	select ARCH_USE_CMPXCHG_LOCKREF
  	select HAVE_ARCH_SOFT_DIRTY
  	select MODULES_USE_ELF_RELA
+ 	select NEED_DMA_MAP_STATE

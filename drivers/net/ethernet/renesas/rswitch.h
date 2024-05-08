@@ -20,7 +20,7 @@
 		else
 
 #define rswitch_for_each_enabled_port_continue_reverse(priv, i)	\
-	for (i--; i >= 0; i--)					\
+	for (; i-- > 0; )					\
 		if (priv->rdev[i]->disabled)			\
 			continue;				\
 		else
@@ -1015,6 +1015,7 @@ struct rswitch_private {
 	spinlock_t lock;	/* lock interrupt registers' control */
 	struct clk *clk;
 
+	bool etha_no_runtime_change;
 	bool gwca_halt;
 };
 

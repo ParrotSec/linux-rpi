@@ -99,8 +99,6 @@ mkdir $patchdir/test
 rm -rf debian/config.local
 mkdir debian/config.local debian/config.local/"$arch" debian/config.local/"$arch"/"$featureset"
 cat >debian/config.local/defines <<EOF
-[abi]
-abiname: 0.a.test
 EOF
 cat >debian/config.local/"$arch"/defines <<EOF
 [base]

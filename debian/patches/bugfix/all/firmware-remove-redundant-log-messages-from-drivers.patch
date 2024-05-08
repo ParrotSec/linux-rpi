@@ -11,7 +11,7 @@ upstream submission.
 
 --- a/arch/x86/kernel/cpu/microcode/amd.c
 +++ b/arch/x86/kernel/cpu/microcode/amd.c
-@@ -909,10 +909,8 @@ static enum ucode_state request_microcod
+@@ -894,10 +894,8 @@ static enum ucode_state request_microcod
  	if (c->x86 >= 0x15)
  		snprintf(fw_name, sizeof(fw_name), "amd-ucode/microcode_amd_fam%.2xh.bin", c->x86);
  
@@ -22,7 +22,7 @@ upstream submission.
 -	}
  
  	ret = UCODE_ERROR;
- 	if (!verify_container(fw->data, fw->size, false))
+ 	if (!verify_container(fw->data, fw->size))
 --- a/drivers/atm/fore200e.c
 +++ b/drivers/atm/fore200e.c
 @@ -2398,10 +2398,9 @@ static int fore200e_load_and_start_fw(st
@@ -147,7 +147,7 @@ upstream submission.
  		       fw->size, fw_name);
 --- a/drivers/dma/imx-sdma.c
 +++ b/drivers/dma/imx-sdma.c
-@@ -1934,11 +1934,8 @@ static void sdma_load_firmware(const str
+@@ -1933,11 +1933,8 @@ static void sdma_load_firmware(const str
  	const struct sdma_script_start_addrs *addr;
  	unsigned short *ram_code;
  
@@ -162,7 +162,7 @@ upstream submission.
  		goto err_firmware;
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/gr/gf100.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/engine/gr/gf100.c
-@@ -2567,10 +2567,8 @@ gf100_gr_load_fw(struct gf100_gr *gr, co
+@@ -2579,10 +2579,8 @@ gf100_gr_load_fw(struct gf100_gr *gr, co
  	if (ret) {
  		snprintf(f, sizeof(f), "nouveau/%s", name);
  		ret = request_firmware(&fw, f, device->dev);
@@ -334,7 +334,7 @@ upstream submission.
  	if (!state->microcode) {
 --- a/drivers/media/dvb-frontends/drxk_hard.c
 +++ b/drivers/media/dvb-frontends/drxk_hard.c
-@@ -6247,10 +6247,6 @@ static void load_firmware_cb(const struc
+@@ -6228,10 +6228,6 @@ static void load_firmware_cb(const struc
  
  	dprintk(1, ": %s\n", fw ? "firmware loaded" : "firmware not loaded");
  	if (!fw) {
@@ -499,7 +499,7 @@ upstream submission.
  
 --- a/drivers/media/pci/bt8xx/bttv-cards.c
 +++ b/drivers/media/pci/bt8xx/bttv-cards.c
-@@ -3901,10 +3901,8 @@ static int pvr_boot(struct bttv *btv)
+@@ -3902,10 +3902,8 @@ static int pvr_boot(struct bttv *btv)
  	int rc;
  
  	rc = request_firmware(&fw_entry, "hcwamc.rbf", &btv->c.pci->dev);
@@ -644,7 +644,7 @@ upstream submission.
  	}
 --- a/drivers/media/pci/saa7164/saa7164-fw.c
 +++ b/drivers/media/pci/saa7164/saa7164-fw.c
-@@ -406,11 +406,8 @@ int saa7164_downloadfirmware(struct saa7
+@@ -405,11 +405,8 @@ int saa7164_downloadfirmware(struct saa7
  			__func__, fwname);
  
  		ret = request_firmware(&fw, fwname, &dev->pci->dev);
@@ -712,7 +712,7 @@ upstream submission.
  	}
 --- a/drivers/media/usb/cx231xx/cx231xx-417.c
 +++ b/drivers/media/usb/cx231xx/cx231xx-417.c
-@@ -983,11 +983,6 @@ static int cx231xx_load_firmware(struct
+@@ -982,11 +982,6 @@ static int cx231xx_load_firmware(struct
  				  dev->dev);
  
  	if (retval != 0) {
@@ -799,7 +799,7 @@ upstream submission.
  	if (!buf) {
 --- a/drivers/media/usb/dvb-usb/opera1.c
 +++ b/drivers/media/usb/dvb-usb/opera1.c
-@@ -454,8 +454,6 @@ static int opera1_xilinx_load_firmware(s
+@@ -459,8 +459,6 @@ static int opera1_xilinx_load_firmware(s
  	info("start downloading fpga firmware %s",filename);
  
  	if ((ret = request_firmware(&fw, filename, &dev->dev)) != 0) {
@@ -953,7 +953,7 @@ upstream submission.
  	firmware_size = fw_entry->size;
 --- a/drivers/misc/ti-st/st_kim.c
 +++ b/drivers/misc/ti-st/st_kim.c
-@@ -295,11 +295,8 @@ static long download_firmware(struct kim
+@@ -288,11 +288,8 @@ static long download_firmware(struct kim
  	    request_firmware(&kim_gdata->fw_entry, bts_scr_name,
  			     &kim_gdata->kim_pdev->dev);
  	if (unlikely((err != 0) || (kim_gdata->fw_entry->data == NULL) ||
@@ -1090,7 +1090,7 @@ upstream submission.
  	if (bp->mips_firmware->size < sizeof(*mips_fw) ||
 --- a/drivers/net/ethernet/broadcom/tg3.c
 +++ b/drivers/net/ethernet/broadcom/tg3.c
-@@ -11392,11 +11392,8 @@ static int tg3_request_firmware(struct t
+@@ -11474,11 +11474,8 @@ static int tg3_request_firmware(struct t
  {
  	const struct tg3_firmware_hdr *fw_hdr;
  
@@ -1281,7 +1281,7 @@ upstream submission.
  	fwh = (struct at76_fw_header *)(fwe->fw->data);
 --- a/drivers/net/wireless/atmel/atmel.c
 +++ b/drivers/net/wireless/atmel/atmel.c
-@@ -3892,12 +3892,8 @@ static int reset_atmel_card(struct net_d
+@@ -3820,12 +3820,8 @@ static int reset_atmel_card(struct net_d
  					strcpy(priv->firmware_id, "atmel_at76c502.bin");
  				}
  				err = request_firmware(&fw_entry, priv->firmware_id, priv->sys_dev);
@@ -1359,7 +1359,7 @@ upstream submission.
  	}
 --- a/drivers/net/wireless/intel/ipw2x00/ipw2100.c
 +++ b/drivers/net/wireless/intel/ipw2x00/ipw2100.c
-@@ -8359,12 +8359,8 @@ static int ipw2100_get_firmware(struct i
+@@ -8354,12 +8354,8 @@ static int ipw2100_get_firmware(struct i
  
  	rc = request_firmware(&fw->fw_entry, fw_name, &priv->pci_dev->dev);
  
@@ -1375,7 +1375,7 @@ upstream submission.
  
 --- a/drivers/net/wireless/intel/ipw2x00/ipw2200.c
 +++ b/drivers/net/wireless/intel/ipw2x00/ipw2200.c
-@@ -3365,10 +3365,8 @@ static int ipw_get_fw(struct ipw_priv *p
+@@ -3350,10 +3350,8 @@ static int ipw_get_fw(struct ipw_priv *p
  
  	/* ask firmware_class module to get the boot firmware off disk */
  	rc = request_firmware(raw, name, &priv->pci_dev->dev);
@@ -1399,7 +1399,7 @@ upstream submission.
  			else
 --- a/drivers/net/wireless/intel/iwlwifi/iwl-drv.c
 +++ b/drivers/net/wireless/intel/iwlwifi/iwl-drv.c
-@@ -241,8 +241,6 @@ static int iwl_request_firmware(struct i
+@@ -249,8 +249,6 @@ static int iwl_request_firmware(struct i
  		drv->fw_index--;
  
  	if (drv->fw_index < cfg->ucode_api_min) {
@@ -1744,7 +1744,7 @@ upstream submission.
  	}
 --- a/drivers/scsi/ipr.c
 +++ b/drivers/scsi/ipr.c
-@@ -4009,10 +4009,8 @@ static ssize_t ipr_store_update_fw(struc
+@@ -4013,10 +4013,8 @@ static ssize_t ipr_store_update_fw(struc
  	if (endline)
  		*endline = '\0';
  
@@ -1770,7 +1770,7 @@ upstream submission.
  	}
 --- a/drivers/scsi/qla1280.c
 +++ b/drivers/scsi/qla1280.c
-@@ -1504,8 +1504,6 @@ qla1280_request_firmware(struct scsi_qla
+@@ -1506,8 +1506,6 @@ qla1280_request_firmware(struct scsi_qla
  	err = request_firmware(&fw, fwname, &ha->pdev->dev);
  
  	if (err) {
@@ -1781,7 +1781,7 @@ upstream submission.
  	}
 --- a/drivers/scsi/qla2xxx/qla_init.c
 +++ b/drivers/scsi/qla2xxx/qla_init.c
-@@ -8495,10 +8495,6 @@ qla2x00_load_risc(scsi_qla_host_t *vha,
+@@ -8560,10 +8560,6 @@ qla2x00_load_risc(scsi_qla_host_t *vha,
  	/* Load firmware blob. */
  	blob = qla2x00_request_firmware(vha);
  	if (!blob) {
@@ -1792,7 +1792,7 @@ upstream submission.
  		return QLA_FUNCTION_FAILED;
  	}
  
-@@ -8601,9 +8597,6 @@ qla24xx_load_risc_blob(scsi_qla_host_t *
+@@ -8666,9 +8662,6 @@ qla24xx_load_risc_blob(scsi_qla_host_t *
  
  	blob = qla2x00_request_firmware(vha);
  	if (!blob) {
@@ -1819,7 +1819,7 @@ upstream submission.
  	if (qla82xx_validate_firmware_blob(vha,
 --- a/drivers/scsi/qla2xxx/qla_os.c
 +++ b/drivers/scsi/qla2xxx/qla_os.c
-@@ -7670,8 +7670,6 @@ qla2x00_request_firmware(scsi_qla_host_t
+@@ -7697,8 +7697,6 @@ qla2x00_request_firmware(scsi_qla_host_t
  		goto out;
  
  	if (request_firmware(&blob->fw, blob->name, &ha->pdev->dev)) {
@@ -1843,20 +1843,6 @@ upstream submission.
  	if (fw->size % 2) {
  		printk(KERN_ERR "Bogus length %zu in image \"%s\"\n",
  		       fw->size, fwname);
---- a/drivers/staging/rtl8192u/r819xU_firmware.c
-+++ b/drivers/staging/rtl8192u/r819xU_firmware.c
-@@ -240,10 +240,8 @@ bool init_firmware(struct net_device *de
- 		 */
- 		if (rst_opt == OPT_SYSTEM_RESET) {
- 			rc = request_firmware(&fw_entry, fw_name[init_step], &priv->udev->dev);
--			if (rc < 0) {
--				RT_TRACE(COMP_ERR, "request firmware fail!\n");
-+			if (rc)
- 				goto download_firmware_fail;
--			}
- 
- 			if (fw_entry->size > sizeof(pfirmware->firmware_buf)) {
- 				RT_TRACE(COMP_ERR, "img file size exceed the container buffer fail!\n");
 --- a/drivers/staging/rtl8712/hal_init.c
 +++ b/drivers/staging/rtl8712/hal_init.c
 @@ -72,8 +72,6 @@ int rtl871x_load_fw(struct _adapter *pad
@@ -2136,7 +2122,7 @@ upstream submission.
  	if ((fw_entry->size < 8*1024) || (fw_entry->size > 64*1024)) {
 --- a/drivers/video/fbdev/metronomefb.c
 +++ b/drivers/video/fbdev/metronomefb.c
-@@ -679,10 +679,8 @@ static int metronomefb_probe(struct plat
+@@ -621,10 +621,8 @@ static int metronomefb_probe(struct plat
  		a) request the waveform file from userspace
  		b) process waveform and decode into metromem */
  	retval = request_firmware(&fw_entry, "metronome.wbf", &dev->dev);
@@ -2197,7 +2183,7 @@ upstream submission.
  
  	release_firmware(init_fw);
 @@ -560,11 +558,8 @@ static int sscape_upload_microcode(struc
- 	snprintf(name, sizeof(name), "sndscape.co%d", version);
+ 	scnprintf(name, sizeof(name), "sndscape.co%d", version);
  
  	err = request_firmware(&init_fw, name, card->dev);
 -	if (err < 0) {
@@ -2236,7 +2222,7 @@ upstream submission.
  	if (firmware->size < sizeof(header)) {
 --- a/sound/pci/cs46xx/cs46xx_lib.c
 +++ b/sound/pci/cs46xx/cs46xx_lib.c
-@@ -3199,11 +3199,8 @@ int snd_cs46xx_start_dsp(struct snd_cs46
+@@ -3196,11 +3196,8 @@ int snd_cs46xx_start_dsp(struct snd_cs46
  #ifdef CONFIG_SND_CS46XX_NEW_DSP
  	for (i = 0; i < CS46XX_DSP_MODULES; i++) {
  		err = load_firmware(chip, &chip->modules[i], module_names[i]);
@@ -2266,7 +2252,7 @@ upstream submission.
  	return err;
 --- a/sound/pci/emu10k1/emu10k1_main.c
 +++ b/sound/pci/emu10k1/emu10k1_main.c
-@@ -846,10 +846,8 @@ static int snd_emu10k1_emu1010_init(stru
+@@ -864,10 +864,8 @@ static int snd_emu10k1_emu1010_init(stru
  	dev_info(emu->card->dev, "emu1010: EMU_HANA_ID = 0x%x\n", reg);
  
  	err = snd_emu1010_load_firmware(emu, 0, &emu->firmware);
@@ -2280,7 +2266,7 @@ upstream submission.
  	snd_emu1010_fpga_read(emu, EMU_HANA_ID, &reg);
 --- a/sound/pci/hda/hda_intel.c
 +++ b/sound/pci/hda/hda_intel.c
-@@ -2052,8 +2052,6 @@ static void azx_firmware_cb(const struct
+@@ -2034,8 +2034,6 @@ static void azx_firmware_cb(const struct
  
  	if (fw)
  		chip->fw = fw;
@@ -2291,7 +2277,7 @@ upstream submission.
  		azx_probe_continue(chip);
 --- a/sound/pci/korg1212/korg1212.c
 +++ b/sound/pci/korg1212/korg1212.c
-@@ -2258,7 +2258,6 @@ static int snd_korg1212_create(struct sn
+@@ -2232,7 +2232,6 @@ static int snd_korg1212_create(struct sn
  
  	err = request_firmware(&dsp_code, "korg/k1212.dsp", &pci->dev);
  	if (err < 0) {
@@ -2347,7 +2333,7 @@ upstream submission.
  	if (err) {
 --- a/sound/pci/rme9652/hdsp.c
 +++ b/sound/pci/rme9652/hdsp.c
-@@ -5201,11 +5201,8 @@ static int hdsp_request_fw_loader(struct
+@@ -5171,11 +5171,8 @@ static int hdsp_request_fw_loader(struct
  		return -EINVAL;
  	}
  

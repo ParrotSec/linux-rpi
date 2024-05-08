@@ -269,6 +269,7 @@ CONFIG_CPUFREQ_DT_PLATDEV=y
 ## file: drivers/cpufreq/Kconfig.arm
 ##
 CONFIG_ARM_IMX6Q_CPUFREQ=m
+CONFIG_ARM_IMX_CPUFREQ_DT=m
 CONFIG_ARM_RASPBERRYPI_CPUFREQ=m
 CONFIG_ARM_TEGRA20_CPUFREQ=y
 
@@ -515,6 +516,11 @@ CONFIG_DRM_TEGRA_STAGING=y
 CONFIG_DRM_TILCDC=m
 
 ##
+## file: drivers/gpu/drm/tiny/Kconfig
+##
+CONFIG_DRM_PANEL_MIPI_DBI=m
+
+##
 ## file: drivers/gpu/host1x/Kconfig
 ##
 CONFIG_TEGRA_HOST1X=m
@@ -636,6 +642,7 @@ CONFIG_TWL4030_MADC=m
 ## file: drivers/input/keyboard/Kconfig
 ##
 CONFIG_KEYBOARD_GPIO=y
+CONFIG_KEYBOARD_TCA8418=m
 CONFIG_KEYBOARD_IMX=m
 CONFIG_KEYBOARD_TEGRA=m
 CONFIG_KEYBOARD_SUN4I_LRADC=m
@@ -1062,6 +1069,11 @@ CONFIG_MDIO_SUN4I=y
 CONFIG_MDIO_ASPEED=m
 
 ##
+## file: drivers/net/phy/Kconfig
+##
+CONFIG_ADIN_PHY=m
+
+##
 ## file: drivers/net/wireless/broadcom/brcm80211/brcmfmac/Kconfig
 ##
 CONFIG_BRCMFMAC=m
@@ -1205,6 +1217,16 @@ CONFIG_OLPC_XO175=y
 CONFIG_OLPC_XO175_EC=m
 
 ##
+## file: drivers/pmdomain/bcm/Kconfig
+##
+CONFIG_RASPBERRYPI_POWER=y
+
+##
+## file: drivers/pmdomain/rockchip/Kconfig
+##
+CONFIG_ROCKCHIP_PM_DOMAINS=y
+
+##
 ## file: drivers/power/reset/Kconfig
 ##
 CONFIG_POWER_RESET=y
@@ -1343,15 +1365,9 @@ CONFIG_ASPEED_LPC_SNOOP=m
 CONFIG_ASPEED_P2A_CTRL=m
 
 ##
-## file: drivers/soc/bcm/Kconfig
-##
-CONFIG_RASPBERRYPI_POWER=y
-
-##
 ## file: drivers/soc/rockchip/Kconfig
 ##
 CONFIG_ROCKCHIP_IODOMAIN=m
-CONFIG_ROCKCHIP_PM_DOMAINS=y
 
 ##
 ## file: drivers/soc/tegra/Kconfig
@@ -1395,7 +1411,6 @@ CONFIG_STAGING_MEDIA=y
 ## file: drivers/staging/media/imx/Kconfig
 ##
 CONFIG_VIDEO_IMX_MEDIA=m
-CONFIG_VIDEO_IMX_CSI=m
 
 ##
 ## file: drivers/staging/media/rkvdec/Kconfig
@@ -1698,6 +1713,7 @@ CONFIG_SND_SOC_EUKREA_TLV320=m
 CONFIG_SND_SOC_IMX_ES8328=m
 CONFIG_SND_SOC_IMX_SGTL5000=m
 CONFIG_SND_SOC_IMX_SPDIF=m
+CONFIG_SND_SOC_FSL_ASOC_CARD=m
 
 ##
 ## file: sound/soc/generic/Kconfig

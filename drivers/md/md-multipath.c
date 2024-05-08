@@ -107,6 +107,7 @@ static bool multipath_make_request(struct mddev *mddev, struct bio * bio)
 	    && md_flush_request(mddev, bio))
 		return true;
 
+	md_account_bio(mddev, &bio);
 	mp_bh = mempool_alloc(&conf->pool, GFP_NOIO);
 
 	mp_bh->master_bio = bio;
@@ -257,15 +258,6 @@ static int multipath_remove_disk(struct mddev *mddev, struct md_rdev *rdev)
 			goto abort;
 		}
 		p->rdev = NULL;
-		if (!test_bit(RemoveSynchronized, &rdev->flags)) {
-			synchronize_rcu();
-			if (atomic_read(&rdev->nr_pending)) {
-				/* lost the race, try later */
-				err = -EBUSY;
-				p->rdev = rdev;
-				goto abort;
-			}
-		}
 		err = md_integrity_register(mddev);
 	}
 abort:

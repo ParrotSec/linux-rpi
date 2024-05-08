@@ -425,7 +425,10 @@ mwifiex_regrdwr_write(struct file *file,
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	sscanf(buf, "%u %x %x", &reg_type, &reg_offset, &reg_value);
+	if (sscanf(buf, "%u %x %x", &reg_type, &reg_offset, &reg_value) != 3) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	if (reg_type == 0 || reg_offset == 0) {
 		ret = -EINVAL;
@@ -691,7 +694,10 @@ mwifiex_rdeeprom_write(struct file *file,
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	sscanf(buf, "%d %d", &offset, &bytes);
+	if (sscanf(buf, "%d %d", &offset, &bytes) != 2) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	if (offset == -1 || bytes == -1) {
 		ret = -EINVAL;
@@ -963,9 +969,6 @@ mwifiex_dev_debugfs_init(struct mwifiex_private *priv)
 
 	priv->dfs_dev_dir = debugfs_create_dir(priv->netdev->name,
 					       mwifiex_dfs_dir);
-
-	if (!priv->dfs_dev_dir)
-		return;
 
 	MWIFIEX_DFS_ADD_FILE(info);
 	MWIFIEX_DFS_ADD_FILE(debug);

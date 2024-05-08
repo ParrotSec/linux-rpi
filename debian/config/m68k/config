@@ -346,11 +346,6 @@ CONFIG_MAC_EMUMOUSEBTN=m
 # CONFIG_MTD is not set
 
 ##
-## file: drivers/net/appletalk/Kconfig
-##
-CONFIG_DEV_APPLETALK=m
-
-##
 ## file: drivers/net/arcnet/Kconfig
 ##
 # CONFIG_ARCNET is not set
@@ -553,13 +548,6 @@ CONFIG_SERIAL_8250_RUNTIME_UARTS=4
 ##
 ## file: drivers/video/fbdev/Kconfig
 ##
-# CONFIG_FIRMWARE_EDID is not set
-CONFIG_FB_FOREIGN_ENDIAN=y
-## choice: Choice endianness support
-CONFIG_FB_BOTH_ENDIAN=y
-## end choice
-# CONFIG_FB_MODE_HELPERS is not set
-# CONFIG_FB_TILEBLITTING is not set
 CONFIG_FB_CIRRUS=y
 CONFIG_FB_PM2=m
 CONFIG_FB_AMIGA=y
@@ -576,6 +564,17 @@ CONFIG_FB_ATY=y
 # CONFIG_FB_ATY_BACKLIGHT is not set
 # CONFIG_FB_VIRTUAL is not set
 # CONFIG_FB_METRONOME is not set
+
+##
+## file: drivers/video/fbdev/core/Kconfig
+##
+# CONFIG_FIRMWARE_EDID is not set
+CONFIG_FB_FOREIGN_ENDIAN=y
+## choice: Choice endianness support
+CONFIG_FB_BOTH_ENDIAN=y
+## end choice
+# CONFIG_FB_MODE_HELPERS is not set
+# CONFIG_FB_TILEBLITTING is not set
 
 ##
 ## file: drivers/video/logo/Kconfig

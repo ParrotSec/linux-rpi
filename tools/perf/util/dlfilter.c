@@ -52,8 +52,10 @@ static void al_to_d_al(struct addr_location *al, struct perf_dlfilter_al *d_al)
 		d_al->sym_end = sym->end;
 		if (al->addr < sym->end)
 			d_al->symoff = al->addr - sym->start;
-		else
+		else if (al->map)
 			d_al->symoff = al->addr - map__start(al->map) - sym->start;
+		else
+			d_al->symoff = 0;
 		d_al->sym_binding = sym->binding;
 	} else {
 		d_al->sym = NULL;
@@ -187,6 +189,8 @@ static __s32 dlfilter__resolve_address(void *ctx, __u64 address, struct perf_dlf
 
 	if (has_priv(d_al_p))
 		d_al_p->priv = memdup(&al, sizeof(al));
+	else /* Avoid leak for v0 API */
+		addr_location__exit(&al);
 
 	return 0;
 }

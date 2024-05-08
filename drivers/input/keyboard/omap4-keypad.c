@@ -341,16 +341,9 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct omap4_keypad *keypad_data;
 	struct input_dev *input_dev;
-	struct resource *res;
 	unsigned int max_keys;
 	int irq;
 	int error;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "no base address specified\n");
-		return -EINVAL;
-	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -370,7 +363,7 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 	if (error)
 		return error;
 
-	keypad_data->base = devm_ioremap_resource(dev, res);
+	keypad_data->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(keypad_data->base))
 		return PTR_ERR(keypad_data->base);
 
@@ -468,11 +461,9 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int omap4_keypad_remove(struct platform_device *pdev)
+static void omap4_keypad_remove(struct platform_device *pdev)
 {
 	dev_pm_clear_wake_irq(&pdev->dev);
-
-	return 0;
 }
 
 static const struct of_device_id omap_keypad_dt_match[] = {
@@ -483,7 +474,7 @@ MODULE_DEVICE_TABLE(of, omap_keypad_dt_match);
 
 static struct platform_driver omap4_keypad_driver = {
 	.probe		= omap4_keypad_probe,
-	.remove		= omap4_keypad_remove,
+	.remove_new	= omap4_keypad_remove,
 	.driver		= {
 		.name	= "omap4-keypad",
 		.of_match_table = omap_keypad_dt_match,

@@ -566,11 +566,6 @@ CONFIG_XEN_NETDEV_FRONTEND=m
 # CONFIG_FUJITSU_ES is not set
 
 ##
-## file: drivers/net/appletalk/Kconfig
-##
-# CONFIG_ATALK is not set
-
-##
 ## file: drivers/net/arcnet/Kconfig
 ##
 # CONFIG_ARCNET is not set
@@ -1544,6 +1539,11 @@ CONFIG_KERNEL_LZ4=y
 ## file: net/9p/Kconfig
 ##
 # CONFIG_NET_9P is not set
+
+##
+## file: net/appletalk/Kconfig
+##
+# CONFIG_ATALK is not set
 
 ##
 ## file: net/atm/Kconfig

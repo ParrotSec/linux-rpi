@@ -4,7 +4,6 @@ Source: https://www.kernel.org/pub/linux/kernel/
 Files-Excluded: Documentation/netlabel/draft-ietf-cipso-ipsecurity-01.txt
  arch/powerpc/platforms/8xx/micropatch.c
  drivers/media/usb/dvb-usb/af9005-script.h
- drivers/net/appletalk/cops*
  drivers/video/fbdev/nvidia
  drivers/video/fbdev/riva
 Comment:

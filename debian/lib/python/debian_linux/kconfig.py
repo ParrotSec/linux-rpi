@@ -1,3 +1,4 @@
+from typing import Iterable
 from collections import OrderedDict
 
 __all__ = (
@@ -8,25 +9,25 @@ __all__ = (
 class KConfigEntry(object):
     __slots__ = 'name', 'value', 'comments'
 
-    def __init__(self, name, value, comments=None):
+    def __init__(self, name, value, comments=None) -> None:
         self.name, self.value = name, value
         self.comments = comments or []
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return self.name == other.name and self.value == other.value
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.name) | hash(self.value)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return ('<{}({!r}, {!r}, {!r})>'
                 .format(self.__class__.__name__, self.name, self.value,
                         self.comments))
 
-    def __str__(self):
+    def __str__(self) -> str:
         return 'CONFIG_{}={}'.format(self.name, self.value)
 
-    def write(self):
+    def write(self) -> Iterable[str]:
         for comment in self.comments:
             yield '#. ' + comment
         yield str(self)
@@ -39,7 +40,7 @@ class KConfigEntryTristate(KConfigEntry):
     VALUE_YES = True
     VALUE_MOD = object()
 
-    def __init__(self, name, value, comments=None):
+    def __init__(self, name, value, comments=None) -> None:
         if value == 'n' or value is None:
             value = self.VALUE_NO
         elif value == 'y':
@@ -50,7 +51,7 @@ class KConfigEntryTristate(KConfigEntry):
             raise NotImplementedError
         super(KConfigEntryTristate, self).__init__(name, value, comments)
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.value is self.VALUE_MOD:
             return 'CONFIG_{}=m'.format(self.name)
         if self.value:
@@ -58,14 +59,14 @@ class KConfigEntryTristate(KConfigEntry):
         return '# CONFIG_{} is not set'.format(self.name)
 
 
-class KconfigFile(OrderedDict):
-    def __str__(self):
+class KconfigFile(OrderedDict[str, KConfigEntry]):
+    def __str__(self) -> str:
         ret = []
         for i in self.str_iter():
             ret.append(i)
         return '\n'.join(ret) + '\n'
 
-    def read(self, f):
+    def read(self, f) -> None:
         for line in iter(f.readlines()):
             line = line.strip()
             if line.startswith("CONFIG_"):
@@ -81,13 +82,12 @@ class KconfigFile(OrderedDict):
             else:
                 raise RuntimeError("Can't recognize %s" % line)
 
-    def set(self, key, value):
+    def set(self, key, value) -> None:
         if value in ('y', 'm', 'n'):
-            entry = KConfigEntryTristate(key, value)
+            self[key] = KConfigEntryTristate(key, value)
         else:
-            entry = KConfigEntry(key, value)
-        self[key] = entry
+            self[key] = KConfigEntry(key, value)
 
-    def str_iter(self):
+    def str_iter(self) -> Iterable[str]:
         for key, value in self.items():
             yield str(value)

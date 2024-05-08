@@ -226,6 +226,11 @@ static int set_device_name(struct led_netdev_data *trigger_data,
 
 	cancel_delayed_work_sync(&trigger_data->work);
 
+	/*
+	 * Take RTNL lock before trigger_data lock to prevent potential
+	 * deadlock with netdev notifier registration.
+	 */
+	rtnl_lock();
 	mutex_lock(&trigger_data->lock);
 
 	if (trigger_data->net_dev) {
@@ -245,16 +250,14 @@ static int set_device_name(struct led_netdev_data *trigger_data,
 	trigger_data->carrier_link_up = false;
 	trigger_data->link_speed = SPEED_UNKNOWN;
 	trigger_data->duplex = DUPLEX_UNKNOWN;
-	if (trigger_data->net_dev != NULL) {
-		rtnl_lock();
+	if (trigger_data->net_dev)
 		get_device_state(trigger_data);
-		rtnl_unlock();
-	}
 
 	trigger_data->last_activity = 0;
 
 	set_baseline_state(trigger_data);
 	mutex_unlock(&trigger_data->lock);
+	rtnl_unlock();
 
 	return 0;
 }
@@ -459,12 +462,12 @@ static int netdev_trig_notify(struct notifier_block *nb,
 	trigger_data->duplex = DUPLEX_UNKNOWN;
 	switch (evt) {
 	case NETDEV_CHANGENAME:
-		get_device_state(trigger_data);
-		fallthrough;
 	case NETDEV_REGISTER:
 		dev_put(trigger_data->net_dev);
 		dev_hold(dev);
 		trigger_data->net_dev = dev;
+		if (evt == NETDEV_CHANGENAME)
+			get_device_state(trigger_data);
 		break;
 	case NETDEV_UNREGISTER:
 		dev_put(trigger_data->net_dev);
@@ -564,15 +567,17 @@ static int netdev_trig_activate(struct led_classdev *led_cdev)
 	/* Check if hw control is active by default on the LED.
 	 * Init already enabled mode in hw control.
 	 */
-	if (supports_hw_control(led_cdev) &&
-	    !led_cdev->hw_control_get(led_cdev, &mode)) {
+	if (supports_hw_control(led_cdev)) {
 		dev = led_cdev->hw_control_get_device(led_cdev);
 		if (dev) {
 			const char *name = dev_name(dev);
 
 			set_device_name(trigger_data, name, strlen(name));
 			trigger_data->hw_control = true;
-			trigger_data->mode = mode;
+
+			rc = led_cdev->hw_control_get(led_cdev, &mode);
+			if (!rc)
+				trigger_data->mode = mode;
 		}
 	}
 
@@ -593,6 +598,8 @@ static void netdev_trig_deactivate(struct led_classdev *led_cdev)
 
 	cancel_delayed_work_sync(&trigger_data->work);
 
+	led_set_brightness(led_cdev, LED_OFF);
+
 	dev_put(trigger_data->net_dev);
 
 	kfree(trigger_data);
@@ -605,18 +612,7 @@ static struct led_trigger netdev_led_trigger = {
 	.groups = netdev_trig_groups,
 };
 
-static int __init netdev_trig_init(void)
-{
-	return led_trigger_register(&netdev_led_trigger);
-}
-
-static void __exit netdev_trig_exit(void)
-{
-	led_trigger_unregister(&netdev_led_trigger);
-}
-
-module_init(netdev_trig_init);
-module_exit(netdev_trig_exit);
+module_led_trigger(netdev_led_trigger);
 
 MODULE_AUTHOR("Ben Whitten <ben.whitten@gmail.com>");
 MODULE_AUTHOR("Oliver Jowett <oliver@opencloud.com>");

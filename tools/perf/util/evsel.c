@@ -49,6 +49,7 @@
 #include "off_cpu.h"
 #include "pmu.h"
 #include "pmus.h"
+#include "rlimit.h"
 #include "../perf-sys.h"
 #include "util/parse-branch-options.h"
 #include "util/bpf-filter.h"
@@ -845,6 +846,7 @@ static void __evsel__config_callchain(struct evsel *evsel, struct record_opts *o
 {
 	bool function = evsel__is_function_event(evsel);
 	struct perf_event_attr *attr = &evsel->core.attr;
+	const char *arch = perf_env__arch(evsel__env(evsel));
 
 	evsel__set_sample_bit(evsel, CALLCHAIN);
 
@@ -877,8 +879,9 @@ static void __evsel__config_callchain(struct evsel *evsel, struct record_opts *o
 		if (!function) {
 			evsel__set_sample_bit(evsel, REGS_USER);
 			evsel__set_sample_bit(evsel, STACK_USER);
-			if (opts->sample_user_regs && DWARF_MINIMAL_REGS != PERF_REGS_MASK) {
-				attr->sample_regs_user |= DWARF_MINIMAL_REGS;
+			if (opts->sample_user_regs &&
+			    DWARF_MINIMAL_REGS(arch) != arch__user_reg_mask()) {
+				attr->sample_regs_user |= DWARF_MINIMAL_REGS(arch);
 				pr_warning("WARNING: The use of --call-graph=dwarf may require all the user registers, "
 					   "specifying a subset with --user-regs may render DWARF unwinding unreliable, "
 					   "so the minimal registers set (IP, SP) is explicitly forced.\n");
@@ -1474,6 +1477,7 @@ void evsel__exit(struct evsel *evsel)
 	perf_thread_map__put(evsel->core.threads);
 	zfree(&evsel->group_name);
 	zfree(&evsel->name);
+	zfree(&evsel->filter);
 	zfree(&evsel->pmu_name);
 	zfree(&evsel->group_pmu_name);
 	zfree(&evsel->unit);
@@ -1986,33 +1990,6 @@ bool evsel__detect_missing_features(struct evsel *evsel)
 	}
 }
 
-bool evsel__increase_rlimit(enum rlimit_action *set_rlimit)
-{
-	int old_errno;
-	struct rlimit l;
-
-	if (*set_rlimit < INCREASED_MAX) {
-		old_errno = errno;
-
-		if (getrlimit(RLIMIT_NOFILE, &l) == 0) {
-			if (*set_rlimit == NO_CHANGE) {
-				l.rlim_cur = l.rlim_max;
-			} else {
-				l.rlim_cur = l.rlim_max + 1000;
-				l.rlim_max = l.rlim_cur;
-			}
-			if (setrlimit(RLIMIT_NOFILE, &l) == 0) {
-				(*set_rlimit) += 1;
-				errno = old_errno;
-				return true;
-			}
-		}
-		errno = old_errno;
-	}
-
-	return false;
-}
-
 static int evsel__open_cpu(struct evsel *evsel, struct perf_cpu_map *cpus,
 		struct perf_thread_map *threads,
 		int start_cpu_map_idx, int end_cpu_map_idx)
@@ -2140,7 +2117,7 @@ try_fallback:
 	 * perf stat needs between 5 and 22 fds per CPU. When we run out
 	 * of them try to increase the limits.
 	 */
-	if (err == -EMFILE && evsel__increase_rlimit(&set_rlimit))
+	if (err == -EMFILE && rlimit__increase_nofile(&set_rlimit))
 		goto retry_open;
 
 	if (err != -EINVAL || idx > 0 || thread > 0)
@@ -2363,7 +2340,6 @@ int evsel__parse_sample(struct evsel *evsel, union perf_event *event,
 	data->period = evsel->core.attr.sample_period;
 	data->cpumode = event->header.misc & PERF_RECORD_MISC_CPUMODE_MASK;
 	data->misc    = event->header.misc;
-	data->id = -1ULL;
 	data->data_src = PERF_MEM_DATA_SRC_NONE;
 	data->vcpu = -1;
 
@@ -2763,6 +2739,11 @@ struct tep_format_field *evsel__field(struct evsel *evsel, const char *name)
 	return tep_find_field(evsel->tp_format, name);
 }
 
+struct tep_format_field *evsel__common_field(struct evsel *evsel, const char *name)
+{
+	return tep_find_common_field(evsel->tp_format, name);
+}
+
 void *evsel__rawptr(struct evsel *evsel, struct perf_sample *sample, const char *name)
 {
 	struct tep_format_field *field = evsel__field(evsel, name);
@@ -2826,11 +2807,16 @@ u64 evsel__intval(struct evsel *evsel, struct perf_sample *sample, const char *n
 {
 	struct tep_format_field *field = evsel__field(evsel, name);
 
-	if (!field)
-		return 0;
+	return field ? format_field__intval(field, sample, evsel->needs_swap) : 0;
+}
+
+u64 evsel__intval_common(struct evsel *evsel, struct perf_sample *sample, const char *name)
+{
+	struct tep_format_field *field = evsel__common_field(evsel, name);
 
 	return field ? format_field__intval(field, sample, evsel->needs_swap) : 0;
 }
+
 #endif
 
 bool evsel__fallback(struct evsel *evsel, int err, char *msg, size_t msgsize)

@@ -90,7 +90,7 @@
 			no-map;
 
 			qcom,client-id = <1>;
-			qcom,vmid = <15>;
+			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 		};
 		rmtfs_upper_guard: rmtfs-upper-guard@f5d01000 {
 			no-map;
@@ -485,13 +485,13 @@
 };
 
 &q6afedai {
-	qi2s@22 {
-		reg = <22>;
+	dai@22 {
+		reg = <QUATERNARY_MI2S_RX>;
 		qcom,sd-lines = <1>;
 	};
 
-	qi2s@23 {
-		reg = <23>;
+	dai@23 {
+		reg = <QUATERNARY_MI2S_TX>;
 		qcom,sd-lines = <0>;
 	};
 };

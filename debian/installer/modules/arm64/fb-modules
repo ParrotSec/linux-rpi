@@ -20,6 +20,9 @@ sun8i-mixer
 # For panel/backlight on Pinebook Pro
 pwm-rockchip
 
+# For HDMI on some sunxi platforms (e.g. Orange Pi 1+)
+sun8i-drm-hdmi
+
 # For HDMI on some rockchip platforms (e.g. rock64-rk3328)
 nvmem-rockchip-efuse
 phy-rockchip-inno-hdmi

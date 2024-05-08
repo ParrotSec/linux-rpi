@@ -8,12 +8,11 @@ $DISTRIBUTION_OFFICIAL_BUILD, $DISTRIBUTOR and $DISTRIBUTION_VERSION
 are set.
 ---
  Makefile                      | 15 ++++++++++++++-
- arch/ia64/kernel/process.c    |  5 +++--
  arch/powerpc/kernel/process.c |  6 ++++--
  arch/x86/um/sysrq_64.c        |  6 ++++--
  kernel/hung_task.c            |  6 ++++--
  lib/dump_stack.c              |  6 ++++--
- 6 files changed, 33 insertions(+), 11 deletions(-)
+ 5 files changed, 30 insertions(+), 9 deletions(-)
 
 --- a/Makefile
 +++ b/Makefile
@@ -54,28 +53,6 @@ are set.
  PHONY += headerdep
  headerdep:
  	$(Q)find $(srctree)/include/ -name '*.h' | xargs --max-args 1 \
---- a/arch/ia64/kernel/process.c
-+++ b/arch/ia64/kernel/process.c
-@@ -35,6 +35,7 @@
- #include <linux/utsname.h>
- #include <linux/resume_user_mode.h>
- #include <linux/rcupdate.h>
-+#include <generated/package.h>
- 
- #include <asm/cpu.h>
- #include <asm/delay.h>
-@@ -102,9 +103,9 @@ show_regs (struct pt_regs *regs)
- 	print_modules();
- 	printk("\n");
- 	show_regs_print_info(KERN_DEFAULT);
--	printk("psr : %016lx ifs : %016lx ip  : [<%016lx>]    %s (%s)\n",
-+	printk("psr : %016lx ifs : %016lx ip  : [<%016lx>]    %s (%s%s)\n",
- 	       regs->cr_ipsr, regs->cr_ifs, ip, print_tainted(),
--	       init_utsname()->release);
-+	       init_utsname()->release, LINUX_PACKAGE_ID);
- 	printk("ip is at %pS\n", (void *)ip);
- 	printk("unat: %016lx pfs : %016lx rsc : %016lx\n",
- 	       regs->ar_unat, regs->ar_pfs, regs->ar_rsc);
 --- a/arch/powerpc/kernel/process.c
 +++ b/arch/powerpc/kernel/process.c
 @@ -38,6 +38,7 @@

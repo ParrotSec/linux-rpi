@@ -21,9 +21,6 @@ CONFIG_NUMA_EMU=y
 CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS=y
 CONFIG_X86_SGX=y
 CONFIG_EFI_MIXED=y
-CONFIG_KEXEC_FILE=y
-CONFIG_KEXEC_SIG=y
-CONFIG_KEXEC_BZIMAGE_VERIFY_SIG=y
 CONFIG_RANDOMIZE_MEMORY=y
 ## choice: vsyscall table for legacy applications
 CONFIG_LEGACY_VSYSCALL_NONE=y
@@ -134,6 +131,22 @@ CONFIG_DRM_I915_PXP=y
 CONFIG_AMD_SFH_HID=m
 
 ##
+## file: drivers/hwtracing/intel_th/Kconfig
+##
+CONFIG_INTEL_TH_STH=m
+
+##
+## file: drivers/hwtracing/stm/Kconfig
+##
+CONFIG_STM=m
+CONFIG_STM_PROTO_BASIC=m
+CONFIG_STM_PROTO_SYS_T=m
+CONFIG_STM_DUMMY=m
+CONFIG_STM_SOURCE_CONSOLE=m
+CONFIG_STM_SOURCE_HEARTBEAT=m
+CONFIG_STM_SOURCE_FTRACE=m
+
+##
 ## file: drivers/i2c/Kconfig
 ##
 CONFIG_I2C_STUB=m
@@ -150,8 +163,6 @@ CONFIG_MOUSE_PS2_TRACKPOINT=y
 ## file: drivers/iommu/amd/Kconfig
 ##
 CONFIG_AMD_IOMMU=y
-#. Can be built as a module, but nothing will trigger loading
-CONFIG_AMD_IOMMU_V2=y
 
 ##
 ## file: drivers/macintosh/Kconfig
@@ -202,9 +213,14 @@ CONFIG_PCI_HYPERV=y
 CONFIG_PINCTRL_AMD=y
 
 ##
-## file: drivers/platform/x86/amd/Kconfig
+## file: drivers/platform/x86/amd/pmc/Kconfig
 ##
 CONFIG_AMD_PMC=m
+
+##
+## file: drivers/platform/x86/intel/Kconfig
+##
+CONFIG_INTEL_TPMI=m
 
 ##
 ## file: drivers/platform/x86/intel/ifs/Kconfig
@@ -215,6 +231,11 @@ CONFIG_INTEL_IFS=m
 ## file: drivers/platform/x86/intel/uncore-frequency/Kconfig
 ##
 CONFIG_INTEL_UNCORE_FREQ_CONTROL=m
+
+##
+## file: drivers/powercap/Kconfig
+##
+CONFIG_INTEL_RAPL_TPMI=m
 
 ##
 ## file: drivers/scsi/Kconfig
@@ -253,6 +274,13 @@ CONFIG_VIRTIO_MEM=m
 ## file: init/Kconfig
 ##
 CONFIG_KALLSYMS_ALL=y
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_KEXEC_FILE=y
+CONFIG_KEXEC_SIG=y
+CONFIG_KEXEC_BZIMAGE_VERIFY_SIG=y
 
 ##
 ## file: kernel/livepatch/Kconfig

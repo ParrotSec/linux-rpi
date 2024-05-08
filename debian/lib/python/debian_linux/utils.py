@@ -34,8 +34,7 @@ class Templates(object):
                 filename = "%s/%s.%s%s" % (dir, pkgid, name, suffix)
                 if os.path.exists(filename):
                     with open(filename, 'r', encoding='utf-8') as f:
-                        mode = os.stat(f.fileno()).st_mode
-                        return (f.read(), mode, suffix)
+                        return (f.read(), suffix)
 
         raise KeyError(name)
 
@@ -48,7 +47,7 @@ class Templates(object):
 
     def get(self, key: str, context: dict[str, str] = {}) -> str:
         value = self._get(key)
-        suffix = value[2]
+        suffix = value[1]
 
         if context:
             if suffix == '.in':
@@ -60,9 +59,6 @@ class Templates(object):
                 return self._jinja2.from_string(value[0]).render(context)
 
         return value[0]
-
-    def get_mode(self, key: str) -> str:
-        return self._get(key)[1]
 
     def get_control(self, key: str, context: dict[str, str] = {}) -> BinaryPackage:
         return BinaryPackage.read_rfc822(io.StringIO(self.get(key, context)))

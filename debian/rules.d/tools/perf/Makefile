@@ -50,8 +50,12 @@ ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
 	+$(MAKE_PERF) -C $(top_srcdir)/tools/perf/Documentation man
 endif
 # Check that perf didn't get linked against incompatibly-licensed libraries
-	type ldd
-	! ldd $(CURDIR)/perf | grep -E '\blib(bfd|crypto|debuginfod)'
+	@if readelf -d $(CURDIR)/perf | sed -rne 's/.*NEEDED.*\[(.*)\]/\1/p' | grep -E '\blib(bfd|crypto|debuginfod)'; then \
+		echo; \
+		echo 'perf linked against incompatibly-licensed libraries'; \
+		echo; \
+		exit 1; \
+	fi
 # Check that it links against abi::__cxa_demangle from libstdc++
 	grep __cxa_demangle $(CURDIR)/perf
 

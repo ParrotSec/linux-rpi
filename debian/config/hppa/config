@@ -478,7 +478,6 @@ CONFIG_STI_CONSOLE=y
 ##
 ## file: drivers/video/fbdev/Kconfig
 ##
-CONFIG_FB_MODE_HELPERS=y
 CONFIG_FB_PM2=m
 CONFIG_FB_PM2_FIFO_DISCONNECT=y
 CONFIG_FB_STI=y
@@ -507,8 +506,12 @@ CONFIG_FB_SIS_315=y
 CONFIG_FB_VOODOO1=m
 CONFIG_FB_TRIDENT=m
 CONFIG_FB_SMSCUFX=m
-CONFIG_FB_UDL=m
 # CONFIG_FB_IBM_GXT4500 is not set
+
+##
+## file: drivers/video/fbdev/core/Kconfig
+##
+CONFIG_FB_MODE_HELPERS=y
 
 ##
 ## file: drivers/w1/Kconfig

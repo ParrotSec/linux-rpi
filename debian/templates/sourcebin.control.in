@@ -1,6 +1,6 @@
 Package: @source_basename@-source-@version@
 Meta-Rules-Target: source
-Build-Profiles: <!stage1 !pkg.linux.nosource !pkg.linux.quick>
+Build-Profiles: <!pkg.linux.nosource !pkg.linux.quick>
 Architecture: all
 Section: kernel
 Build-Depends: patchutils

@@ -82,6 +82,29 @@ int xhci_handshake(void __iomem *ptr, u32 mask, u32 done, u64 timeout_us)
 }
 
 /*
+ * xhci_handshake_check_state - same as xhci_handshake but takes an additional
+ * exit_state parameter, and bails out with an error immediately when xhc_state
+ * has exit_state flag set.
+ */
+int xhci_handshake_check_state(struct xhci_hcd *xhci, void __iomem *ptr,
+		u32 mask, u32 done, int usec, unsigned int exit_state)
+{
+	u32	result;
+	int	ret;
+
+	ret = readl_poll_timeout_atomic(ptr, result,
+				(result & mask) == done ||
+				result == U32_MAX ||
+				xhci->xhc_state & exit_state,
+				1, usec);
+
+	if (result == U32_MAX || xhci->xhc_state & exit_state)
+		return -ENODEV;
+
+	return ret;
+}
+
+/*
  * Disable interrupts and begin the xHCI halting process.
  */
 void xhci_quiesce(struct xhci_hcd *xhci)
@@ -201,7 +224,8 @@ int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
 	if (xhci->quirks & XHCI_INTEL_HOST)
 		udelay(1000);
 
-	ret = xhci_handshake(&xhci->op_regs->command, CMD_RESET, 0, timeout_us);
+	ret = xhci_handshake_check_state(xhci, &xhci->op_regs->command,
+				CMD_RESET, 0, timeout_us, XHCI_STATE_REMOVING);
 	if (ret)
 		return ret;
 
@@ -520,7 +544,7 @@ int xhci_run(struct usb_hcd *hcd)
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init, "xhci_run");
 
 	temp_64 = xhci_read_64(xhci, &ir->ir_set->erst_dequeue);
-	temp_64 &= ~ERST_PTR_MASK;
+	temp_64 &= ERST_PTR_MASK;
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"ERST deq = 64'h%0lx", (long unsigned int) temp_64);
 
@@ -1178,6 +1202,8 @@ static int xhci_map_temp_buffer(struct usb_hcd *hcd, struct urb *urb)
 
 	temp = kzalloc_node(buf_len, GFP_ATOMIC,
 			    dev_to_node(hcd->self.sysdev));
+	if (!temp)
+		return -ENOMEM;
 
 	if (usb_urb_dir_out(urb))
 		sg_pcopy_to_buffer(urb->sg, urb->num_sgs,
@@ -2202,7 +2228,6 @@ static unsigned int xhci_get_block_size(struct usb_device *udev)
 	case USB_SPEED_SUPER_PLUS:
 		return SS_BLOCK;
 	case USB_SPEED_UNKNOWN:
-	case USB_SPEED_WIRELESS:
 	default:
 		/* Should never happen */
 		return 1;
@@ -2563,10 +2588,7 @@ static void xhci_drop_ep_from_interval_table(struct xhci_hcd *xhci,
 	case USB_SPEED_HIGH:
 		interval_bw->overhead[HS_OVERHEAD_TYPE] -= 1;
 		break;
-	case USB_SPEED_SUPER:
-	case USB_SPEED_SUPER_PLUS:
-	case USB_SPEED_UNKNOWN:
-	case USB_SPEED_WIRELESS:
+	default:
 		/* Should never happen because only LS/FS/HS endpoints will get
 		 * added to the endpoint list.
 		 */
@@ -2623,10 +2645,7 @@ static void xhci_add_ep_to_interval_table(struct xhci_hcd *xhci,
 	case USB_SPEED_HIGH:
 		interval_bw->overhead[HS_OVERHEAD_TYPE] += 1;
 		break;
-	case USB_SPEED_SUPER:
-	case USB_SPEED_SUPER_PLUS:
-	case USB_SPEED_UNKNOWN:
-	case USB_SPEED_WIRELESS:
+	default:
 		/* Should never happen because only LS/FS/HS endpoints will get
 		 * added to the endpoint list.
 		 */

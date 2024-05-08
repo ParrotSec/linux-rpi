@@ -7,7 +7,6 @@ CONFIG_SECCOMP=y
 ## file: arch/powerpc/Kconfig
 ##
 # CONFIG_HOTPLUG_CPU is not set
-CONFIG_KEXEC=y
 CONFIG_CMDLINE="console=ttyS0,9600 console=tty0"
 # CONFIG_ADVANCED_OPTIONS is not set
 
@@ -729,8 +728,6 @@ CONFIG_VGA_CONSOLE=y
 ##
 ## file: drivers/video/fbdev/Kconfig
 ##
-CONFIG_FB_MODE_HELPERS=y
-CONFIG_FB_TILEBLITTING=y
 CONFIG_FB_CIRRUS=m
 # CONFIG_FB_PM2 is not set
 # CONFIG_FB_CYBER2000 is not set
@@ -765,6 +762,12 @@ CONFIG_FB_IBM_GXT4500=m
 # CONFIG_FB_VIRTUAL is not set
 
 ##
+## file: drivers/video/fbdev/core/Kconfig
+##
+CONFIG_FB_MODE_HELPERS=y
+CONFIG_FB_TILEBLITTING=y
+
+##
 ## file: drivers/watchdog/Kconfig
 ##
 CONFIG_WATCHDOG_RTAS=m
@@ -776,6 +779,11 @@ CONFIG_USBPCWATCHDOG=m
 ## file: init/Kconfig
 ##
 CONFIG_SGETMASK_SYSCALL=y
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_KEXEC=y
 
 ##
 ## file: lib/Kconfig.debug

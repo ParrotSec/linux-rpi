@@ -55,6 +55,9 @@ module_param(verbose_sleep_frequency, int, 0444);
 static int verbose_sleep_duration = 1;
 module_param(verbose_sleep_duration, int, 0444);
 
+static int random_shuffle;
+module_param(random_shuffle, int, 0444);
+
 static char *torture_type;
 static int verbose;
 
@@ -90,7 +93,7 @@ int torture_hrtimeout_ns(ktime_t baset_ns, u32 fuzzt_ns, const enum hrtimer_mode
 	ktime_t hto = baset_ns;
 
 	if (trsp)
-		hto += (torture_random(trsp) >> 3) % fuzzt_ns;
+		hto += torture_random(trsp) % fuzzt_ns;
 	set_current_state(TASK_IDLE);
 	return schedule_hrtimeout(&hto, mode);
 }
@@ -352,22 +355,22 @@ torture_onoff(void *arg)
 
 	if (onoff_holdoff > 0) {
 		VERBOSE_TOROUT_STRING("torture_onoff begin holdoff");
-		schedule_timeout_interruptible(onoff_holdoff);
+		torture_hrtimeout_jiffies(onoff_holdoff, &rand);
 		VERBOSE_TOROUT_STRING("torture_onoff end holdoff");
 	}
 	while (!torture_must_stop()) {
 		if (disable_onoff_at_boot && !rcu_inkernel_boot_has_ended()) {
-			schedule_timeout_interruptible(HZ / 10);
+			torture_hrtimeout_jiffies(HZ / 10, &rand);
 			continue;
 		}
-		cpu = (torture_random(&rand) >> 4) % (maxcpu + 1);
+		cpu = torture_random(&rand) % (maxcpu + 1);
 		if (!torture_offline(cpu,
 				     &n_offline_attempts, &n_offline_successes,
 				     &sum_offline, &min_offline, &max_offline))
 			torture_online(cpu,
 				       &n_online_attempts, &n_online_successes,
 				       &sum_online, &min_online, &max_online);
-		schedule_timeout_interruptible(onoff_interval);
+		torture_hrtimeout_jiffies(onoff_interval, &rand);
 	}
 
 stop:
@@ -518,7 +521,7 @@ static void torture_shuffle_task_unregister_all(void)
  * A special case is when shuffle_idle_cpu = -1, in which case we allow
  * the tasks to run on all CPUs.
  */
-static void torture_shuffle_tasks(void)
+static void torture_shuffle_tasks(struct torture_random_state *trp)
 {
 	struct shuffle_task *stp;
 
@@ -539,8 +542,10 @@ static void torture_shuffle_tasks(void)
 		cpumask_clear_cpu(shuffle_idle_cpu, shuffle_tmp_mask);
 
 	mutex_lock(&shuffle_task_mutex);
-	list_for_each_entry(stp, &shuffle_task_list, st_l)
-		set_cpus_allowed_ptr(stp->st_t, shuffle_tmp_mask);
+	list_for_each_entry(stp, &shuffle_task_list, st_l) {
+		if (!random_shuffle || torture_random(trp) & 0x1)
+			set_cpus_allowed_ptr(stp->st_t, shuffle_tmp_mask);
+	}
 	mutex_unlock(&shuffle_task_mutex);
 
 	cpus_read_unlock();
@@ -552,10 +557,12 @@ static void torture_shuffle_tasks(void)
  */
 static int torture_shuffle(void *arg)
 {
+	DEFINE_TORTURE_RANDOM(rand);
+
 	VERBOSE_TOROUT_STRING("torture_shuffle task started");
 	do {
-		schedule_timeout_interruptible(shuffle_interval);
-		torture_shuffle_tasks();
+		torture_hrtimeout_jiffies(shuffle_interval, &rand);
+		torture_shuffle_tasks(&rand);
 		torture_shutdown_absorb("torture_shuffle");
 	} while (!torture_must_stop());
 	torture_kthread_stopping("torture_shuffle");
@@ -666,7 +673,7 @@ int torture_shutdown_init(int ssecs, void (*cleanup)(void))
 	if (ssecs > 0) {
 		shutdown_time = ktime_add(ktime_get(), ktime_set(ssecs, 0));
 		return torture_create_kthread(torture_shutdown, NULL,
-					     shutdown_task);
+					      shutdown_task);
 	}
 	return 0;
 }
@@ -784,6 +791,13 @@ static void torture_stutter_cleanup(void)
 	stutter_task = NULL;
 }
 
+static void
+torture_print_module_parms(void)
+{
+	pr_alert("torture module --- %s:  disable_onoff_at_boot=%d ftrace_dump_at_shutdown=%d verbose_sleep_frequency=%d verbose_sleep_duration=%d random_shuffle=%d\n",
+		 torture_type, disable_onoff_at_boot, ftrace_dump_at_shutdown, verbose_sleep_frequency, verbose_sleep_duration, random_shuffle);
+}
+
 /*
  * Initialize torture module.  Please note that this is -not- invoked via
  * the usual module_init() mechanism, but rather by an explicit call from
@@ -806,6 +820,7 @@ bool torture_init_begin(char *ttype, int v)
 	torture_type = ttype;
 	verbose = v;
 	fullstop = FULLSTOP_DONTSTOP;
+	torture_print_module_parms();
 	return true;
 }
 EXPORT_SYMBOL_GPL(torture_init_begin);

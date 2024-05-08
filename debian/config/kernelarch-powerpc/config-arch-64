@@ -3,7 +3,6 @@
 ##
 #. This feature is broken; see #866122
 # CONFIG_PPC_TRANSACTIONAL_MEM is not set
-CONFIG_CRASH_DUMP=y
 CONFIG_IRQ_ALL_CPUS=y
 CONFIG_NUMA=y
 ## choice: Page size
@@ -146,6 +145,7 @@ CONFIG_IBM_EMAC_RX_COPY_THRESHOLD=256
 ## file: drivers/pci/hotplug/Kconfig
 ##
 CONFIG_HOTPLUG_PCI=y
+CONFIG_HOTPLUG_PCI_POWERNV=m
 CONFIG_HOTPLUG_PCI_RPA=m
 CONFIG_HOTPLUG_PCI_RPA_DLPAR=m
 
@@ -200,6 +200,11 @@ CONFIG_WATCHDOG_RTAS=m
 # CONFIG_TICK_CPU_ACCOUNTING is not set
 CONFIG_VIRT_CPU_ACCOUNTING_NATIVE=y
 ## end choice
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_CRASH_DUMP=y
 
 ##
 ## file: lib/Kconfig

@@ -5,11 +5,6 @@ CONFIG_SECCOMP=y
 # CONFIG_STACKPROTECTOR_STRONG is not set
 
 ##
-## file: arch/sh/Kconfig
-##
-CONFIG_KEXEC=y
-
-##
 ## file: arch/sh/Kconfig.cpu
 ##
 ## choice: Endianness selection
@@ -59,6 +54,11 @@ CONFIG_CC_OPTIMIZE_FOR_SIZE=y
 ## choice: Timer frequency
 CONFIG_HZ_250=y
 ## end choice
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_KEXEC=y
 
 ##
 ## file: kernel/irq/Kconfig

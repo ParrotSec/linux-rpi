@@ -10,8 +10,6 @@ CONFIG_MMU=y
 CONFIG_AEABI=y
 # CONFIG_OABI_COMPAT is not set
 CONFIG_CPU_SW_DOMAIN_PAN=y
-CONFIG_KEXEC=y
-CONFIG_CRASH_DUMP=y
 
 ##
 ## file: arch/arm/Kconfig.debug
@@ -149,6 +147,12 @@ CONFIG_PWM_RASPBERRYPI_POE=m
 ##
 CONFIG_THERMAL=y
 CONFIG_CPU_THERMAL=y
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_KEXEC=y
+CONFIG_CRASH_DUMP=y
 
 ##
 ## file: lib/xz/Kconfig

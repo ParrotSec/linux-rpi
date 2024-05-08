@@ -1,6 +1,6 @@
 From: Ian Campbell <ijc@hellion.org.uk>
 Date: Thu, 17 Jan 2013 08:55:21 +0000
-Subject: Tweak gitignore for Debian pkg-kernel using git svn.
+Subject: Tweak gitignore for Debian pkg-kernel using git
 Forwarded: not-needed
 
 [bwh: Tweak further for pure git]
@@ -9,8 +9,8 @@ Index: linux/.gitignore
 ===================================================================
 --- linux.orig/.gitignore
 +++ linux/.gitignore
-@@ -80,11 +80,6 @@ modules.order
- /*.spec
+@@ -76,11 +76,6 @@ modules.order
+ #
  /rpmbuild/
  
 -#
@@ -21,7 +21,7 @@ Index: linux/.gitignore
  #
  # Snap directory (make snap-pkg)
  #
-@@ -95,18 +90,6 @@ modules.order
+@@ -91,18 +86,6 @@ modules.order
  #
  /tar-install/
  
@@ -40,7 +40,7 @@ Index: linux/.gitignore
  #
  # Generated include files
  #
-@@ -174,3 +157,10 @@ sphinx_*/
+@@ -169,3 +152,10 @@ sphinx_*/
  
  # Rust analyzer configuration
  /rust-project.json

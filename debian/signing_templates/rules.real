@@ -1,37 +1,73 @@
+include /usr/share/dpkg/default.mk
+
 SHELL := bash -e
 
 export DH_OPTIONS
 
+export DEB_RULES_REQUIRES_ROOT ?= no
+
+GENCONTROL_ARGS := -v@signedtemplate_binaryversion@
 BUILDDEB_ARGS := -Zxz $(if $(filter pkg.linux.quick,$(DEB_BUILD_PROFILES)),-z0)
+
+define dh_binary_pre
+	dh_testroot
+	dh_prep
+	dh_installdirs
+endef
+
+define dh_binary_post
+	dh_install $(DH_INSTALL_ARGS)
+	# Workaround #1068189. By Debian policy and aligned debhelper behaviour /usr/share/doc/package
+	# is permitted to be a symbolic link to another directory in /usr/share/doc only if the two
+	# packages come from the same source package. The package build will fail with the new debhelper
+	# version since debhelper/13.15. As the linux-signed-* packages are quite special in the eco-
+	# system, make the workaround to fallback to the old behaviour until it is agreed on how to
+	# resolve the situation policy conformant.
+	# https://www.debian.org/doc/debian-policy/ch-docs.html#copyright-information
+	$(if $(INSTALLDOCS_LINK_DOC),
+		mkdir -p debian/$(PACKAGE_NAME)/usr/share/doc && ln -sf $(INSTALLDOCS_LINK_DOC) debian/$(PACKAGE_NAME)/usr/share/doc/$(PACKAGE_NAME),
+		dh_installdocs)
+	dh_installchangelogs
+	dh_installexamples
+	dh_installman
+	dh_installudev
+	dh_bugfiles
+	dh_ucf
+	dh_lintian
+	dh_icons
+	dh_link
+	dh_compress
+	dh_fixperms
+	dh_missing
+	dh_strip $(DH_STRIP_ARGS) -Xvmlinux -Xvmlinuz
+	dh_makeshlibs -Xvmlinux -Xvmlinuz
+	dh_shlibdeps $(DH_SHLIBDEPS_ARGS)
+	dh_installdeb
+	dh_gencontrol -- $(GENCONTROL_ARGS)
+	dh_md5sums
+	dh_builddeb -- $(BUILDDEB_ARGS)
+endef
 
 build-indep:
 
 build_image:
 
 binary_image: DH_OPTIONS = -p$(PACKAGE_NAME)
+binary_image: DH_STRIP_ARGS = --no-automatic-dbgsym
 binary_image: KERNEL_VERSION = $(ABINAME)$(LOCALVERSION)
 binary_image: IMAGE_PACKAGE_NAME = linux-image-$(KERNEL_VERSION)-unsigned
 binary_image: PACKAGE_DIR = debian/$(PACKAGE_NAME)
 binary_image: SIGNATURE_DIR = debian/signatures/$(IMAGE_PACKAGE_NAME)
 binary_image:
+	$(dh_binary_pre)
 	mkdir -p $(PACKAGE_DIR)/boot
 	rsync -a $(patsubst %,/boot/%-$(KERNEL_VERSION),config System.map $(IMAGE_INSTALL_STEM)) \
 		$(PACKAGE_DIR)/boot/
-	if [ -f $(SIGNATURE_DIR)/boot/vmlinuz-$(KERNEL_VERSION).sig ]; then \
-		sbattach --attach $(SIGNATURE_DIR)/boot/vmlinuz-$(KERNEL_VERSION).sig \
-			$(PACKAGE_DIR)/boot/vmlinuz-$(KERNEL_VERSION); \
-		echo >> debian/$(PACKAGE_NAME).substvars 'signed:Description=The kernel image and modules are signed for use with Secure Boot.'; \
-	else \
-		echo >> debian/$(PACKAGE_NAME).substvars 'signed:Description=The modules are signed.'; \
-	fi
+	sbattach --attach $(SIGNATURE_DIR)/boot/vmlinuz-$(KERNEL_VERSION).sig \
+		$(PACKAGE_DIR)/boot/vmlinuz-$(KERNEL_VERSION)
 	mkdir -p $(PACKAGE_DIR)/lib/modules/$(KERNEL_VERSION)
-	rsync -a $(addprefix /lib/modules/$(KERNEL_VERSION)/,modules.builtin modules.builtin.modinfo modules.order) \
+	rsync -a $(addprefix /lib/modules/$(KERNEL_VERSION)/,kernel modules.builtin modules.builtin.modinfo modules.order) \
 		$(PACKAGE_DIR)/lib/modules/$(KERNEL_VERSION)/
-	find $(SIGNATURE_DIR)/lib/modules/$(KERNEL_VERSION) -name '*.sig' -printf '%P\n' | \
-		debian/sign-file-attach \
-			$(SIGNATURE_DIR)/lib/modules/$(KERNEL_VERSION) \
-			/lib/modules/$(KERNEL_VERSION) \
-			$(PACKAGE_DIR)/lib/modules/$(KERNEL_VERSION)
 # Copy any device tree files
 	if [ -d /usr/lib/linux-image-$(KERNEL_VERSION) ]; then \
 		mkdir -p $(PACKAGE_DIR)/usr/lib/linux-image-$(KERNEL_VERSION); \
@@ -45,48 +81,34 @@ binary_image:
 	sed -i -e 's/^PACKAGE_NAME=.*/PACKAGE_NAME=$(PACKAGE_NAME)/' \
 		-e 's/^PACKAGE_VERSION=.*/PACKAGE_VERSION=$(PACKAGE_VERSION)/' \
 		$(PACKAGE_DIR)/usr/share/bug/$(PACKAGE_NAME)/info
-	dh_install
-	dh_installchangelogs
-	ln -sf linux-image.NEWS debian/$(PACKAGE_NAME).NEWS
-	dh_installdocs
-	dh_lintian
-	dh_compress
-	dh_fixperms
-	dh_installdeb
-# Copy most package relations and description from unsigned package
-	for field in Depends Suggests Recommends Breaks; do \
-		echo >> debian/$(PACKAGE_NAME).substvars "unsigned:$$field=$$(dpkg-query -f '$${'$$field'}' -W $(IMAGE_PACKAGE_NAME))"; \
-	done
-	echo >> debian/$(PACKAGE_NAME).substvars "unsigned:DescriptionShort=$$(dpkg-query -f '$${Description}' -W $(IMAGE_PACKAGE_NAME) | head -n 1)"
-	echo >> debian/$(PACKAGE_NAME).substvars "unsigned:DescriptionLong=$$(dpkg-query -f '$${Description}' -W $(IMAGE_PACKAGE_NAME) | tail -n +2 | sed -rz 's/\$$/$${}/g; s/^ //; s/\n \.?/$${Newline}/g')"
-	dh_gencontrol -- $(GENCONTROL_ARGS)
-	dh_md5sums
-	dh_builddeb -- $(BUILDDEB_ARGS)
+	$(dh_binary_post)
 
 build_meta:
 
 binary_meta:
-	dh_testdir
-	dh_prep
-	dh_bugfiles
-	dh_installdocs --link-doc=$(INSTALLDOCS_LINK_DOC)
-	dh_lintian
-	dh_compress
-	dh_fixperms
-	dh_installdeb
-	dh_gencontrol -- $(GENCONTROL_ARGS)
-	dh_md5sums
-	dh_builddeb -- $(BUILDDEB_ARGS)
+	$(dh_binary_pre)
+	$(dh_binary_post)
 
-build_udeb:
+build_installer:
 
-binary_udeb: export KW_DEFCONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
-binary_udeb: export KW_CONFIG_DIR=/usr/share/linux-support-$(ABINAME)/installer
-binary_udeb:
-	dh_testdir
-	dh_prep
-	kernel-wedge install-files $(ABINAME)
-	kernel-wedge check $(PACKAGE_NAMES)
+binary_installer: REAL_VERSION = $(ABINAME)$(LOCALVERSION)
+binary_installer: export KW_DEFCONFIG_DIR=debian/installer
+binary_installer: export KW_CONFIG_DIR=debian/installer
+# XXX No make dependency exists for this directory
+binary_installer: export SOURCEDIR = debian/linux-image-$(REAL_VERSION)
+binary_installer: DH_OPTIONS_IMAGE = -p$(IMAGE_PACKAGE_NAME) --sourcedir=$(SOURCEDIR)
+binary_installer:
+	$(dh_binary_pre)
+	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install boot/$(IMAGE_INSTALL_STEM)-$(REAL_VERSION)
+	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install lib/modules/$(REAL_VERSION)/modules.builtin
+	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install lib/modules/$(REAL_VERSION)/modules.order
+ifneq ($(filter arm64 armel armhf mipsel mips64el mipsr6 mipsr6el mips64r6 mips64r6el riscv64,$(ARCH)),)
+	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install usr/lib/linux-image-$(REAL_VERSION)
+endif
+	kernel-wedge copy-modules $(ABINAME) $(FLAVOUR) $(REAL_VERSION)
+	kernel-wedge find-dups $(REAL_VERSION)
+	kernel-wedge find-unpackaged $(REAL_VERSION) $(REAL_VERSION)
+	kernel-wedge check $$(dh_listpackages)
 	dh_fixperms
 	dh_gencontrol -- $(GENCONTROL_ARGS)
 	dh_builddeb -- $(BUILDDEB_ARGS)

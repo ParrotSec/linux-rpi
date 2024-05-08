@@ -1,7 +1,7 @@
 From: Frederic Weisbecker <frederic@kernel.org>
 Date: Tue, 5 Apr 2022 03:07:52 +0200
 Subject: [PATCH] tick: Fix timer storm since introduction of timersd
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
 
 If timers are pending while the tick is reprogrammed on nohz_mode, the
 next expiry is not armed to fire now, it is delayed one jiffy forward
@@ -48,7 +48,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
 
 --- a/include/linux/interrupt.h
 +++ b/include/linux/interrupt.h
-@@ -607,9 +607,16 @@ extern void raise_softirq(unsigned int n
+@@ -611,9 +611,16 @@ extern void raise_softirq(unsigned int n
  
  #ifdef CONFIG_PREEMPT_RT
  DECLARE_PER_CPU(struct task_struct *, timersd);
@@ -65,7 +65,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
  #else
  static inline void raise_timer_softirq(void)
  {
-@@ -620,6 +627,11 @@ static inline void raise_hrtimer_softirq
+@@ -624,6 +631,11 @@ static inline void raise_hrtimer_softirq
  {
  	raise_softirq_irqoff(HRTIMER_SOFTIRQ);
  }
@@ -95,7 +95,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
  {
 --- a/kernel/time/tick-sched.c
 +++ b/kernel/time/tick-sched.c
-@@ -795,7 +795,7 @@ static void tick_nohz_restart(struct tic
+@@ -796,7 +796,7 @@ static void tick_nohz_restart(struct tic
  
  static inline bool local_timer_softirq_pending(void)
  {

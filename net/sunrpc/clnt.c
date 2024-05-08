@@ -537,6 +537,8 @@ struct rpc_clnt *rpc_create(struct rpc_create_args *args)
 		.servername = args->servername,
 		.bc_xprt = args->bc_xprt,
 		.xprtsec = args->xprtsec,
+		.connect_timeout = args->connect_timeout,
+		.reconnect_timeout = args->reconnect_timeout,
 	};
 	char servername[48];
 	struct rpc_clnt *clnt;
@@ -2221,7 +2223,7 @@ call_connect_status(struct rpc_task *task)
 			}
 			xprt_switch_put(xps);
 			if (!task->tk_xprt)
-				return;
+				goto out;
 		}
 		goto out_retry;
 	case -ENOBUFS:
@@ -2236,6 +2238,7 @@ out_next:
 out_retry:
 	/* Check for timeouts before looping back to call_bind */
 	task->tk_action = call_bind;
+out:
 	rpc_check_timeout(task);
 }
 
@@ -2604,6 +2607,7 @@ out:
 	case 0:
 		task->tk_action = rpc_exit_task;
 		task->tk_status = rpcauth_unwrap_resp(task, &xdr);
+		xdr_finish_decode(&xdr);
 		return;
 	case -EAGAIN:
 		task->tk_status = 0;
@@ -3083,6 +3087,11 @@ int rpc_clnt_add_xprt(struct rpc_clnt *clnt,
 	}
 	xprt->resvport = resvport;
 	xprt->reuseport = reuseport;
+
+	if (xprtargs->connect_timeout)
+		connect_timeout = xprtargs->connect_timeout;
+	if (xprtargs->reconnect_timeout)
+		reconnect_timeout = xprtargs->reconnect_timeout;
 	if (xprt->ops->set_connect_timeout != NULL)
 		xprt->ops->set_connect_timeout(xprt,
 				connect_timeout,

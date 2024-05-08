@@ -1,7 +1,7 @@
 Subject: powerpc/pseries/iommu: Use a locallock instead local_irq_save()
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Tue Mar 26 18:31:54 2019 +0100
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -82,7 +82,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  
  	if (unlikely(rc == H_NOT_ENOUGH_RESOURCES)) {
  		ret = (int)rc;
-@@ -461,16 +469,17 @@ static int tce_setrange_multi_pSeriesLP(
+@@ -459,16 +467,17 @@ static int tce_setrange_multi_pSeriesLP(
  				DMA_BIDIRECTIONAL, 0);
  	}
  
@@ -104,7 +104,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	}
  
  	proto_tce = TCE_PCI_READ | TCE_PCI_WRITE;
-@@ -513,7 +522,7 @@ static int tce_setrange_multi_pSeriesLP(
+@@ -511,7 +520,7 @@ static int tce_setrange_multi_pSeriesLP(
  
  	/* error cleanup: caller will clear whole range */
  

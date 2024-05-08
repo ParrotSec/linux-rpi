@@ -2,7 +2,7 @@ import re
 
 
 class FirmwareFile(object):
-    def __init__(self, binary, desc=None, source=None, version=None):
+    def __init__(self, binary, desc=None, source=None, version=None) -> None:
         self.binary = binary
         self.desc = desc
         self.source = source
@@ -10,17 +10,17 @@ class FirmwareFile(object):
 
 
 class FirmwareSection(object):
-    def __init__(self, driver, files, licence):
+    def __init__(self, driver, files, licence) -> None:
         self.driver = driver
         self.files = files
         self.licence = licence
 
 
 class FirmwareWhence(list):
-    def __init__(self, file):
+    def __init__(self, file) -> None:
         self.read(file)
 
-    def read(self, file):
+    def read(self, file) -> None:
         in_header = True
         driver = None
         files = {}

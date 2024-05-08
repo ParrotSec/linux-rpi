@@ -104,6 +104,7 @@ static irqreturn_t ls_pcie_ep_event_handler(int irq, void *dev_id)
 		dev_dbg(pci->dev, "Link up\n");
 	} else if (val & PEX_PF0_PME_MES_DR_LDD) {
 		dev_dbg(pci->dev, "Link down\n");
+		pci_epc_linkdown(pci->ep.epc);
 	} else if (val & PEX_PF0_PME_MES_DR_HRD) {
 		dev_dbg(pci->dev, "Hot reset\n");
 	}
@@ -264,6 +265,8 @@ static int __init ls_pcie_ep_probe(struct platform_device *pdev)
 	pci->ep.ops = &ls_pcie_ep_ops;
 
 	pcie->big_endian = of_property_read_bool(dev->of_node, "big-endian");
+
+	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
 
 	platform_set_drvdata(pdev, pcie);
 

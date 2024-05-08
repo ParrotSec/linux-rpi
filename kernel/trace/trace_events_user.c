@@ -50,18 +50,6 @@
 #define EVENT_STATUS_OTHER BIT(7)
 
 /*
- * User register flags are not allowed yet, keep them here until we are
- * ready to expose them out to the user ABI.
- */
-enum user_reg_flag {
-	/* Event will not delete upon last reference closing */
-	USER_EVENT_REG_PERSIST		= 1U << 0,
-
-	/* This value or above is currently non-ABI */
-	USER_EVENT_REG_MAX		= 1U << 1,
-};
-
-/*
  * Stores the system name, tables, and locks for a group of events. This
  * allows isolation for events by various means.
  */
@@ -218,6 +206,17 @@ static int destroy_user_event(struct user_event *user);
 static u32 user_event_key(char *name)
 {
 	return jhash(name, strlen(name), 0);
+}
+
+static bool user_event_capable(u16 reg_flags)
+{
+	/* Persistent events require CAP_PERFMON / CAP_SYS_ADMIN */
+	if (reg_flags & USER_EVENT_REG_PERSIST) {
+		if (!perfmon_capable())
+			return false;
+	}
+
+	return true;
 }
 
 static struct user_event *user_event_get(struct user_event *user)
@@ -1366,14 +1365,14 @@ static int user_field_set_string(struct ftrace_event_field *field,
 
 static int user_event_set_print_fmt(struct user_event *user, char *buf, int len)
 {
-	struct ftrace_event_field *field, *next;
+	struct ftrace_event_field *field;
 	struct list_head *head = &user->fields;
 	int pos = 0, depth = 0;
 	const char *str_func;
 
 	pos += snprintf(buf + pos, LEN_OR_ZERO, "\"");
 
-	list_for_each_entry_safe_reverse(field, next, head, link) {
+	list_for_each_entry_reverse(field, head, link) {
 		if (depth != 0)
 			pos += snprintf(buf + pos, LEN_OR_ZERO, " ");
 
@@ -1385,7 +1384,7 @@ static int user_event_set_print_fmt(struct user_event *user, char *buf, int len)
 
 	pos += snprintf(buf + pos, LEN_OR_ZERO, "\"");
 
-	list_for_each_entry_safe_reverse(field, next, head, link) {
+	list_for_each_entry_reverse(field, head, link) {
 		if (user_field_is_dyn_string(field->type, &str_func))
 			pos += snprintf(buf + pos, LEN_OR_ZERO,
 					", %s(%s)", str_func, field->name);
@@ -1770,7 +1769,7 @@ static int user_event_create(const char *raw_command)
 static int user_event_show(struct seq_file *m, struct dyn_event *ev)
 {
 	struct user_event *user = container_of(ev, struct user_event, devent);
-	struct ftrace_event_field *field, *next;
+	struct ftrace_event_field *field;
 	struct list_head *head;
 	int depth = 0;
 
@@ -1778,7 +1777,7 @@ static int user_event_show(struct seq_file *m, struct dyn_event *ev)
 
 	head = trace_get_fields(&user->call);
 
-	list_for_each_entry_safe_reverse(field, next, head, link) {
+	list_for_each_entry_reverse(field, head, link) {
 		if (depth == 0)
 			seq_puts(m, " ");
 		else
@@ -1810,6 +1809,9 @@ static int user_event_free(struct dyn_event *ev)
 
 	if (!user_event_last_ref(user))
 		return -EBUSY;
+
+	if (!user_event_capable(user->reg_flags))
+		return -EPERM;
 
 	return destroy_user_event(user);
 }
@@ -1854,13 +1856,14 @@ out:
 static bool user_fields_match(struct user_event *user, int argc,
 			      const char **argv)
 {
-	struct ftrace_event_field *field, *next;
+	struct ftrace_event_field *field;
 	struct list_head *head = &user->fields;
 	int i = 0;
 
-	list_for_each_entry_safe_reverse(field, next, head, link)
+	list_for_each_entry_reverse(field, head, link) {
 		if (!user_field_match(field, argc, argv, &i))
 			return false;
+	}
 
 	if (i != argc)
 		return false;
@@ -1925,9 +1928,12 @@ static int user_event_parse(struct user_event_group *group, char *name,
 	int argc = 0;
 	char **argv;
 
-	/* User register flags are not ready yet */
-	if (reg_flags != 0 || flags != NULL)
+	/* Currently don't support any text based flags */
+	if (flags != NULL)
 		return -EINVAL;
+
+	if (!user_event_capable(reg_flags))
+		return -EPERM;
 
 	/* Prevent dyn_event from racing */
 	mutex_lock(&event_mutex);
@@ -2060,6 +2066,9 @@ static int delete_user_event(struct user_event_group *group, char *name)
 
 	if (!user_event_last_ref(user))
 		return -EBUSY;
+
+	if (!user_event_capable(user->reg_flags))
+		return -EPERM;
 
 	return destroy_user_event(user);
 }

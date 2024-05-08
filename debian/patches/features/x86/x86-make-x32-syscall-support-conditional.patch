@@ -29,7 +29,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 
 --- a/Documentation/admin-guide/kernel-parameters.txt
 +++ b/Documentation/admin-guide/kernel-parameters.txt
-@@ -6172,6 +6172,10 @@
+@@ -6410,6 +6410,10 @@
  			later by a loaded module cannot be set this way.
  			Example: sysctl.vm.swappiness=40
  
@@ -42,7 +42,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  			Ignore sysrq setting - this boot parameter will
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
-@@ -3058,6 +3058,14 @@ config COMPAT_32
+@@ -3024,6 +3024,14 @@ config COMPAT_32
  	select HAVE_UID16
  	select OLD_SIGSUSPEND3
  
@@ -59,7 +59,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  	depends on IA32_EMULATION || X86_X32_ABI
 --- a/arch/x86/entry/common.c
 +++ b/arch/x86/entry/common.c
-@@ -62,7 +62,7 @@ static __always_inline bool do_syscall_x
+@@ -63,7 +63,7 @@ static __always_inline bool do_syscall_x
  	 */
  	unsigned int xnr = nr - __X32_SYSCALL_BIT;
  
@@ -129,7 +129,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 +arch_param_cb(x32, &x32_param_ops, NULL, 0444);
 --- a/arch/x86/include/asm/elf.h
 +++ b/arch/x86/include/asm/elf.h
-@@ -11,6 +11,9 @@
+@@ -12,6 +12,9 @@
  #include <asm/user.h>
  #include <asm/auxvec.h>
  #include <asm/fsgsbase.h>
@@ -142,7 +142,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 @@ -150,7 +153,8 @@ do {						\
  
  #define compat_elf_check_arch(x)					\
- 	(elf_check_arch_ia32(x) ||					\
+ 	((elf_check_arch_ia32(x) && ia32_enabled()) ||			\
 -	 (IS_ENABLED(CONFIG_X86_X32_ABI) && (x)->e_machine == EM_X86_64))
 +	 (IS_ENABLED(CONFIG_X86_X32_ABI) && x32_enabled &&		\
 +	  (x)->e_machine == EM_X86_64))

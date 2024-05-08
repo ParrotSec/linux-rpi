@@ -19,7 +19,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 
 --- a/fs/btrfs/super.c
 +++ b/fs/btrfs/super.c
-@@ -2697,7 +2697,7 @@
+@@ -2549,7 +2549,7 @@
  module_exit(exit_btrfs_fs)
  
  MODULE_LICENSE("GPL");
@@ -30,7 +30,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  MODULE_SOFTDEP("pre: blake2b-256");
 --- a/fs/ext4/super.c
 +++ b/fs/ext4/super.c
-@@ -6822,6 +6822,6 @@
+@@ -7420,6 +7420,6 @@
  MODULE_AUTHOR("Remy Card, Stephen Tweedie, Andrew Morton, Andreas Dilger, Theodore Ts'o and others");
  MODULE_DESCRIPTION("Fourth Extended Filesystem");
  MODULE_LICENSE("GPL");
@@ -40,7 +40,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  module_exit(ext4_exit_fs)
 --- a/fs/jbd2/journal.c
 +++ b/fs/jbd2/journal.c
-@@ -3008,6 +3008,7 @@
+@@ -3168,6 +3168,7 @@
  }
  
  MODULE_LICENSE("GPL");
@@ -50,9 +50,9 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  
 --- a/fs/nfsd/nfsctl.c
 +++ b/fs/nfsd/nfsctl.c
-@@ -1579,5 +1579,8 @@
- 
+@@ -1629,5 +1629,8 @@
  MODULE_AUTHOR("Olaf Kirch <okir@monad.swb.de>");
+ MODULE_DESCRIPTION("In-kernel NFS server");
  MODULE_LICENSE("GPL");
 +#ifdef CONFIG_NFSD_V4
 +MODULE_SOFTDEP("pre: crypto-md5");

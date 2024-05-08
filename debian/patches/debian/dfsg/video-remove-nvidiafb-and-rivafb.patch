@@ -15,7 +15,7 @@ probably discontinued 10 years ago.
 ---
 --- a/drivers/video/fbdev/Kconfig
 +++ b/drivers/video/fbdev/Kconfig
-@@ -882,101 +882,6 @@ config FB_ATMEL
+@@ -690,102 +690,6 @@ config FB_ATMEL
  	help
  	  This enables support for the AT91 LCD Controller.
  
@@ -23,10 +23,10 @@ probably discontinued 10 years ago.
 -	tristate "nVidia Framebuffer Support"
 -	depends on FB && PCI
 -	select FB_BACKLIGHT if FB_NVIDIA_BACKLIGHT
--	select FB_MODE_HELPERS
 -	select FB_CFB_FILLRECT
 -	select FB_CFB_COPYAREA
 -	select FB_CFB_IMAGEBLIT
+-	select FB_IOMEM_FOPS
 -	select BITREVERSE
 -	select VGASTATE
 -	select VIDEO_NOMODESET
@@ -71,10 +71,11 @@ probably discontinued 10 years ago.
 -	tristate "nVidia Riva support"
 -	depends on FB && PCI
 -	select FB_BACKLIGHT if FB_RIVA_BACKLIGHT
--	select FB_MODE_HELPERS
 -	select FB_CFB_FILLRECT
 -	select FB_CFB_COPYAREA
 -	select FB_CFB_IMAGEBLIT
+-	select FB_IOMEM_FOPS
+-	select FB_MODE_HELPERS
 -	select BITREVERSE
 -	select VGASTATE
 -	select VIDEO_NOMODESET
@@ -119,7 +120,7 @@ probably discontinued 10 years ago.
  	depends on FB && PCI
 --- a/drivers/video/fbdev/Makefile
 +++ b/drivers/video/fbdev/Makefile
-@@ -21,8 +21,6 @@ obj-$(CONFIG_FB_PM3)		  += pm3fb.o
+@@ -22,8 +22,6 @@ obj-$(CONFIG_FB_PM3)		  += pm3fb.o
  
  obj-$(CONFIG_FB_I740)		  += i740fb.o
  obj-$(CONFIG_FB_MATROX)		  += matrox/

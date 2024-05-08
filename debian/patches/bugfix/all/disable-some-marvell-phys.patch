@@ -42,15 +42,15 @@ correctness.
  
  static int m88e1540_get_fld(struct phy_device *phydev, u8 *msecs)
  {
-@@ -3145,6 +3149,7 @@ static struct phy_driver marvell_drivers[] = {
- 		.led_brightness_set = m88e1318_led_brightness_set,
- 		.led_blink_set = m88e1318_led_blink_set,
+@@ -3414,6 +3418,7 @@ static struct phy_driver marvell_drivers[] = {
+ 		.led_hw_control_set = m88e1318_led_hw_control_set,
+ 		.led_hw_control_get = m88e1318_led_hw_control_get,
  	},
 +#if 0
  	{
  		.phy_id = MARVELL_PHY_ID_88E1145,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -3165,6 +3170,8 @@ static struct phy_driver marvell_drivers[] = {
+@@ -3434,6 +3439,8 @@ static struct phy_driver marvell_drivers[] = {
  		.get_tunable = m88e1111_get_tunable,
  		.set_tunable = m88e1111_set_tunable,
  	},
@@ -59,7 +59,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1149R,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -3183,6 +3190,8 @@ static struct phy_driver marvell_drivers[] = {
+@@ -3452,6 +3459,8 @@ static struct phy_driver marvell_drivers[] = {
  		.get_strings = marvell_get_strings,
  		.get_stats = marvell_get_stats,
  	},
@@ -68,7 +68,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1240,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -3203,6 +3212,7 @@ static struct phy_driver marvell_drivers[] = {
+@@ -3472,6 +3481,7 @@ static struct phy_driver marvell_drivers[] = {
  		.get_tunable = m88e1011_get_tunable,
  		.set_tunable = m88e1011_set_tunable,
  	},
@@ -76,7 +76,7 @@ correctness.
  	{
  		.phy_id = MARVELL_PHY_ID_88E1116R,
  		.phy_id_mask = MARVELL_PHY_ID_MASK,
-@@ -3143,9 +3473,9 @@ static struct mdio_device_id __maybe_unused marvell_tbl[] = {
+@@ -3744,9 +4074,9 @@ static struct mdio_device_id __maybe_unused marvell_tbl[] = {
  	{ MARVELL_PHY_ID_88E1111_FINISAR, MARVELL_PHY_ID_MASK },
  	{ MARVELL_PHY_ID_88E1118, MARVELL_PHY_ID_MASK },
  	{ MARVELL_PHY_ID_88E1121R, MARVELL_PHY_ID_MASK },

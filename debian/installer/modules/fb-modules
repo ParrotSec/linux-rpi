@@ -4,3 +4,8 @@
 drm
 drm_kms_helper
 virtio-gpu ?
+
+# Input modules that depend on drm
+i2c-hid ?
+i2c-hid-acpi ?
+i2c-hid-of ?

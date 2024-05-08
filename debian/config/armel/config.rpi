@@ -107,6 +107,11 @@ CONFIG_BRCMFMAC_SDIO=y
 CONFIG_NVMEM_RMEM=m
 
 ##
+## file: drivers/pmdomain/bcm/Kconfig
+##
+CONFIG_RASPBERRYPI_POWER=y
+
+##
 ## file: drivers/pwm/Kconfig
 ##
 CONFIG_PWM=y
@@ -116,11 +121,6 @@ CONFIG_PWM_BCM2835=y
 ## file: drivers/rtc/Kconfig
 ##
 CONFIG_RTC_DRV_DS1307=m
-
-##
-## file: drivers/soc/bcm/Kconfig
-##
-CONFIG_RASPBERRYPI_POWER=y
 
 ##
 ## file: drivers/spi/Kconfig

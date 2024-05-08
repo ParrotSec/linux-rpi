@@ -1,6 +1,6 @@
 Package: @source_basename@-support-@abiname@
 Meta-Rules-Target: support
-Build-Profiles: <!stage1>
+Build-Profiles: <!pkg.linux.notools>
 Architecture: all
 Section: devel
 Depends: ${python3:Depends}, python3-jinja2, ${misc:Depends}

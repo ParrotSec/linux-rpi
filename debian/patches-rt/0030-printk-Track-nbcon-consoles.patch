@@ -1,0 +1,67 @@
+From: John Ogness <john.ogness@linutronix.de>
+Date: Mon, 11 Dec 2023 09:36:52 +0000
+Subject: [PATCH 30/50] printk: Track nbcon consoles
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+
+Add a global flag @have_nbcon_console to identify if any nbcon
+consoles are registered. This will be used in follow-up commits
+to preserve legacy behavior when no nbcon consoles are registered.
+
+Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ kernel/printk/printk.c |   16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -471,6 +471,13 @@ static DEFINE_MUTEX(syslog_lock);
+ bool have_legacy_console;
+ 
+ /*
++ * Specifies if an nbcon console is registered. If nbcon consoles are present,
++ * synchronous printing of legacy consoles will not occur during panic until
++ * the backtrace has been stored to the ringbuffer.
++ */
++bool have_nbcon_console;
++
++/*
+  * Specifies if a boot console is registered. If boot consoles are present,
+  * nbcon consoles cannot print simultaneously and must be synchronized by
+  * the console lock. This is because boot consoles and nbcon consoles may
+@@ -3530,6 +3537,7 @@ void register_console(struct console *ne
+ 	console_init_seq(newcon, bootcon_registered);
+ 
+ 	if (newcon->flags & CON_NBCON) {
++		have_nbcon_console = true;
+ 		nbcon_init(newcon);
+ 	} else {
+ 		have_legacy_console = true;
+@@ -3591,6 +3599,7 @@ EXPORT_SYMBOL(register_console);
+ static int unregister_console_locked(struct console *console)
+ {
+ 	bool found_legacy_con = false;
++	bool found_nbcon_con = false;
+ 	bool found_boot_con = false;
+ 	struct console *c;
+ 	int res;
+@@ -3647,13 +3656,18 @@ static int unregister_console_locked(str
+ 	for_each_console(c) {
+ 		if (c->flags & CON_BOOT)
+ 			found_boot_con = true;
+-		if (!(c->flags & CON_NBCON))
++
++		if (c->flags & CON_NBCON)
++			found_nbcon_con = true;
++		else
+ 			found_legacy_con = true;
+ 	}
+ 	if (!found_boot_con)
+ 		have_boot_console = false;
+ 	if (!found_legacy_con)
+ 		have_legacy_console = false;
++	if (!found_nbcon_con)
++		have_nbcon_console = false;
+ 
+ 	return res;
+ }

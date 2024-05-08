@@ -51,6 +51,9 @@
 
 #define AMDGPU_DMUB_NOTIFICATION_MAX 5
 
+#define HDMI_AMD_VENDOR_SPECIFIC_DATA_BLOCK_IEEE_REGISTRATION_ID 0x00001A
+#define AMD_VSDB_VERSION_3_FEATURECAP_REPLAYMODE 0x40
+#define HDMI_AMD_VENDOR_SPECIFIC_DATA_BLOCK_VERSION_3 0x3
 /*
 #include "include/amdgpu_dal_power_if.h"
 #include "amdgpu_dm_irq.h"
@@ -74,6 +77,12 @@ struct amdgpu_bo;
 struct dmub_srv;
 struct dc_plane_state;
 struct dmub_notification;
+
+struct amd_vsdb_block {
+	unsigned char ieee_id[3];
+	unsigned char version;
+	unsigned char feature_caps;
+};
 
 struct common_irq_params {
 	struct amdgpu_device *adev;
@@ -609,6 +618,11 @@ struct amdgpu_hdmi_vsdb_info {
 	 * @max_refresh_rate_hz: FreeSync Maximum Refresh Rate in Hz
 	 */
 	unsigned int max_refresh_rate_hz;
+
+	/**
+	 * @replay_mode: Replay supported
+	 */
+	bool replay_mode;
 };
 
 struct amdgpu_dm_connector {
@@ -811,8 +825,6 @@ int amdgpu_dm_process_dmub_aux_transfer_sync(struct dc_context *ctx, unsigned in
 int amdgpu_dm_process_dmub_set_config_sync(struct dc_context *ctx, unsigned int link_index,
 					struct set_config_cmd_payload *payload, enum set_config_status *operation_result);
 
-bool check_seamless_boot_capability(struct amdgpu_device *adev);
-
 struct dc_stream_state *
 	create_validate_stream_for_sink(struct amdgpu_dm_connector *aconnector,
 					const struct drm_display_mode *drm_mode,
@@ -822,7 +834,7 @@ struct dc_stream_state *
 int dm_atomic_get_state(struct drm_atomic_state *state,
 			struct dm_atomic_state **dm_state);
 
-struct amdgpu_dm_connector *
+struct drm_connector *
 amdgpu_dm_find_first_crtc_matching_connector(struct drm_atomic_state *state,
 					     struct drm_crtc *crtc);
 

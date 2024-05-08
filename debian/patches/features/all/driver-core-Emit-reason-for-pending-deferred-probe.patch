@@ -1,0 +1,35 @@
+From: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Date: Wed, 22 Nov 2023 10:33:33 +0100
+Subject: driver core: Emit reason for pending deferred probe
+Origin: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit?id=7c41da586e9f45bf8842b4dca08681df8d586ebb
+
+Ending a boot log with
+
+	platform 3f202000.mmc: deferred probe pending
+
+is already a nice hint about the problem. Sometimes there is a more
+detailed error indicator available, add that to the output.
+
+Signed-off-by: Uwe Kleine-König <u.kleine-koenig@pengutronix.de>
+Link: https://lore.kernel.org/r/20231122093332.274145-2-u.kleine-koenig@pengutronix.de
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+---
+ drivers/base/dd.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/base/dd.c b/drivers/base/dd.c
+index 0c3725c3eefa..85152537dbf1 100644
+--- a/drivers/base/dd.c
++++ b/drivers/base/dd.c
+@@ -313,7 +313,7 @@ static void deferred_probe_timeout_work_func(struct work_struct *work)
+ 
+ 	mutex_lock(&deferred_probe_mutex);
+ 	list_for_each_entry(p, &deferred_probe_pending_list, deferred_probe)
+-		dev_info(p->device, "deferred probe pending\n");
++		dev_info(p->device, "deferred probe pending: %s", p->deferred_probe_reason ?: "(reason unknown)\n");
+ 	mutex_unlock(&deferred_probe_mutex);
+ 
+ 	fw_devlink_probing_done();
+-- 
+2.43.0
+

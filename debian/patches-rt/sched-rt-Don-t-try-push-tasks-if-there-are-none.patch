@@ -1,7 +1,7 @@
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Tue, 1 Aug 2023 17:26:48 +0200
 Subject: [PATCH] sched/rt: Don't try push tasks if there are none.
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.5/older/patches-6.5.2-rt8.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
 
 I have a RT task X at a high priority and cyclictest on each CPU with
 lower priority than X's. If X is active and each CPU wakes their own
@@ -43,7 +43,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/kernel/sched/rt.c
 +++ b/kernel/sched/rt.c
-@@ -2247,8 +2247,11 @@ static int rto_next_cpu(struct root_doma
+@@ -2203,8 +2203,11 @@ static int rto_next_cpu(struct root_doma
  
  		rd->rto_cpu = cpu;
  

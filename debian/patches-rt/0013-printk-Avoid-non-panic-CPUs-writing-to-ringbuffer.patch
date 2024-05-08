@@ -1,0 +1,78 @@
+From: John Ogness <john.ogness@linutronix.de>
+Date: Fri, 20 Oct 2023 09:37:05 +0000
+Subject: [PATCH 13/50] printk: Avoid non-panic CPUs writing to ringbuffer
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+
+Commit 13fb0f74d702 ("printk: Avoid livelock with heavy printk
+during panic") introduced a mechanism to silence non-panic CPUs
+if too many messages are being dropped. Aside from trying to
+workaround the livelock bugs of legacy consoles, it was also
+intended to avoid losing panic messages. However, if non-panic
+CPUs are writing to the ringbuffer, then reacting to dropped
+messages is too late.
+
+To avoid losing panic CPU messages, silence non-panic CPUs
+immediately on panic.
+
+Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ kernel/printk/printk.c |   26 ++++++--------------------
+ 1 file changed, 6 insertions(+), 20 deletions(-)
+
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -462,12 +462,6 @@ static int console_msg_format = MSG_FORM
+ static DEFINE_MUTEX(syslog_lock);
+ 
+ #ifdef CONFIG_PRINTK
+-/*
+- * During panic, heavy printk by other CPUs can delay the
+- * panic and risk deadlock on console resources.
+- */
+-static int __read_mostly suppress_panic_printk;
+-
+ DECLARE_WAIT_QUEUE_HEAD(log_wait);
+ /* All 3 protected by @syslog_lock. */
+ /* the next printk record to read by syslog(READ) or /proc/kmsg */
+@@ -2322,7 +2316,12 @@ asmlinkage int vprintk_emit(int facility
+ 	if (unlikely(suppress_printk))
+ 		return 0;
+ 
+-	if (unlikely(suppress_panic_printk) && other_cpu_in_panic())
++	/*
++	 * The messages on the panic CPU are the most important. If
++	 * non-panic CPUs are generating any messages, they will be
++	 * silently dropped.
++	 */
++	if (other_cpu_in_panic())
+ 		return 0;
+ 
+ 	if (level == LOGLEVEL_SCHED) {
+@@ -2807,8 +2806,6 @@ void console_prepend_dropped(struct prin
+ bool printk_get_next_message(struct printk_message *pmsg, u64 seq,
+ 			     bool is_extended, bool may_suppress)
+ {
+-	static int panic_console_dropped;
+-
+ 	struct printk_buffers *pbufs = pmsg->pbufs;
+ 	const size_t scratchbuf_sz = sizeof(pbufs->scratchbuf);
+ 	const size_t outbuf_sz = sizeof(pbufs->outbuf);
+@@ -2836,17 +2833,6 @@ bool printk_get_next_message(struct prin
+ 	pmsg->seq = r.info->seq;
+ 	pmsg->dropped = r.info->seq - seq;
+ 
+-	/*
+-	 * Check for dropped messages in panic here so that printk
+-	 * suppression can occur as early as possible if necessary.
+-	 */
+-	if (pmsg->dropped &&
+-	    panic_in_progress() &&
+-	    panic_console_dropped++ > 10) {
+-		suppress_panic_printk = 1;
+-		pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
+-	}
+-
+ 	/* Skip record that has level above the console loglevel. */
+ 	if (may_suppress && suppress_message_printing(r.info->level))
+ 		goto out;

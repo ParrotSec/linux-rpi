@@ -1,0 +1,64 @@
+From: John Ogness <john.ogness@linutronix.de>
+Date: Mon, 11 Dec 2023 09:34:16 +0000
+Subject: [PATCH 50/50] printk: Avoid false positive lockdep report for legacy
+ driver.
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+
+printk may invoke the legacy console driver from atomic context. This leads to
+a lockdep splat because the console driver will acquire a sleeping lock and the
+caller may also hold a spinning lock. This is noticed by lockdep on !PREEMPT_RT
+configurations because it will also lead to a problem on PREEMPT_RT.
+
+On PREEMPT_RT the atomic path is always avoided and the console driver is
+always invoked from a dedicated thread. Thus the lockdep splat is a false
+positive.
+
+Override the lock-context before invoking the console driver.
+
+Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ kernel/printk/printk.c |    9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -2824,6 +2824,8 @@ static void __console_unlock(void)
+ 	up_console_sem();
+ }
+ 
++static DEFINE_WAIT_OVERRIDE_MAP(printk_legacy_map, LD_WAIT_SLEEP);
++
+ #ifdef CONFIG_PRINTK
+ 
+ /*
+@@ -2992,7 +2994,7 @@ static bool console_emit_next_record(str
+ 		/*
+ 		 * On PREEMPT_RT this function is either in a thread or
+ 		 * panic context. So there is no need for concern about
+-		 * printk reentrance or handovers.
++		 * printk reentrance, handovers, or lockdep complaints.
+ 		 */
+ 
+ 		con->write(con, outbuf, pmsg.outbuf_len);
+@@ -3014,7 +3016,9 @@ static bool console_emit_next_record(str
+ 		/* Do not trace print latency. */
+ 		stop_critical_timings();
+ 
++		lock_map_acquire_try(&printk_legacy_map);
+ 		con->write(con, outbuf, pmsg.outbuf_len);
++		lock_map_release(&printk_legacy_map);
+ 
+ 		start_critical_timings();
+ 
+@@ -3091,7 +3095,10 @@ static bool console_flush_all(bool do_co
+ 			any_usable = true;
+ 
+ 			if (flags & CON_NBCON) {
++
++				lock_map_acquire_try(&printk_legacy_map);
+ 				progress = nbcon_atomic_emit_next_record(con, handover, cookie);
++				lock_map_release(&printk_legacy_map);
+ 
+ 				printk_seq = nbcon_seq_read(con);
+ 			} else {

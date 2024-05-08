@@ -8,7 +8,6 @@ CONFIG_SECCOMP=y
 ##
 CONFIG_SMP=y
 CONFIG_NUMA=y
-CONFIG_KEXEC=y
 # CONFIG_COMPAT is not set
 
 ##
@@ -17,8 +16,10 @@ CONFIG_KEXEC=y
 CONFIG_SOC_MICROCHIP_POLARFIRE=y
 CONFIG_ARCH_RENESAS=y
 CONFIG_SOC_SIFIVE=y
+CONFIG_ARCH_SOPHGO=y
 CONFIG_SOC_STARFIVE=y
 CONFIG_ARCH_SUNXI=y
+CONFIG_ARCH_THEAD=y
 CONFIG_SOC_VIRT=y
 
 ##
@@ -51,11 +52,6 @@ CONFIG_CPUFREQ_DT=m
 CONFIG_CPUFREQ_DT_PLATDEV=y
 
 ##
-## file: drivers/crypto/starfive/Kconfig
-##
-CONFIG_CRYPTO_DEV_JH7110=m
-
-##
 ## file: drivers/cxl/Kconfig
 ##
 CONFIG_CXL_BUS=y
@@ -65,6 +61,7 @@ CONFIG_CXL_BUS=y
 ##
 CONFIG_DMADEVICES=y
 CONFIG_DMA_SUN6I=m
+CONFIG_DW_AXI_DMAC=m
 
 ##
 ## file: drivers/gpio/Kconfig
@@ -120,6 +117,16 @@ CONFIG_INPUT_DA9063_ONKEY=m
 CONFIG_SUN50I_IOMMU=y
 
 ##
+## file: drivers/leds/Kconfig
+##
+CONFIG_LEDS_PWM=m
+
+##
+## file: drivers/leds/rgb/Kconfig
+##
+CONFIG_LEDS_PWM_MULTICOLOR=m
+
+##
 ## file: drivers/mailbox/Kconfig
 ##
 CONFIG_MAILBOX=y
@@ -158,6 +165,11 @@ CONFIG_MACB=m
 CONFIG_STMMAC_ETH=m
 
 ##
+## file: drivers/net/phy/Kconfig
+##
+CONFIG_MOTORCOMM_PHY=m
+
+##
 ## file: drivers/nvmem/Kconfig
 ##
 CONFIG_NVMEM_SUNXI_SID=m
@@ -184,6 +196,13 @@ CONFIG_PCIE_FU740=y
 ## file: drivers/phy/allwinner/Kconfig
 ##
 CONFIG_PHY_SUN4I_USB=m
+
+##
+## file: drivers/phy/starfive/Kconfig
+##
+CONFIG_PHY_STARFIVE_JH7110_DPHY_RX=m
+CONFIG_PHY_STARFIVE_JH7110_PCIE=m
+CONFIG_PHY_STARFIVE_JH7110_USB=m
 
 ##
 ## file: drivers/power/reset/Kconfig
@@ -222,11 +241,6 @@ CONFIG_RTC_DRV_POLARFIRE_SOC=m
 ## file: drivers/soc/microchip/Kconfig
 ##
 CONFIG_POLARFIRE_SOC_SYS_CTRL=m
-
-##
-## file: drivers/soc/renesas/Kconfig
-##
-CONFIG_ARCH_R9A07G043=y
 
 ##
 ## file: drivers/spi/Kconfig
@@ -284,6 +298,11 @@ CONFIG_NOP_USB_XCEIV=m
 CONFIG_DA9063_WATCHDOG=m
 CONFIG_SUNXI_WATCHDOG=m
 CONFIG_STARFIVE_WATCHDOG=m
+
+##
+## file: kernel/Kconfig.kexec
+##
+CONFIG_KEXEC=y
 
 ##
 ## file: lib/Kconfig.debug

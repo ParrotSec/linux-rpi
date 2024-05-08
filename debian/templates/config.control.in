@@ -1,7 +1,7 @@
 Package: @source_basename@-config-@version@
 Meta-Rules-Target: config
 Architecture: linux-any
-Build-Profiles: <!stage1 !pkg.linux.nosource>
+Build-Profiles: <!pkg.linux.nosource>
 Multi-Arch: same
 Depends: ${misc:Depends}
 Recommends: @source_basename@-source-@version@

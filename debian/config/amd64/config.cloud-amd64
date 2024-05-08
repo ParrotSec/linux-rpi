@@ -10,7 +10,6 @@
 #. XXX
 # CONFIG_X86_MCE is not set
 # CONFIG_X86_16BIT is not set
-# CONFIG_MICROCODE is not set
 # CONFIG_AMD_NUMA is not set
 # CONFIG_NUMA_EMU is not set
 # CONFIG_ISA_DMA_API is not set

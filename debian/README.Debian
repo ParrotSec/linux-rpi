@@ -38,7 +38,7 @@ debian/rules.gen, which have names of the form:
     binary-arch_<architecture>_<featureset>_<flavour>
 
 Example:
-    fakeroot make -f debian/rules.gen binary-arch_i386_none_686
+    make -f debian/rules.gen binary-arch_i386_none_686
 
 Rebuilding Adaptec AIC7xxx/79xx firmware
 ----------------------------------------

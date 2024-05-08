@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * Copyright IBM Corp. 2006, 2021
+ * Copyright IBM Corp. 2006, 2023
  * Author(s): Cornelia Huck <cornelia.huck@de.ibm.com>
  *	      Martin Schwidefsky <schwidefsky@de.ibm.com>
  *	      Ralph Wuerthner <rwuerthn@de.ibm.com>
@@ -219,6 +219,15 @@ int ap_sb_available(void)
 }
 
 /*
+ * ap_is_se_guest(): Check for SE guest with AP pass-through support.
+ */
+bool ap_is_se_guest(void)
+{
+	return is_prot_virt_guest() && ap_sb_available();
+}
+EXPORT_SYMBOL(ap_is_se_guest);
+
+/*
  * ap_fetch_qci_info(): Fetch cryptographic config info
  *
  * Returns the ap configuration info fetched via PQAP(QCI).
@@ -343,7 +352,7 @@ EXPORT_SYMBOL(ap_test_config_ctrl_domain);
 /*
  * ap_queue_info(): Check and get AP queue info.
  * Returns: 1 if APQN exists and info is filled,
- *	    0 if APQN seems to exit but there is no info
+ *	    0 if APQN seems to exist but there is no info
  *	      available (eg. caused by an asynch pending error)
  *	   -1 invalid APQN, TAPQ error or AP queue status which
  *	      indicates there is no APQN.
@@ -364,53 +373,33 @@ static int ap_queue_info(ap_qid_t qid, int *q_type, unsigned int *q_fac,
 	/* call TAPQ on this APQN */
 	status = ap_test_queue(qid, ap_apft_available(), &tapq_info);
 
-	/* handle pending async error with return 'no info available' */
-	if (status.async)
-		return 0;
-
 	switch (status.response_code) {
 	case AP_RESPONSE_NORMAL:
 	case AP_RESPONSE_RESET_IN_PROGRESS:
 	case AP_RESPONSE_DECONFIGURED:
 	case AP_RESPONSE_CHECKSTOPPED:
 	case AP_RESPONSE_BUSY:
-		/*
-		 * According to the architecture in all these cases the
-		 * info should be filled. All bits 0 is not possible as
-		 * there is at least one of the mode bits set.
-		 */
-		if (WARN_ON_ONCE(!tapq_info.value))
-			return 0;
-		*q_type = tapq_info.at;
-		*q_fac = tapq_info.fac;
-		*q_depth = tapq_info.qd;
-		*q_ml = tapq_info.ml;
-		*q_decfg = status.response_code == AP_RESPONSE_DECONFIGURED;
-		*q_cstop = status.response_code == AP_RESPONSE_CHECKSTOPPED;
-		switch (*q_type) {
-			/* For CEX2 and CEX3 the available functions
-			 * are not reflected by the facilities bits.
-			 * Instead it is coded into the type. So here
-			 * modify the function bits based on the type.
-			 */
-		case AP_DEVICE_TYPE_CEX2A:
-		case AP_DEVICE_TYPE_CEX3A:
-			*q_fac |= 0x08000000;
-			break;
-		case AP_DEVICE_TYPE_CEX2C:
-		case AP_DEVICE_TYPE_CEX3C:
-			*q_fac |= 0x10000000;
-			break;
-		default:
-			break;
-		}
-		return 1;
+		/* For all these RCs the tapq info should be available */
+		break;
 	default:
-		/*
-		 * A response code which indicates, there is no info available.
-		 */
-		return -1;
+		/* On a pending async error the info should be available */
+		if (!status.async)
+			return -1;
+		break;
 	}
+
+	/* There should be at least one of the mode bits set */
+	if (WARN_ON_ONCE(!tapq_info.value))
+		return 0;
+
+	*q_type = tapq_info.at;
+	*q_fac = tapq_info.fac;
+	*q_depth = tapq_info.qd;
+	*q_ml = tapq_info.ml;
+	*q_decfg = status.response_code == AP_RESPONSE_DECONFIGURED;
+	*q_cstop = status.response_code == AP_RESPONSE_CHECKSTOPPED;
+
+	return 1;
 }
 
 void ap_wait(enum ap_sm_wait wait)
@@ -1682,8 +1671,8 @@ static int ap_get_compatible_type(ap_qid_t qid, int rawtype, unsigned int func)
 {
 	int comp_type = 0;
 
-	/* < CEX2A is not supported */
-	if (rawtype < AP_DEVICE_TYPE_CEX2A) {
+	/* < CEX4 is not supported */
+	if (rawtype < AP_DEVICE_TYPE_CEX4) {
 		AP_DBF_WARN("%s queue=%02x.%04x unsupported type %d\n",
 			    __func__, AP_QID_CARD(qid),
 			    AP_QID_QUEUE(qid), rawtype);
@@ -1705,7 +1694,7 @@ static int ap_get_compatible_type(ap_qid_t qid, int rawtype, unsigned int func)
 		apinfo.cat = AP_DEVICE_TYPE_CEX8;
 		status = ap_qact(qid, 0, &apinfo);
 		if (status.response_code == AP_RESPONSE_NORMAL &&
-		    apinfo.cat >= AP_DEVICE_TYPE_CEX2A &&
+		    apinfo.cat >= AP_DEVICE_TYPE_CEX4 &&
 		    apinfo.cat <= AP_DEVICE_TYPE_CEX8)
 			comp_type = apinfo.cat;
 	}

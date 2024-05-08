@@ -5,7 +5,7 @@ include $(top_rulesdir)/Makefile.inc
 wrapperdir = $(top_rulesdir)/$(OUTDIR)
 CFLAGS += -I $(CURDIR)/real-$(TYPE) -I $(wrapperdir)/real-$(TYPE)
 
-modpost.real-$(TYPE): file2alias.real-$(TYPE).o modpost.real-$(TYPE).o sumversion.real-$(TYPE).o
+modpost.real-$(TYPE): file2alias.real-$(TYPE).o modpost.real-$(TYPE).o sumversion.real-$(TYPE).o symsearch.real-$(TYPE).o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 %.real-$(TYPE).o: $(SOURCEDIR)/%.c real-$(TYPE)/devicetable-offsets.h

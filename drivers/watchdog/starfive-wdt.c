@@ -8,7 +8,8 @@
 #include <linux/clk.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
 #include <linux/watchdog.h>
@@ -201,12 +202,14 @@ static u32 starfive_wdt_ticks_to_sec(struct starfive_wdt *wdt, u32 ticks)
 
 /* Write unlock-key to unlock. Write other value to lock. */
 static void starfive_wdt_unlock(struct starfive_wdt *wdt)
+	__acquires(&wdt->lock)
 {
 	spin_lock(&wdt->lock);
 	writel(wdt->variant->unlock_key, wdt->base + wdt->variant->unlock);
 }
 
 static void starfive_wdt_lock(struct starfive_wdt *wdt)
+	__releases(&wdt->lock)
 {
 	writel(~wdt->variant->unlock_key, wdt->base + wdt->variant->unlock);
 	spin_unlock(&wdt->lock);
@@ -491,8 +494,13 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_exit;
 
-	if (!early_enable)
-		pm_runtime_put_sync(&pdev->dev);
+	if (!early_enable) {
+		if (pm_runtime_enabled(&pdev->dev)) {
+			ret = pm_runtime_put_sync(&pdev->dev);
+			if (ret)
+				goto err_exit;
+		}
+	}
 
 	return 0;
 
@@ -526,7 +534,6 @@ static void starfive_wdt_shutdown(struct platform_device *pdev)
 	starfive_wdt_pm_stop(&wdt->wdd);
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int starfive_wdt_suspend(struct device *dev)
 {
 	struct starfive_wdt *wdt = dev_get_drvdata(dev);
@@ -556,9 +563,7 @@ static int starfive_wdt_resume(struct device *dev)
 
 	return starfive_wdt_start(wdt);
 }
-#endif /* CONFIG_PM_SLEEP */
 
-#ifdef CONFIG_PM
 static int starfive_wdt_runtime_suspend(struct device *dev)
 {
 	struct starfive_wdt *wdt = dev_get_drvdata(dev);
@@ -574,11 +579,10 @@ static int starfive_wdt_runtime_resume(struct device *dev)
 
 	return starfive_wdt_enable_clock(wdt);
 }
-#endif /* CONFIG_PM */
 
 static const struct dev_pm_ops starfive_wdt_pm_ops = {
-	SET_RUNTIME_PM_OPS(starfive_wdt_runtime_suspend, starfive_wdt_runtime_resume, NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(starfive_wdt_suspend, starfive_wdt_resume)
+	RUNTIME_PM_OPS(starfive_wdt_runtime_suspend, starfive_wdt_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(starfive_wdt_suspend, starfive_wdt_resume)
 };
 
 static const struct of_device_id starfive_wdt_match[] = {
@@ -594,7 +598,7 @@ static struct platform_driver starfive_wdt_driver = {
 	.shutdown = starfive_wdt_shutdown,
 	.driver = {
 		.name = "starfive-wdt",
-		.pm = &starfive_wdt_pm_ops,
+		.pm = pm_ptr(&starfive_wdt_pm_ops),
 		.of_match_table = starfive_wdt_match,
 	},
 };

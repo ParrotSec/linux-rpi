@@ -1203,6 +1203,66 @@ static void raw_write(struct kunit *test)
 	regmap_exit(map);
 }
 
+static bool reg_zero(struct device *dev, unsigned int reg)
+{
+	return reg == 0;
+}
+
+static bool ram_reg_zero(struct regmap_ram_data *data, unsigned int reg)
+{
+	return reg == 0;
+}
+
+static void raw_noinc_write(struct kunit *test)
+{
+	struct raw_test_types *t = (struct raw_test_types *)test->param_value;
+	struct regmap *map;
+	struct regmap_config config;
+	struct regmap_ram_data *data;
+	unsigned int val;
+	u16 val_test, val_last;
+	u16 val_array[BLOCK_TEST_SIZE];
+
+	config = raw_regmap_config;
+	config.volatile_reg = reg_zero;
+	config.writeable_noinc_reg = reg_zero;
+	config.readable_noinc_reg = reg_zero;
+
+	map = gen_raw_regmap(&config, t, &data);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(map));
+	if (IS_ERR(map))
+		return;
+
+	data->noinc_reg = ram_reg_zero;
+
+	get_random_bytes(&val_array, sizeof(val_array));
+
+	if (config.val_format_endian == REGMAP_ENDIAN_BIG) {
+		val_test = be16_to_cpu(val_array[1]) + 100;
+		val_last = be16_to_cpu(val_array[BLOCK_TEST_SIZE - 1]);
+	} else {
+		val_test = le16_to_cpu(val_array[1]) + 100;
+		val_last = le16_to_cpu(val_array[BLOCK_TEST_SIZE - 1]);
+	}
+
+	/* Put some data into the register following the noinc register */
+	KUNIT_EXPECT_EQ(test, 0, regmap_write(map, 1, val_test));
+
+	/* Write some data to the noinc register */
+	KUNIT_EXPECT_EQ(test, 0, regmap_noinc_write(map, 0, val_array,
+						    sizeof(val_array)));
+
+	/* We should read back the last value written */
+	KUNIT_EXPECT_EQ(test, 0, regmap_read(map, 0, &val));
+	KUNIT_ASSERT_EQ(test, val_last, val);
+
+	/* Make sure we didn't touch the register after the noinc register */
+	KUNIT_EXPECT_EQ(test, 0, regmap_read(map, 1, &val));
+	KUNIT_ASSERT_EQ(test, val_test, val);
+
+	regmap_exit(map);
+}
+
 static void raw_sync(struct kunit *test)
 {
 	struct raw_test_types *t = (struct raw_test_types *)test->param_value;
@@ -1281,6 +1341,71 @@ static void raw_sync(struct kunit *test)
 	regmap_exit(map);
 }
 
+static void raw_ranges(struct kunit *test)
+{
+	struct raw_test_types *t = (struct raw_test_types *)test->param_value;
+	struct regmap *map;
+	struct regmap_config config;
+	struct regmap_ram_data *data;
+	unsigned int val;
+	int i;
+
+	config = raw_regmap_config;
+	config.volatile_reg = test_range_all_volatile;
+	config.ranges = &test_range;
+	config.num_ranges = 1;
+	config.max_register = test_range.range_max;
+
+	map = gen_raw_regmap(&config, t, &data);
+	KUNIT_ASSERT_FALSE(test, IS_ERR(map));
+	if (IS_ERR(map))
+		return;
+
+	/* Reset the page to a non-zero value to trigger a change */
+	KUNIT_EXPECT_EQ(test, 0, regmap_write(map, test_range.selector_reg,
+					      test_range.range_max));
+
+	/* Check we set the page and use the window for writes */
+	data->written[test_range.selector_reg] = false;
+	data->written[test_range.window_start] = false;
+	KUNIT_EXPECT_EQ(test, 0, regmap_write(map, test_range.range_min, 0));
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.selector_reg]);
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.window_start]);
+
+	data->written[test_range.selector_reg] = false;
+	data->written[test_range.window_start] = false;
+	KUNIT_EXPECT_EQ(test, 0, regmap_write(map,
+					      test_range.range_min +
+					      test_range.window_len,
+					      0));
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.selector_reg]);
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.window_start]);
+
+	/* Same for reads */
+	data->written[test_range.selector_reg] = false;
+	data->read[test_range.window_start] = false;
+	KUNIT_EXPECT_EQ(test, 0, regmap_read(map, test_range.range_min, &val));
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.selector_reg]);
+	KUNIT_EXPECT_TRUE(test, data->read[test_range.window_start]);
+
+	data->written[test_range.selector_reg] = false;
+	data->read[test_range.window_start] = false;
+	KUNIT_EXPECT_EQ(test, 0, regmap_read(map,
+					     test_range.range_min +
+					     test_range.window_len,
+					     &val));
+	KUNIT_EXPECT_TRUE(test, data->written[test_range.selector_reg]);
+	KUNIT_EXPECT_TRUE(test, data->read[test_range.window_start]);
+
+	/* No physical access triggered in the virtual range */
+	for (i = test_range.range_min; i < test_range.range_max; i++) {
+		KUNIT_EXPECT_FALSE(test, data->read[i]);
+		KUNIT_EXPECT_FALSE(test, data->written[i]);
+	}
+
+	regmap_exit(map);
+}
+
 static struct kunit_case regmap_test_cases[] = {
 	KUNIT_CASE_PARAM(basic_read_write, regcache_types_gen_params),
 	KUNIT_CASE_PARAM(bulk_write, regcache_types_gen_params),
@@ -1306,7 +1431,9 @@ static struct kunit_case regmap_test_cases[] = {
 	KUNIT_CASE_PARAM(raw_read_defaults, raw_test_types_gen_params),
 	KUNIT_CASE_PARAM(raw_write_read_single, raw_test_types_gen_params),
 	KUNIT_CASE_PARAM(raw_write, raw_test_types_gen_params),
+	KUNIT_CASE_PARAM(raw_noinc_write, raw_test_types_gen_params),
 	KUNIT_CASE_PARAM(raw_sync, raw_test_cache_types_gen_params),
+	KUNIT_CASE_PARAM(raw_ranges, raw_test_cache_types_gen_params),
 	{}
 };
 

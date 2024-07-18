@@ -48,7 +48,7 @@ static int ntfs_ioctl_fitrim(struct ntfs_sb_info *sbi, unsigned long arg)
 	return 0;
 }
 
-static long ntfs_ioctl(struct file *filp, u32 cmd, unsigned long arg)
+long ntfs_ioctl(struct file *filp, u32 cmd, unsigned long arg)
 {
 	struct inode *inode = file_inode(filp);
 	struct ntfs_sb_info *sbi = inode->i_sb->s_fs_info;
@@ -61,7 +61,7 @@ static long ntfs_ioctl(struct file *filp, u32 cmd, unsigned long arg)
 }
 
 #ifdef CONFIG_COMPAT
-static long ntfs_compat_ioctl(struct file *filp, u32 cmd, unsigned long arg)
+long ntfs_compat_ioctl(struct file *filp, u32 cmd, unsigned long arg)
 
 {
 	return ntfs_ioctl(filp, cmd, (unsigned long)compat_ptr(arg));
@@ -1234,6 +1234,14 @@ const struct file_operations ntfs_file_operations = {
 	.fsync		= generic_file_fsync,
 	.splice_write	= iter_file_splice_write,
 	.fallocate	= ntfs_fallocate,
+	.release	= ntfs_file_release,
+};
+
+const struct file_operations ntfs_legacy_file_operations = {
+	.llseek		= generic_file_llseek,
+	.read_iter	= ntfs_file_read_iter,
+	.splice_read	= ntfs_file_splice_read,
+	.open		= ntfs_file_open,
 	.release	= ntfs_file_release,
 };
 // clang-format on

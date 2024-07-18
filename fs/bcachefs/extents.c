@@ -8,6 +8,7 @@
 
 #include "bcachefs.h"
 #include "bkey_methods.h"
+#include "btree_cache.h"
 #include "btree_gc.h"
 #include "btree_io.h"
 #include "btree_iter.h"
@@ -188,12 +189,17 @@ int bch2_btree_ptr_v2_invalid(struct bch_fs *c, struct bkey_s_c k,
 			      enum bkey_invalid_flags flags,
 			      struct printbuf *err)
 {
+	struct bkey_s_c_btree_ptr_v2 bp = bkey_s_c_to_btree_ptr_v2(k);
 	int ret = 0;
 
-	bkey_fsck_err_on(bkey_val_u64s(k.k) > BKEY_BTREE_PTR_VAL_U64s_MAX, c, err,
-			 btree_ptr_v2_val_too_big,
+	bkey_fsck_err_on(bkey_val_u64s(k.k) > BKEY_BTREE_PTR_VAL_U64s_MAX,
+			 c, err, btree_ptr_v2_val_too_big,
 			 "value too big (%zu > %zu)",
 			 bkey_val_u64s(k.k), BKEY_BTREE_PTR_VAL_U64s_MAX);
+
+	bkey_fsck_err_on(bpos_ge(bp.v->min_key, bp.k->p),
+			 c, err, btree_ptr_v2_min_key_bad,
+			 "min_key > key");
 
 	ret = bch2_bkey_ptrs_invalid(c, k, flags, err);
 fsck_err:
@@ -843,7 +849,6 @@ void bch2_bkey_drop_device_noerror(struct bkey_s k, unsigned dev)
 const struct bch_extent_ptr *bch2_bkey_has_device_c(struct bkey_s_c k, unsigned dev)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const struct bch_extent_ptr *ptr;
 
 	bkey_for_each_ptr(ptrs, ptr)
 		if (ptr->dev == dev)
@@ -855,7 +860,6 @@ const struct bch_extent_ptr *bch2_bkey_has_device_c(struct bkey_s_c k, unsigned 
 bool bch2_bkey_has_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const struct bch_extent_ptr *ptr;
 
 	bkey_for_each_ptr(ptrs, ptr)
 		if (bch2_dev_in_target(c, ptr->dev, target) &&
@@ -974,6 +978,33 @@ bool bch2_extent_normalize(struct bch_fs *c, struct bkey_s k)
 	return bkey_deleted(k.k);
 }
 
+void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struct bch_extent_ptr *ptr)
+{
+	struct bch_dev *ca = c && ptr->dev < c->sb.nr_devices && c->devs[ptr->dev]
+		? bch_dev_bkey_exists(c, ptr->dev)
+		: NULL;
+
+	if (!ca) {
+		prt_printf(out, "ptr: %u:%llu gen %u%s", ptr->dev,
+			   (u64) ptr->offset, ptr->gen,
+			   ptr->cached ? " cached" : "");
+	} else {
+		u32 offset;
+		u64 b = sector_to_bucket_and_offset(ca, ptr->offset, &offset);
+
+		prt_printf(out, "ptr: %u:%llu:%u gen %u",
+			   ptr->dev, b, offset, ptr->gen);
+		if (ptr->cached)
+			prt_str(out, " cached");
+		if (ptr->unwritten)
+			prt_str(out, " unwritten");
+		if (b >= ca->mi.first_bucket &&
+		    b <  ca->mi.nbuckets &&
+		    ptr_stale(ca, ptr))
+			prt_printf(out, " stale");
+	}
+}
+
 void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
@@ -989,43 +1020,23 @@ void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			prt_printf(out, " ");
 
 		switch (__extent_entry_type(entry)) {
-		case BCH_EXTENT_ENTRY_ptr: {
-			const struct bch_extent_ptr *ptr = entry_to_ptr(entry);
-			struct bch_dev *ca = c && ptr->dev < c->sb.nr_devices && c->devs[ptr->dev]
-				? bch_dev_bkey_exists(c, ptr->dev)
-				: NULL;
-
-			if (!ca) {
-				prt_printf(out, "ptr: %u:%llu gen %u%s", ptr->dev,
-				       (u64) ptr->offset, ptr->gen,
-				       ptr->cached ? " cached" : "");
-			} else {
-				u32 offset;
-				u64 b = sector_to_bucket_and_offset(ca, ptr->offset, &offset);
-
-				prt_printf(out, "ptr: %u:%llu:%u gen %u",
-					   ptr->dev, b, offset, ptr->gen);
-				if (ptr->cached)
-					prt_str(out, " cached");
-				if (ptr->unwritten)
-					prt_str(out, " unwritten");
-				if (ca && ptr_stale(ca, ptr))
-					prt_printf(out, " stale");
-			}
+		case BCH_EXTENT_ENTRY_ptr:
+			bch2_extent_ptr_to_text(out, c, entry_to_ptr(entry));
 			break;
-		}
+
 		case BCH_EXTENT_ENTRY_crc32:
 		case BCH_EXTENT_ENTRY_crc64:
 		case BCH_EXTENT_ENTRY_crc128: {
 			struct bch_extent_crc_unpacked crc =
 				bch2_extent_crc_unpack(k.k, entry_to_crc(entry));
 
-			prt_printf(out, "crc: c_size %u size %u offset %u nonce %u csum %s compress %s",
+			prt_printf(out, "crc: c_size %u size %u offset %u nonce %u csum ",
 			       crc.compressed_size,
 			       crc.uncompressed_size,
-			       crc.offset, crc.nonce,
-			       bch2_csum_types[crc.csum_type],
-			       bch2_compression_types[crc.compression_type]);
+			       crc.offset, crc.nonce);
+			bch2_prt_csum_type(out, crc.csum_type);
+			prt_str(out, " compress ");
+			bch2_prt_compression_type(out, crc.compression_type);
 			break;
 		}
 		case BCH_EXTENT_ENTRY_stripe_ptr: {
@@ -1065,7 +1076,6 @@ static int extent_ptr_invalid(struct bch_fs *c,
 			      struct printbuf *err)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const struct bch_extent_ptr *ptr2;
 	u64 bucket;
 	u32 bucket_offset;
 	struct bch_dev *ca;
@@ -1307,7 +1317,6 @@ unsigned bch2_bkey_ptrs_need_rebalance(struct bch_fs *c, struct bkey_s_c k,
 	}
 incompressible:
 	if (target && bch2_target_accepts_data(c, BCH_DATA_user, target)) {
-		const struct bch_extent_ptr *ptr;
 		unsigned i = 0;
 
 		bkey_for_each_ptr(ptrs, ptr) {
@@ -1338,10 +1347,12 @@ bool bch2_bkey_needs_rebalance(struct bch_fs *c, struct bkey_s_c k)
 }
 
 int bch2_bkey_set_needs_rebalance(struct bch_fs *c, struct bkey_i *_k,
-				  unsigned target, unsigned compression)
+				  struct bch_io_opts *opts)
 {
 	struct bkey_s k = bkey_i_to_s(_k);
 	struct bch_extent_rebalance *r;
+	unsigned target = opts->background_target;
+	unsigned compression = background_compression(*opts);
 	bool needs_rebalance;
 
 	if (!bkey_extent_is_direct_data(k.k))

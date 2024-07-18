@@ -43,6 +43,7 @@ struct timerlat_top_params {
 	int			cgroup;
 	int			hk_cpus;
 	int			user_top;
+	int			user_workload;
 	cpu_set_t		hk_cpu_set;
 	struct sched_attr	sched_param;
 	struct trace_events	*events;
@@ -211,6 +212,8 @@ static void timerlat_top_header(struct osnoise_tool *top)
 	trace_seq_printf(s, "\n");
 }
 
+static const char *no_value = "        -";
+
 /*
  * timerlat_top_print - prints the output of a given CPU
  */
@@ -238,10 +241,7 @@ static void timerlat_top_print(struct osnoise_tool *top, int cpu)
 	trace_seq_printf(s, "%3d #%-9d |", cpu, cpu_data->irq_count);
 
 	if (!cpu_data->irq_count) {
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - |");
+		trace_seq_printf(s, "%s %s %s %s |", no_value, no_value, no_value, no_value);
 	} else {
 		trace_seq_printf(s, "%9llu ", cpu_data->cur_irq / params->output_divisor);
 		trace_seq_printf(s, "%9llu ", cpu_data->min_irq / params->output_divisor);
@@ -250,10 +250,7 @@ static void timerlat_top_print(struct osnoise_tool *top, int cpu)
 	}
 
 	if (!cpu_data->thread_count) {
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        -\n");
+		trace_seq_printf(s, "%s %s %s %s", no_value, no_value, no_value, no_value);
 	} else {
 		trace_seq_printf(s, "%9llu ", cpu_data->cur_thread / divisor);
 		trace_seq_printf(s, "%9llu ", cpu_data->min_thread / divisor);
@@ -270,10 +267,7 @@ static void timerlat_top_print(struct osnoise_tool *top, int cpu)
 	trace_seq_printf(s, " |");
 
 	if (!cpu_data->user_count) {
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        - ");
-		trace_seq_printf(s, "        -\n");
+		trace_seq_printf(s, "%s %s %s %s\n", no_value, no_value, no_value, no_value);
 	} else {
 		trace_seq_printf(s, "%9llu ", cpu_data->cur_user / divisor);
 		trace_seq_printf(s, "%9llu ", cpu_data->min_user / divisor);
@@ -364,6 +358,7 @@ static void timerlat_top_usage(char *usage)
 		"		d:runtime[us|ms|s]:period[us|ms|s] - use SCHED_DEADLINE with runtime and period",
 		"						       in nanoseconds",
 		"	  -u/--user-threads: use rtla user-space threads instead of in-kernel timerlat threads",
+		"	  -U/--user-load: enable timerlat for user-defined user-space workload",
 		NULL,
 	};
 
@@ -423,6 +418,7 @@ static struct timerlat_top_params
 			{"thread",		required_argument,	0, 'T'},
 			{"trace",		optional_argument,	0, 't'},
 			{"user-threads",	no_argument,		0, 'u'},
+			{"user-load",		no_argument,		0, 'U'},
 			{"trigger",		required_argument,	0, '0'},
 			{"filter",		required_argument,	0, '1'},
 			{"dma-latency",		required_argument,	0, '2'},
@@ -435,7 +431,7 @@ static struct timerlat_top_params
 		/* getopt_long stores the option index here. */
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "a:c:C::d:De:hH:i:np:P:qs:t::T:u0:1:2:345:",
+		c = getopt_long(argc, argv, "a:c:C::d:De:hH:i:np:P:qs:t::T:uU0:1:2:345:",
 				 long_options, &option_index);
 
 		/* detect the end of the options. */
@@ -552,6 +548,9 @@ static struct timerlat_top_params
 
 			break;
 		case 'u':
+			params->user_workload = true;
+			/* fallback: -u implies -U */
+		case 'U':
 			params->user_top = true;
 			break;
 		case '0': /* trigger */
@@ -869,7 +868,7 @@ int timerlat_top_main(int argc, char *argv[])
 	top->start_time = time(NULL);
 	timerlat_top_set_signals(params);
 
-	if (params->user_top) {
+	if (params->user_workload) {
 		/* rtla asked to stop */
 		params_u.should_run = 1;
 		/* all threads left */
@@ -912,7 +911,7 @@ int timerlat_top_main(int argc, char *argv[])
 			break;
 
 		/* is there still any user-threads ? */
-		if (params->user_top) {
+		if (params->user_workload) {
 			if (params_u.stopped_running) {
 				debug_msg("timerlat user space threads stopped!\n");
 				break;
@@ -920,7 +919,7 @@ int timerlat_top_main(int argc, char *argv[])
 		}
 	}
 
-	if (params->user_top && !params_u.stopped_running) {
+	if (params->user_workload && !params_u.stopped_running) {
 		params_u.should_run = 0;
 		sleep(1);
 	}

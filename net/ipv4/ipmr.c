@@ -253,7 +253,7 @@ static int __net_init ipmr_rules_init(struct net *net)
 		goto err1;
 	}
 
-	err = fib_default_rule_add(ops, 0x7fff, RT_TABLE_DEFAULT, 0);
+	err = fib_default_rule_add(ops, 0x7fff, RT_TABLE_DEFAULT);
 	if (err < 0)
 		goto err2;
 
@@ -2589,7 +2589,9 @@ errout_free:
 
 static int ipmr_rtm_dumproute(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	struct fib_dump_filter filter = {};
+	struct fib_dump_filter filter = {
+		.rtnl_held = true,
+	};
 	int err;
 
 	if (cb->strict_check) {
@@ -3141,10 +3143,7 @@ int __init ip_mr_init(void)
 {
 	int err;
 
-	mrt_cachep = kmem_cache_create("ip_mrt_cache",
-				       sizeof(struct mfc_cache),
-				       0, SLAB_HWCACHE_ALIGN | SLAB_PANIC,
-				       NULL);
+	mrt_cachep = KMEM_CACHE(mfc_cache, SLAB_HWCACHE_ALIGN | SLAB_PANIC);
 
 	err = register_pernet_subsys(&ipmr_net_ops);
 	if (err)

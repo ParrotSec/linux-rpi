@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright 2022-2023 Rivos, Inc
+ * Copyright 2022-2024 Rivos, Inc
  */
 
 #ifndef _ASM_CPUFEATURE_H
@@ -28,29 +28,38 @@ struct riscv_isainfo {
 
 DECLARE_PER_CPU(struct riscv_cpuinfo, riscv_cpuinfo);
 
-DECLARE_PER_CPU(long, misaligned_access_speed);
-
 /* Per-cpu ISA extensions. */
 extern struct riscv_isainfo hart_isa[NR_CPUS];
 
 void riscv_user_isa_enable(void);
 
-#ifdef CONFIG_RISCV_MISALIGNED
-bool unaligned_ctl_available(void);
-bool check_unaligned_access_emulated(int cpu);
+#if defined(CONFIG_RISCV_MISALIGNED)
+bool check_unaligned_access_emulated_all_cpus(void);
 void unaligned_emulation_finish(void);
+bool unaligned_ctl_available(void);
+DECLARE_PER_CPU(long, misaligned_access_speed);
 #else
 static inline bool unaligned_ctl_available(void)
 {
 	return false;
 }
+#endif
 
-static inline bool check_unaligned_access_emulated(int cpu)
+#if defined(CONFIG_RISCV_PROBE_UNALIGNED_ACCESS)
+DECLARE_STATIC_KEY_FALSE(fast_unaligned_access_speed_key);
+
+static __always_inline bool has_fast_unaligned_accesses(void)
 {
-	return false;
+	return static_branch_likely(&fast_unaligned_access_speed_key);
 }
-
-static inline void unaligned_emulation_finish(void) {}
+#else
+static __always_inline bool has_fast_unaligned_accesses(void)
+{
+	if (IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))
+		return true;
+	else
+		return false;
+}
 #endif
 
 unsigned long riscv_get_elf_hwcap(void);
@@ -59,6 +68,8 @@ struct riscv_isa_ext_data {
 	const unsigned int id;
 	const char *name;
 	const char *property;
+	const unsigned int *subset_ext_ids;
+	const unsigned int subset_ext_size;
 };
 
 extern const struct riscv_isa_ext_data riscv_isa_ext[];
@@ -67,7 +78,7 @@ extern bool riscv_isa_fallback;
 
 unsigned long riscv_isa_extension_base(const unsigned long *isa_bitmap);
 
-bool __riscv_isa_extension_available(const unsigned long *isa_bitmap, int bit);
+bool __riscv_isa_extension_available(const unsigned long *isa_bitmap, unsigned int bit);
 #define riscv_isa_extension_available(isa_bitmap, ext)	\
 	__riscv_isa_extension_available(isa_bitmap, RISCV_ISA_EXT_##ext)
 

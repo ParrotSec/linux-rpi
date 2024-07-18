@@ -114,10 +114,14 @@ static const struct csi2rx_fmt formats[] = {
 	{ .code	= MEDIA_BUS_FMT_SGBRG8_1X8, .bpp = 8, },
 	{ .code	= MEDIA_BUS_FMT_SGRBG8_1X8, .bpp = 8, },
 	{ .code	= MEDIA_BUS_FMT_SRGGB8_1X8, .bpp = 8, },
+	{ .code	= MEDIA_BUS_FMT_Y8_1X8,     .bpp = 8, },
 	{ .code	= MEDIA_BUS_FMT_SBGGR10_1X10, .bpp = 10, },
 	{ .code	= MEDIA_BUS_FMT_SGBRG10_1X10, .bpp = 10, },
 	{ .code	= MEDIA_BUS_FMT_SGRBG10_1X10, .bpp = 10, },
 	{ .code	= MEDIA_BUS_FMT_SRGGB10_1X10, .bpp = 10, },
+	{ .code	= MEDIA_BUS_FMT_RGB565_1X16,  .bpp = 16, },
+	{ .code	= MEDIA_BUS_FMT_RGB888_1X24,  .bpp = 24, },
+	{ .code	= MEDIA_BUS_FMT_BGR888_1X24,  .bpp = 24, },
 };
 
 static const struct csi2rx_fmt *csi2rx_get_fmt_by_code(u32 code)
@@ -235,10 +239,6 @@ static int csi2rx_start(struct csi2rx_priv *csi2rx)
 
 	writel(reg, csi2rx->base + CSI2RX_STATIC_CFG_REG);
 
-	ret = v4l2_subdev_call(csi2rx->source_subdev, video, s_stream, true);
-	if (ret)
-		goto err_disable_pclk;
-
 	/* Enable DPHY clk and data lanes. */
 	if (csi2rx->dphy) {
 		reg = CSI2RX_DPHY_CL_EN | CSI2RX_DPHY_CL_RST;
@@ -248,6 +248,13 @@ static int csi2rx_start(struct csi2rx_priv *csi2rx)
 		}
 
 		writel(reg, csi2rx->base + CSI2RX_DPHY_LANE_CTRL_REG);
+
+		ret = csi2rx_configure_ext_dphy(csi2rx);
+		if (ret) {
+			dev_err(csi2rx->dev,
+				"Failed to configure external DPHY: %d\n", ret);
+			goto err_disable_pclk;
+		}
 	}
 
 	/*
@@ -287,14 +294,9 @@ static int csi2rx_start(struct csi2rx_priv *csi2rx)
 
 	reset_control_deassert(csi2rx->sys_rst);
 
-	if (csi2rx->dphy) {
-		ret = csi2rx_configure_ext_dphy(csi2rx);
-		if (ret) {
-			dev_err(csi2rx->dev,
-				"Failed to configure external DPHY: %d\n", ret);
-			goto err_disable_sysclk;
-		}
-	}
+	ret = v4l2_subdev_call(csi2rx->source_subdev, video, s_stream, true);
+	if (ret)
+		goto err_disable_sysclk;
 
 	clk_disable_unprepare(csi2rx->p_clk);
 
@@ -308,6 +310,10 @@ err_disable_pixclk:
 		clk_disable_unprepare(csi2rx->pixel_clk[i - 1]);
 	}
 
+	if (csi2rx->dphy) {
+		writel(0, csi2rx->base + CSI2RX_DPHY_LANE_CTRL_REG);
+		phy_power_off(csi2rx->dphy);
+	}
 err_disable_pclk:
 	clk_disable_unprepare(csi2rx->p_clk);
 
@@ -389,6 +395,18 @@ out:
 	return ret;
 }
 
+static int csi2rx_enum_mbus_code(struct v4l2_subdev *subdev,
+				 struct v4l2_subdev_state *state,
+				 struct v4l2_subdev_mbus_code_enum *code_enum)
+{
+	if (code_enum->index >= ARRAY_SIZE(formats))
+		return -EINVAL;
+
+	code_enum->code = formats[code_enum->index].code;
+
+	return 0;
+}
+
 static int csi2rx_set_fmt(struct v4l2_subdev *subdev,
 			  struct v4l2_subdev_state *state,
 			  struct v4l2_subdev_format *format)
@@ -406,20 +424,20 @@ static int csi2rx_set_fmt(struct v4l2_subdev *subdev,
 	format->format.field = V4L2_FIELD_NONE;
 
 	/* Set sink format */
-	fmt = v4l2_subdev_get_pad_format(subdev, state, format->pad);
+	fmt = v4l2_subdev_state_get_format(state, format->pad);
 	*fmt = format->format;
 
 	/* Propagate to source formats */
 	for (i = CSI2RX_PAD_SOURCE_STREAM0; i < CSI2RX_PAD_MAX; i++) {
-		fmt = v4l2_subdev_get_pad_format(subdev, state, i);
+		fmt = v4l2_subdev_state_get_format(state, i);
 		*fmt = format->format;
 	}
 
 	return 0;
 }
 
-static int csi2rx_init_cfg(struct v4l2_subdev *subdev,
-			   struct v4l2_subdev_state *state)
+static int csi2rx_init_state(struct v4l2_subdev *subdev,
+			     struct v4l2_subdev_state *state)
 {
 	struct v4l2_subdev_format format = {
 		.pad = CSI2RX_PAD_SINK,
@@ -439,9 +457,9 @@ static int csi2rx_init_cfg(struct v4l2_subdev *subdev,
 }
 
 static const struct v4l2_subdev_pad_ops csi2rx_pad_ops = {
+	.enum_mbus_code	= csi2rx_enum_mbus_code,
 	.get_fmt	= v4l2_subdev_get_fmt,
 	.set_fmt	= csi2rx_set_fmt,
-	.init_cfg	= csi2rx_init_cfg,
 };
 
 static const struct v4l2_subdev_video_ops csi2rx_video_ops = {
@@ -451,6 +469,10 @@ static const struct v4l2_subdev_video_ops csi2rx_video_ops = {
 static const struct v4l2_subdev_ops csi2rx_subdev_ops = {
 	.video		= &csi2rx_video_ops,
 	.pad		= &csi2rx_pad_ops,
+};
+
+static const struct v4l2_subdev_internal_ops csi2rx_internal_ops = {
+	.init_state	= csi2rx_init_state,
 };
 
 static const struct media_entity_operations csi2rx_media_ops = {
@@ -663,6 +685,7 @@ static int csi2rx_probe(struct platform_device *pdev)
 	csi2rx->subdev.owner = THIS_MODULE;
 	csi2rx->subdev.dev = &pdev->dev;
 	v4l2_subdev_init(&csi2rx->subdev, &csi2rx_subdev_ops);
+	csi2rx->subdev.internal_ops = &csi2rx_internal_ops;
 	v4l2_set_subdevdata(&csi2rx->subdev, &pdev->dev);
 	snprintf(csi2rx->subdev.name, sizeof(csi2rx->subdev.name),
 		 "%s.%s", KBUILD_MODNAME, dev_name(&pdev->dev));

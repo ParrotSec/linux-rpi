@@ -67,13 +67,15 @@ early_initcall(fault_init);
 static enum fault_type get_fault_type(struct pt_regs *regs)
 {
 	union teid teid = { .val = regs->int_parm_long };
+	struct gmap *gmap;
 
 	if (likely(teid.as == PSW_BITS_AS_PRIMARY)) {
 		if (user_mode(regs))
 			return USER_FAULT;
 		if (!IS_ENABLED(CONFIG_PGSTE))
 			return KERNEL_FAULT;
-		if (test_pt_regs_flag(regs, PIF_GUEST_FAULT))
+		gmap = (struct gmap *)S390_lowcore.gmap;
+		if (gmap && gmap->asce == regs->cr1)
 			return GMAP_FAULT;
 		return KERNEL_FAULT;
 	}
@@ -280,7 +282,6 @@ static void do_sigbus(struct pt_regs *regs)
 static void do_exception(struct pt_regs *regs, int access)
 {
 	struct vm_area_struct *vma;
-	struct task_struct *tsk;
 	unsigned long address;
 	struct mm_struct *mm;
 	enum fault_type type;
@@ -289,7 +290,6 @@ static void do_exception(struct pt_regs *regs, int access)
 	vm_fault_t fault;
 	bool is_write;
 
-	tsk = current;
 	/*
 	 * The instruction that caused the program check has
 	 * been nullified. Don't signal single step via SIGTRAP.
@@ -297,7 +297,7 @@ static void do_exception(struct pt_regs *regs, int access)
 	clear_thread_flag(TIF_PER_TRAP);
 	if (kprobe_page_fault(regs, 14))
 		return;
-	mm = tsk->mm;
+	mm = current->mm;
 	address = get_fault_address(regs);
 	is_write = fault_is_write(regs);
 	type = get_fault_type(regs);

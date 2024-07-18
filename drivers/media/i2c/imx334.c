@@ -136,7 +136,7 @@ struct imx334_mode {
  * @vblank: Vertical blanking in lines
  * @cur_mode: Pointer to current selected sensor mode
  * @mutex: Mutex for serializing sensor controls
- * @menu_skip_mask: Menu skip mask for link_freq_ctrl
+ * @link_freq_bitmap: Menu bitmap for link_freq_ctrl
  * @cur_code: current selected format code
  */
 struct imx334 {
@@ -158,7 +158,7 @@ struct imx334 {
 	u32 vblank;
 	const struct imx334_mode *cur_mode;
 	struct mutex mutex;
-	unsigned long menu_skip_mask;
+	unsigned long link_freq_bitmap;
 	u32 cur_code;
 };
 
@@ -879,7 +879,7 @@ static int imx334_get_pad_format(struct v4l2_subdev *sd,
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		struct v4l2_mbus_framefmt *framefmt;
 
-		framefmt = v4l2_subdev_get_try_format(sd, sd_state, fmt->pad);
+		framefmt = v4l2_subdev_state_get_format(sd_state, fmt->pad);
 		fmt->format = *framefmt;
 	} else {
 		fmt->format.code = imx334->cur_code;
@@ -920,7 +920,7 @@ static int imx334_set_pad_format(struct v4l2_subdev *sd,
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		struct v4l2_mbus_framefmt *framefmt;
 
-		framefmt = v4l2_subdev_get_try_format(sd, sd_state, fmt->pad);
+		framefmt = v4l2_subdev_state_get_format(sd_state, fmt->pad);
 		*framefmt = fmt->format;
 	} else if (imx334->cur_mode != mode || imx334->cur_code != fmt->format.code) {
 		imx334->cur_code = fmt->format.code;
@@ -935,14 +935,14 @@ static int imx334_set_pad_format(struct v4l2_subdev *sd,
 }
 
 /**
- * imx334_init_pad_cfg() - Initialize sub-device pad configuration
+ * imx334_init_state() - Initialize sub-device state
  * @sd: pointer to imx334 V4L2 sub-device structure
  * @sd_state: V4L2 sub-device state
  *
  * Return: 0 if successful, error code otherwise.
  */
-static int imx334_init_pad_cfg(struct v4l2_subdev *sd,
-			       struct v4l2_subdev_state *sd_state)
+static int imx334_init_state(struct v4l2_subdev *sd,
+			     struct v4l2_subdev_state *sd_state)
 {
 	struct imx334 *imx334 = to_imx334(sd);
 	struct v4l2_subdev_format fmt = { 0 };
@@ -954,9 +954,9 @@ static int imx334_init_pad_cfg(struct v4l2_subdev *sd,
 	imx334_fill_pad_format(imx334, imx334->cur_mode, &fmt);
 
 	__v4l2_ctrl_modify_range(imx334->link_freq_ctrl, 0,
-				 __fls(imx334->menu_skip_mask),
-				 ~(imx334->menu_skip_mask),
-				 __ffs(imx334->menu_skip_mask));
+				 __fls(imx334->link_freq_bitmap),
+				 ~(imx334->link_freq_bitmap),
+				 __ffs(imx334->link_freq_bitmap));
 
 	mutex_unlock(&imx334->mutex);
 
@@ -1112,7 +1112,6 @@ static int imx334_parse_hw_config(struct imx334 *imx334)
 	};
 	struct fwnode_handle *ep;
 	unsigned long rate;
-	unsigned int i, j;
 	int ret;
 
 	if (!fwnode)
@@ -1157,26 +1156,10 @@ static int imx334_parse_hw_config(struct imx334 *imx334)
 		goto done_endpoint_free;
 	}
 
-	if (!bus_cfg.nr_of_link_frequencies) {
-		dev_err(imx334->dev, "no link frequencies defined");
-		ret = -EINVAL;
-		goto done_endpoint_free;
-	}
-
-	for (i = 0; i < bus_cfg.nr_of_link_frequencies; i++) {
-		for (j = 0; j < ARRAY_SIZE(link_freq); j++) {
-			if (bus_cfg.link_frequencies[i] == link_freq[j]) {
-				set_bit(j, &imx334->menu_skip_mask);
-				break;
-			}
-		}
-
-		if (j == ARRAY_SIZE(link_freq)) {
-			ret = dev_err_probe(imx334->dev, -EINVAL,
-					    "no supported link freq found\n");
-			goto done_endpoint_free;
-		}
-	}
+	ret = v4l2_link_freq_to_bitmap(imx334->dev, bus_cfg.link_frequencies,
+				       bus_cfg.nr_of_link_frequencies,
+				       link_freq, ARRAY_SIZE(link_freq),
+				       &imx334->link_freq_bitmap);
 
 done_endpoint_free:
 	v4l2_fwnode_endpoint_free(&bus_cfg);
@@ -1190,7 +1173,6 @@ static const struct v4l2_subdev_video_ops imx334_video_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops imx334_pad_ops = {
-	.init_cfg = imx334_init_pad_cfg,
 	.enum_mbus_code = imx334_enum_mbus_code,
 	.enum_frame_size = imx334_enum_frame_size,
 	.get_fmt = imx334_get_pad_format,
@@ -1200,6 +1182,10 @@ static const struct v4l2_subdev_pad_ops imx334_pad_ops = {
 static const struct v4l2_subdev_ops imx334_subdev_ops = {
 	.video = &imx334_video_ops,
 	.pad = &imx334_pad_ops,
+};
+
+static const struct v4l2_subdev_internal_ops imx334_internal_ops = {
+	.init_state = imx334_init_state,
 };
 
 /**
@@ -1307,8 +1293,8 @@ static int imx334_init_controls(struct imx334 *imx334)
 	imx334->link_freq_ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
 							&imx334_ctrl_ops,
 							V4L2_CID_LINK_FREQ,
-							__fls(imx334->menu_skip_mask),
-							__ffs(imx334->menu_skip_mask),
+							__fls(imx334->link_freq_bitmap),
+							__ffs(imx334->link_freq_bitmap),
 							link_freq);
 
 	if (imx334->link_freq_ctrl)
@@ -1359,6 +1345,7 @@ static int imx334_probe(struct i2c_client *client)
 
 	/* Initialize subdev */
 	v4l2_i2c_subdev_init(&imx334->sd, client, &imx334_subdev_ops);
+	imx334->sd.internal_ops = &imx334_internal_ops;
 
 	ret = imx334_parse_hw_config(imx334);
 	if (ret) {
@@ -1382,7 +1369,7 @@ static int imx334_probe(struct i2c_client *client)
 	}
 
 	/* Set default mode to max resolution */
-	imx334->cur_mode = &supported_modes[__ffs(imx334->menu_skip_mask)];
+	imx334->cur_mode = &supported_modes[__ffs(imx334->link_freq_bitmap)];
 	imx334->cur_code = imx334_mbus_codes[0];
 	imx334->vblank = imx334->cur_mode->vblank;
 

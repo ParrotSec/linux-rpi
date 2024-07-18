@@ -47,8 +47,6 @@
 #include <linux/errqueue.h>
 #include <linux/uaccess.h>
 
-#include <linux/bpfilter.h>
-
 /*
  *	SOL_IP control messages.
  */
@@ -775,7 +773,7 @@ static int ip_set_mcast_msfilter(struct sock *sk, sockptr_t optval, int optlen)
 
 	if (optlen < GROUP_FILTER_SIZE(0))
 		return -EINVAL;
-	if (optlen > READ_ONCE(sysctl_optmem_max))
+	if (optlen > READ_ONCE(sock_net(sk)->core.sysctl_optmem_max))
 		return -ENOBUFS;
 
 	gsf = memdup_sockptr(optval, optlen);
@@ -811,7 +809,7 @@ static int compat_ip_set_mcast_msfilter(struct sock *sk, sockptr_t optval,
 
 	if (optlen < size0)
 		return -EINVAL;
-	if (optlen > READ_ONCE(sysctl_optmem_max) - 4)
+	if (optlen > READ_ONCE(sock_net(sk)->core.sysctl_optmem_max) - 4)
 		return -ENOBUFS;
 
 	p = kmalloc(optlen + 4, GFP_KERNEL);
@@ -896,7 +894,7 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct net *net = sock_net(sk);
-	int val = 0, err;
+	int val = 0, err, retv;
 	bool needs_rtnl = setsockopt_needs_rtnl(optname);
 
 	switch (optname) {
@@ -940,8 +938,12 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 
 	/* If optlen==0, it is equivalent to val == 0 */
 
-	if (optname == IP_ROUTER_ALERT)
-		return ip_ra_control(sk, val ? 1 : 0, NULL);
+	if (optname == IP_ROUTER_ALERT) {
+		retv = ip_ra_control(sk, val ? 1 : 0, NULL);
+		if (retv == 0)
+			inet_assign_bit(RTALERT, sk, val);
+		return retv;
+	}
 	if (ip_mroute_opt(optname))
 		return ip_mroute_setsockopt(sk, optname, optval, optlen);
 
@@ -1055,6 +1057,19 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 	case IP_TOS:	/* This sets both TOS and Precedence */
 		ip_sock_set_tos(sk, val);
 		return 0;
+	case IP_LOCAL_PORT_RANGE:
+	{
+		u16 lo = val;
+		u16 hi = val >> 16;
+
+		if (optlen != sizeof(u32))
+			return -EINVAL;
+		if (lo != 0 && hi != 0 && lo > hi)
+			return -EINVAL;
+
+		WRITE_ONCE(inet->local_port_range, val);
+		return 0;
+	}
 	}
 
 	err = 0;
@@ -1241,7 +1256,7 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 
 		if (optlen < IP_MSFILTER_SIZE(0))
 			goto e_inval;
-		if (optlen > READ_ONCE(sysctl_optmem_max)) {
+		if (optlen > READ_ONCE(net->core.sysctl_optmem_max)) {
 			err = -ENOBUFS;
 			break;
 		}
@@ -1332,20 +1347,6 @@ int do_ip_setsockopt(struct sock *sk, int level, int optname,
 		err = xfrm_user_policy(sk, optname, optval, optlen);
 		break;
 
-	case IP_LOCAL_PORT_RANGE:
-	{
-		const __u16 lo = val;
-		const __u16 hi = val >> 16;
-
-		if (optlen != sizeof(__u32))
-			goto e_inval;
-		if (lo != 0 && hi != 0 && lo > hi)
-			goto e_inval;
-
-		inet->local_port_range.lo = lo;
-		inet->local_port_range.hi = hi;
-		break;
-	}
 	default:
 		err = -ENOPROTOOPT;
 		break;
@@ -1414,11 +1415,6 @@ int ip_setsockopt(struct sock *sk, int level, int optname, sockptr_t optval,
 		return -ENOPROTOOPT;
 
 	err = do_ip_setsockopt(sk, level, optname, optval, optlen);
-#if IS_ENABLED(CONFIG_BPFILTER_UMH)
-	if (optname >= BPFILTER_IPT_SO_SET_REPLACE &&
-	    optname < BPFILTER_IPT_SET_MAX)
-		err = bpfilter_ip_set_sockopt(sk, optname, optval, optlen);
-#endif
 #ifdef CONFIG_NETFILTER
 	/* we need to exclude all possible ENOPROTOOPTs except default case */
 	if (err == -ENOPROTOOPT && optname != IP_HDRINCL &&
@@ -1583,6 +1579,9 @@ int do_ip_getsockopt(struct sock *sk, int level, int optname,
 	case IP_BIND_ADDRESS_NO_PORT:
 		val = inet_test_bit(BIND_ADDRESS_NO_PORT, sk);
 		goto copyval;
+	case IP_ROUTER_ALERT:
+		val = inet_test_bit(RTALERT, sk);
+		goto copyval;
 	case IP_TTL:
 		val = READ_ONCE(inet->uc_ttl);
 		if (val < 0)
@@ -1694,6 +1693,9 @@ int do_ip_getsockopt(struct sock *sk, int level, int optname,
 			return -EFAULT;
 		return 0;
 	}
+	case IP_LOCAL_PORT_RANGE:
+		val = READ_ONCE(inet->local_port_range);
+		goto copyval;
 	}
 
 	if (needs_rtnl)
@@ -1723,9 +1725,6 @@ int do_ip_getsockopt(struct sock *sk, int level, int optname,
 		else
 			err = ip_get_mcast_msfilter(sk, optval, optlen, len);
 		goto out;
-	case IP_LOCAL_PORT_RANGE:
-		val = inet->local_port_range.hi << 16 | inet->local_port_range.lo;
-		break;
 	case IP_PROTOCOL:
 		val = inet_sk(sk)->inet_num;
 		break;
@@ -1766,11 +1765,6 @@ int ip_getsockopt(struct sock *sk, int level,
 	err = do_ip_getsockopt(sk, level, optname,
 			       USER_SOCKPTR(optval), USER_SOCKPTR(optlen));
 
-#if IS_ENABLED(CONFIG_BPFILTER_UMH)
-	if (optname >= BPFILTER_IPT_SO_GET_INFO &&
-	    optname < BPFILTER_IPT_GET_MAX)
-		err = bpfilter_ip_get_sockopt(sk, optname, optval, optlen);
-#endif
 #ifdef CONFIG_NETFILTER
 	/* we need to exclude all possible ENOPROTOOPTs except default case */
 	if (err == -ENOPROTOOPT && optname != IP_PKTOPTIONS &&

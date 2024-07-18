@@ -60,6 +60,12 @@ enum iwl_debug_cmds {
 	 */
 	FW_DUMP_COMPLETE_CMD = 0xB,
 	/**
+	 * @FW_CLEAR_BUFFER:
+	 * clears the firmware's internal buffer
+	 * no payload
+	 */
+	FW_CLEAR_BUFFER = 0xD,
+	/**
 	 * @MFU_ASSERT_DUMP_NTF:
 	 * &struct iwl_mfu_assert_dump_notif
 	 */
@@ -388,7 +394,7 @@ struct iwl_buf_alloc_cmd {
  *
  * @first_word: magic word value
  * @second_word: magic word value
- * @framfrags: DRAM fragmentaion detail
+ * @dram_frags: DRAM fragmentaion detail
 */
 struct iwl_dram_info {
 	__le32 first_word;

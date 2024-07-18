@@ -83,6 +83,10 @@ SYM_CODE_START(handle_exception)
 	/* Load the kernel shadow call stack pointer if coming from userspace */
 	scs_load_current_if_task_changed s5
 
+#ifdef CONFIG_RISCV_ISA_V_PREEMPTIVE
+	move a0, sp
+	call riscv_v_context_nesting_start
+#endif
 	move a0, sp /* pt_regs */
 	la ra, ret_from_exception
 
@@ -107,6 +111,7 @@ SYM_CODE_START(handle_exception)
 1:
 	tail do_trap_unknown
 SYM_CODE_END(handle_exception)
+ASM_NOKPROBE(handle_exception)
 
 /*
  * The ret_from_exception must be called with interrupt disabled. Here is the
@@ -138,6 +143,10 @@ SYM_CODE_START_NOALIGN(ret_from_exception)
 	 */
 	csrw CSR_SCRATCH, tp
 1:
+#ifdef CONFIG_RISCV_ISA_V_PREEMPTIVE
+	move a0, sp
+	call riscv_v_context_nesting_end
+#endif
 	REG_L a0, PT_STATUS(sp)
 	/*
 	 * The current load reservation is effectively part of the processor's
@@ -176,6 +185,7 @@ SYM_CODE_START_NOALIGN(ret_from_exception)
 	sret
 #endif
 SYM_CODE_END(ret_from_exception)
+ASM_NOKPROBE(ret_from_exception)
 
 #ifdef CONFIG_VMAP_STACK
 SYM_CODE_START_LOCAL(handle_kernel_stack_overflow)
@@ -211,6 +221,7 @@ SYM_CODE_START_LOCAL(handle_kernel_stack_overflow)
 	move a0, sp
 	tail handle_bad_stack
 SYM_CODE_END(handle_kernel_stack_overflow)
+ASM_NOKPROBE(handle_kernel_stack_overflow)
 #endif
 
 SYM_CODE_START(ret_from_fork)

@@ -457,12 +457,6 @@ static enum ucode_state apply_microcode_late(int cpu)
 	if (ret != UCODE_UPDATED && ret != UCODE_OK)
 		return ret;
 
-	if (!cpu && uci->cpu_sig.rev != cur_rev) {
-		pr_info("Updated to revision 0x%x, date = %04x-%02x-%02x\n",
-			uci->cpu_sig.rev, mc->hdr.date & 0xffff, mc->hdr.date >> 24,
-			(mc->hdr.date >> 16) & 0xff);
-	}
-
 	cpu_data(cpu).microcode	 = uci->cpu_sig.rev;
 	if (!cpu)
 		boot_cpu_data.microcode = uci->cpu_sig.rev;
@@ -647,7 +641,7 @@ static __init void calc_llc_size_per_core(struct cpuinfo_x86 *c)
 {
 	u64 llc_size = c->x86_cache_size * 1024ULL;
 
-	do_div(llc_size, c->x86_max_cores);
+	do_div(llc_size, topology_num_cores_per_package());
 	llc_size_per_core = (unsigned int)llc_size;
 }
 

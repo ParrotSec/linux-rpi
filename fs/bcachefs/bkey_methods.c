@@ -63,8 +63,17 @@ static int key_type_cookie_invalid(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
+static void key_type_cookie_to_text(struct printbuf *out, struct bch_fs *c,
+				    struct bkey_s_c k)
+{
+	struct bkey_s_c_cookie ck = bkey_s_c_to_cookie(k);
+
+	prt_printf(out, "%llu", le64_to_cpu(ck.v->cookie));
+}
+
 #define bch2_bkey_ops_cookie ((struct bkey_ops) {	\
 	.key_invalid	= key_type_cookie_invalid,	\
+	.val_to_text	= key_type_cookie_to_text,	\
 	.min_val_size	= 8,				\
 })
 
@@ -162,11 +171,15 @@ int __bch2_bkey_invalid(struct bch_fs *c, struct bkey_s_c k,
 	if (type >= BKEY_TYPE_NR)
 		return 0;
 
-	bkey_fsck_err_on((flags & BKEY_INVALID_COMMIT) &&
+	bkey_fsck_err_on(k.k->type < KEY_TYPE_MAX &&
+			 (type == BKEY_TYPE_btree || (flags & BKEY_INVALID_COMMIT)) &&
 			 !(bch2_key_types_allowed[type] & BIT_ULL(k.k->type)), c, err,
 			 bkey_invalid_type_for_btree,
 			 "invalid key type for btree %s (%s)",
-			 bch2_btree_node_type_str(type), bch2_bkey_types[k.k->type]);
+			 bch2_btree_node_type_str(type),
+			 k.k->type < KEY_TYPE_MAX
+			 ? bch2_bkey_types[k.k->type]
+			 : "(unknown)");
 
 	if (btree_node_type_is_extents(type) && !bkey_whiteout(k.k)) {
 		bkey_fsck_err_on(k.k->size == 0, c, err,

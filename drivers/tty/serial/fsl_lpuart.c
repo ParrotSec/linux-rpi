@@ -2962,7 +2962,7 @@ failed_reset:
 	return ret;
 }
 
-static int lpuart_remove(struct platform_device *pdev)
+static void lpuart_remove(struct platform_device *pdev)
 {
 	struct lpuart_port *sport = platform_get_drvdata(pdev);
 
@@ -2979,7 +2979,6 @@ static int lpuart_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
 	pm_runtime_dont_use_autosuspend(&pdev->dev);
-	return 0;
 }
 
 static int lpuart_runtime_suspend(struct device *dev)
@@ -3213,7 +3212,7 @@ static const struct dev_pm_ops lpuart_pm_ops = {
 
 static struct platform_driver lpuart_driver = {
 	.probe		= lpuart_probe,
-	.remove		= lpuart_remove,
+	.remove_new	= lpuart_remove,
 	.driver		= {
 		.name	= "fsl-lpuart",
 		.of_match_table = lpuart_dt_ids,

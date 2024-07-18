@@ -729,80 +729,10 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 	if (skb_shared(skb) || skb_head_is_locked(skb) ||
 	    skb_shinfo(skb)->nr_frags ||
 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
-		u32 size, len, max_head_size, off, truesize, page_offset;
-		struct sk_buff *nskb;
-		struct page *page;
-		int i, head_off;
-		void *va;
-
-		/* We need a private copy of the skb and data buffers since
-		 * the ebpf program can modify it. We segment the original skb
-		 * into order-0 pages without linearize it.
-		 *
-		 * Make sure we have enough space for linear and paged area
-		 */
-		max_head_size = SKB_WITH_OVERHEAD(PAGE_SIZE -
-						  VETH_XDP_HEADROOM);
-		if (skb->len > PAGE_SIZE * MAX_SKB_FRAGS + max_head_size)
+		if (skb_pp_cow_data(rq->page_pool, pskb, XDP_PACKET_HEADROOM))
 			goto drop;
 
-		size = min_t(u32, skb->len, max_head_size);
-		truesize = SKB_HEAD_ALIGN(size) + VETH_XDP_HEADROOM;
-
-		/* Allocate skb head */
-		va = page_pool_dev_alloc_va(rq->page_pool, &truesize);
-		if (!va)
-			goto drop;
-
-		nskb = napi_build_skb(va, truesize);
-		if (!nskb) {
-			page_pool_free_va(rq->page_pool, va, true);
-			goto drop;
-		}
-
-		skb_reserve(nskb, VETH_XDP_HEADROOM);
-		skb_copy_header(nskb, skb);
-		skb_mark_for_recycle(nskb);
-
-		if (skb_copy_bits(skb, 0, nskb->data, size)) {
-			consume_skb(nskb);
-			goto drop;
-		}
-		skb_put(nskb, size);
-
-		head_off = skb_headroom(nskb) - skb_headroom(skb);
-		skb_headers_offset_update(nskb, head_off);
-
-		/* Allocate paged area of new skb */
-		off = size;
-		len = skb->len - off;
-
-		for (i = 0; i < MAX_SKB_FRAGS && off < skb->len; i++) {
-			size = min_t(u32, len, PAGE_SIZE);
-			truesize = size;
-
-			page = page_pool_dev_alloc(rq->page_pool, &page_offset,
-						   &truesize);
-			if (!page) {
-				consume_skb(nskb);
-				goto drop;
-			}
-
-			skb_add_rx_frag(nskb, i, page, page_offset, size,
-					truesize);
-			if (skb_copy_bits(skb, off,
-					  page_address(page) + page_offset,
-					  size)) {
-				consume_skb(nskb);
-				goto drop;
-			}
-
-			len -= size;
-			off += size;
-		}
-
-		consume_skb(skb);
-		skb = nskb;
+		skb = *pskb;
 	}
 
 	/* SKB "head" area always have tailroom for skb_shared_info */
@@ -1483,6 +1413,7 @@ static void veth_free_queues(struct net_device *dev)
 
 static int veth_dev_init(struct net_device *dev)
 {
+	netdev_lockdep_set_classes(dev);
 	return veth_alloc_queues(dev);
 }
 
@@ -1514,7 +1445,7 @@ static int veth_get_iflink(const struct net_device *dev)
 
 	rcu_read_lock();
 	peer = rcu_dereference(priv->peer);
-	iflink = peer ? peer->ifindex : 0;
+	iflink = peer ? READ_ONCE(peer->ifindex) : 0;
 	rcu_read_unlock();
 
 	return iflink;
@@ -1705,6 +1636,24 @@ static int veth_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 	return 0;
 }
 
+static int veth_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
+				u16 *vlan_tci)
+{
+	const struct veth_xdp_buff *_ctx = (void *)ctx;
+	const struct sk_buff *skb = _ctx->skb;
+	int err;
+
+	if (!skb)
+		return -ENODATA;
+
+	err = __vlan_hwaccel_get_tag(skb, vlan_tci);
+	if (err)
+		return err;
+
+	*vlan_proto = skb->vlan_proto;
+	return err;
+}
+
 static const struct net_device_ops veth_netdev_ops = {
 	.ndo_init            = veth_dev_init,
 	.ndo_open            = veth_open,
@@ -1729,6 +1678,7 @@ static const struct net_device_ops veth_netdev_ops = {
 static const struct xdp_metadata_ops veth_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= veth_xdp_rx_timestamp,
 	.xmo_rx_hash			= veth_xdp_rx_hash,
+	.xmo_rx_vlan_tag		= veth_xdp_rx_vlan_tag,
 };
 
 #define VETH_FEATURES (NETIF_F_SG | NETIF_F_FRAGLIST | NETIF_F_HW_CSUM | \

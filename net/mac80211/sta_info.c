@@ -40,7 +40,7 @@
  * either sta_info_insert() or sta_info_insert_rcu(); only in the latter
  * case (which acquires an rcu read section but must not be called from
  * within one) will the pointer still be valid after the call. Note that
- * the caller may not do much with the STA info before inserting it, in
+ * the caller may not do much with the STA info before inserting it; in
  * particular, it may not start any mesh peer link management or add
  * encryption keys.
  *
@@ -58,7 +58,7 @@
  * In order to remove a STA info structure, various sta_info_destroy_*()
  * calls are available.
  *
- * There is no concept of ownership on a STA entry, each structure is
+ * There is no concept of ownership on a STA entry; each structure is
  * owned by the global hash table/list until it is removed. All users of
  * the structure need to be RCU protected so that the structure won't be
  * freed before they are done using it.
@@ -1566,7 +1566,8 @@ void sta_info_stop(struct ieee80211_local *local)
 }
 
 
-int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans)
+int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans,
+		     int link_id)
 {
 	struct ieee80211_local *local = sdata->local;
 	struct sta_info *sta, *tmp;
@@ -1580,12 +1581,18 @@ int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans)
 	WARN_ON(vlans && !sdata->bss);
 
 	list_for_each_entry_safe(sta, tmp, &local->sta_list, list) {
-		if (sdata == sta->sdata ||
-		    (vlans && sdata->bss == sta->sdata->bss)) {
-			if (!WARN_ON(__sta_info_destroy_part1(sta)))
-				list_add(&sta->free_list, &free_list);
-			ret++;
-		}
+		if (sdata != sta->sdata &&
+		    (!vlans || sdata->bss != sta->sdata->bss))
+			continue;
+
+		if (link_id >= 0 && sta->sta.valid_links &&
+		    !(sta->sta.valid_links & BIT(link_id)))
+			continue;
+
+		if (!WARN_ON(__sta_info_destroy_part1(sta)))
+			list_add(&sta->free_list, &free_list);
+
+		ret++;
 	}
 
 	if (!list_empty(&free_list)) {
@@ -1717,7 +1724,7 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta)
 	skb_queue_head_init(&pending);
 
 	/* sync with ieee80211_tx_h_unicast_ps_buf */
-	spin_lock(&sta->ps_lock);
+	spin_lock_bh(&sta->ps_lock);
 	/* Send all buffered frames to the station */
 	for (ac = 0; ac < IEEE80211_NUM_ACS; ac++) {
 		int count = skb_queue_len(&pending), tmp;
@@ -1746,7 +1753,7 @@ void ieee80211_sta_ps_deliver_wakeup(struct sta_info *sta)
 	 */
 	clear_sta_flag(sta, WLAN_STA_PSPOLL);
 	clear_sta_flag(sta, WLAN_STA_UAPSD);
-	spin_unlock(&sta->ps_lock);
+	spin_unlock_bh(&sta->ps_lock);
 
 	atomic_dec(&ps->num_sta_ps);
 
@@ -2273,7 +2280,6 @@ void ieee80211_sta_register_airtime(struct ieee80211_sta *pubsta, u8 tid,
 	struct ieee80211_local *local = sta->sdata->local;
 	u8 ac = ieee80211_ac_from_tid(tid);
 	u32 airtime = 0;
-	u32 diff;
 
 	if (sta->local->airtime_flags & AIRTIME_USE_TX)
 		airtime += tx_airtime;
@@ -2284,8 +2290,7 @@ void ieee80211_sta_register_airtime(struct ieee80211_sta *pubsta, u8 tid,
 	sta->airtime[ac].tx_airtime += tx_airtime;
 	sta->airtime[ac].rx_airtime += rx_airtime;
 
-	diff = (u32)jiffies - sta->airtime[ac].last_active;
-	if (diff <= AIRTIME_ACTIVE_DURATION)
+	if (ieee80211_sta_keep_active(sta, ac))
 		sta->airtime[ac].deficit -= airtime;
 
 	spin_unlock_bh(&local->active_txq_lock[ac]);

@@ -41,6 +41,7 @@
 #define __BNXT_RE_H__
 #include <rdma/uverbs_ioctl.h>
 #include "hw_counters.h"
+#include <linux/hashtable.h>
 #define ROCE_DRV_MODULE_NAME		"bnxt_re"
 
 #define BNXT_RE_DESC	"Broadcom NetXtreme-C/E RoCE Driver"
@@ -106,8 +107,6 @@ struct bnxt_re_gsi_context {
 	struct	bnxt_re_sqp_entries *sqp_tbl;
 };
 
-#define BNXT_RE_MIN_MSIX		2
-#define BNXT_RE_MAX_MSIX		9
 #define BNXT_RE_AEQ_IDX			0
 #define BNXT_RE_NQ_IDX			1
 #define BNXT_RE_GEN_P5_MAX_VF		64
@@ -135,6 +134,7 @@ struct bnxt_re_pacing {
 #define BNXT_RE_DB_FIFO_ROOM_SHIFT 15
 #define BNXT_RE_GRC_FIFO_REG_BASE 0x2000
 
+#define MAX_CQ_HASH_BITS		(16)
 struct bnxt_re_dev {
 	struct ib_device		ibdev;
 	struct list_head		list;
@@ -166,7 +166,7 @@ struct bnxt_re_dev {
 	struct bnxt_qplib_rcfw		rcfw;
 
 	/* NQ */
-	struct bnxt_qplib_nq		nq[BNXT_RE_MAX_MSIX];
+	struct bnxt_qplib_nq		nq[BNXT_MAX_ROCE_MSIX];
 
 	/* Device Resources */
 	struct bnxt_qplib_dev_attr	dev_attr;
@@ -189,6 +189,7 @@ struct bnxt_re_dev {
 	struct bnxt_re_pacing pacing;
 	struct work_struct dbq_fifo_check_work;
 	struct delayed_work dbq_pacing_work;
+	DECLARE_HASHTABLE(cq_hash, MAX_CQ_HASH_BITS);
 };
 
 #define to_bnxt_re_dev(ptr, member)	\

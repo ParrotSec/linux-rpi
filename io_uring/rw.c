@@ -10,7 +10,8 @@
 #include <linux/poll.h>
 #include <linux/nospec.h>
 #include <linux/compat.h>
-#include <linux/io_uring.h>
+#include <linux/io_uring/cmd.h>
+#include <linux/indirect_call_wrapper.h>
 
 #include <uapi/linux/io_uring.h>
 
@@ -169,27 +170,6 @@ void io_readv_writev_cleanup(struct io_kiocb *req)
 	kfree(io->free_iovec);
 }
 
-static inline void io_rw_done(struct kiocb *kiocb, ssize_t ret)
-{
-	switch (ret) {
-	case -EIOCBQUEUED:
-		break;
-	case -ERESTARTSYS:
-	case -ERESTARTNOINTR:
-	case -ERESTARTNOHAND:
-	case -ERESTART_RESTARTBLOCK:
-		/*
-		 * We can't just restart the syscall, since previously
-		 * submitted sqes may already be in progress. Just fail this
-		 * IO with EINTR.
-		 */
-		ret = -EINTR;
-		fallthrough;
-	default:
-		kiocb->ki_complete(kiocb, ret);
-	}
-}
-
 static inline loff_t *io_kiocb_update_pos(struct io_kiocb *req)
 {
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
@@ -295,7 +275,7 @@ static bool __io_complete_rw_common(struct io_kiocb *req, long res)
 			 * current cycle.
 			 */
 			io_req_io_end(req);
-			req->flags |= REQ_F_REISSUE | REQ_F_PARTIAL_IO;
+			req->flags |= REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE;
 			return true;
 		}
 		req_set_fail(req);
@@ -362,7 +342,7 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
 		io_req_end_write(req);
 	if (unlikely(res != req->cqe.res)) {
 		if (res == -EAGAIN && io_rw_should_reissue(req)) {
-			req->flags |= REQ_F_REISSUE | REQ_F_PARTIAL_IO;
+			req->flags |= REQ_F_REISSUE | REQ_F_BL_NO_RECYCLE;
 			return;
 		}
 		req->cqe.res = res;
@@ -370,6 +350,33 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
 
 	/* order with io_iopoll_complete() checking ->iopoll_completed */
 	smp_store_release(&req->iopoll_completed, 1);
+}
+
+static inline void io_rw_done(struct kiocb *kiocb, ssize_t ret)
+{
+	/* IO was queued async, completion will happen later */
+	if (ret == -EIOCBQUEUED)
+		return;
+
+	/* transform internal restart error codes */
+	if (unlikely(ret < 0)) {
+		switch (ret) {
+		case -ERESTARTSYS:
+		case -ERESTARTNOINTR:
+		case -ERESTARTNOHAND:
+		case -ERESTART_RESTARTBLOCK:
+			/*
+			 * We can't just restart the syscall, since previously
+			 * submitted sqes may already be in progress. Just fail
+			 * this IO with EINTR.
+			 */
+			ret = -EINTR;
+			break;
+		}
+	}
+
+	INDIRECT_CALL_2(kiocb->ki_complete, io_complete_rw_iopoll,
+			io_complete_rw, kiocb, ret);
 }
 
 static int kiocb_done(struct io_kiocb *req, ssize_t ret,
@@ -676,7 +683,7 @@ static bool io_rw_should_retry(struct io_kiocb *req)
 	 * just use poll if we can, and don't attempt if the fs doesn't
 	 * support callback based unlocks
 	 */
-	if (file_can_poll(req->file) || !(req->file->f_mode & FMODE_BUF_RASYNC))
+	if (io_file_can_poll(req) || !(req->file->f_mode & FMODE_BUF_RASYNC))
 		return false;
 
 	wait->wait.func = io_async_buf_func;
@@ -715,7 +722,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	struct file *file = req->file;
 	int ret;
 
-	if (unlikely(!file || !(file->f_mode & mode)))
+	if (unlikely(!(file->f_mode & mode)))
 		return -EBADF;
 
 	if (!(req->flags & REQ_F_FIXED_FILE))
@@ -825,7 +832,7 @@ static int __io_read(struct io_kiocb *req, unsigned int issue_flags)
 		 * If we can poll, just do that. For a vectored read, we'll
 		 * need to copy state first.
 		 */
-		if (file_can_poll(req->file) && !io_issue_defs[req->opcode].vectored)
+		if (io_file_can_poll(req) && !io_issue_defs[req->opcode].vectored)
 			return -EAGAIN;
 		/* IOPOLL retry should happen for io-wq threads */
 		if (!force_nonblock && !(req->ctx->flags & IORING_SETUP_IOPOLL))
@@ -924,12 +931,17 @@ int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
 	/*
 	 * Multishot MUST be used on a pollable file
 	 */
-	if (!file_can_poll(req->file))
+	if (!io_file_can_poll(req))
 		return -EBADFD;
-	if (issue_flags & IO_URING_F_IOWQ)
-		return -EAGAIN;
 
 	ret = __io_read(req, issue_flags);
+
+	/*
+	 * If the file doesn't support proper NOWAIT, then disable multishot
+	 * and stay in single shot mode.
+	 */
+	if (!io_file_supports_nowait(req))
+		req->flags &= ~REQ_F_APOLL_MULTISHOT;
 
 	/*
 	 * If we get -EAGAIN, recycle our buffer and just let normal poll
@@ -950,7 +962,7 @@ int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
 	/*
 	 * Any successful return value will keep the multishot read armed.
 	 */
-	if (ret > 0) {
+	if (ret > 0 && req->flags & REQ_F_APOLL_MULTISHOT) {
 		/*
 		 * Put our buffer and post a CQE. If we fail to post a CQE, then
 		 * jump to the termination path. This request is then done.

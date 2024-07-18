@@ -36,12 +36,13 @@
 #include <linux/sched/task_stack.h>
 #include <linux/crash_dump.h>
 #include <linux/kprobes.h>
+#include <asm/access-regs.h>
 #include <asm/asm-offsets.h>
 #include <asm/ctlreg.h>
 #include <asm/pfault.h>
 #include <asm/diag.h>
-#include <asm/switch_to.h>
 #include <asm/facility.h>
+#include <asm/fpu.h>
 #include <asm/ipl.h>
 #include <asm/setup.h>
 #include <asm/irq.h>
@@ -582,7 +583,7 @@ int smp_store_status(int cpu)
 	if (__pcpu_sigp_relax(pcpu->address, SIGP_STORE_STATUS_AT_ADDRESS,
 			      pa) != SIGP_CC_ORDER_CODE_ACCEPTED)
 		return -EIO;
-	if (!MACHINE_HAS_VX && !MACHINE_HAS_GS)
+	if (!cpu_has_vx() && !MACHINE_HAS_GS)
 		return 0;
 	pa = lc->mcesad & MCESA_ORIGIN_MASK;
 	if (MACHINE_HAS_GS)
@@ -638,7 +639,7 @@ void __init smp_save_dump_ipl_cpu(void)
 	copy_oldmem_kernel(regs, __LC_FPREGS_SAVE_AREA, 512);
 	save_area_add_regs(sa, regs);
 	memblock_free(regs, 512);
-	if (MACHINE_HAS_VX)
+	if (cpu_has_vx())
 		save_area_add_vxrs(sa, boot_cpu_vector_save_area);
 }
 
@@ -671,7 +672,7 @@ void __init smp_save_dump_secondary_cpus(void)
 			panic("could not allocate memory for save area\n");
 		__pcpu_sigp_relax(addr, SIGP_STORE_STATUS_AT_ADDRESS, __pa(page));
 		save_area_add_regs(sa, page);
-		if (MACHINE_HAS_VX) {
+		if (cpu_has_vx()) {
 			__pcpu_sigp_relax(addr, SIGP_STORE_ADDITIONAL_STATUS, __pa(page));
 			save_area_add_vxrs(sa, page);
 		}

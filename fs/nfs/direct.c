@@ -369,7 +369,6 @@ static ssize_t nfs_direct_read_schedule_iovec(struct nfs_direct_req *dreq,
 			bytes -= req_len;
 			requested_bytes += req_len;
 			pos += req_len;
-			dreq->bytes_left -= req_len;
 		}
 		nfs_direct_release_pages(pagevec, npages);
 		kvfree(pagevec);
@@ -441,7 +440,7 @@ ssize_t nfs_file_direct_read(struct kiocb *iocb, struct iov_iter *iter,
 		goto out;
 
 	dreq->inode = inode;
-	dreq->bytes_left = dreq->max_count = count;
+	dreq->max_count = count;
 	dreq->io_start = iocb->ki_pos;
 	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
 	l_ctx = nfs_get_lock_context(dreq->ctx);
@@ -607,6 +606,7 @@ static void nfs_direct_commit_complete(struct nfs_commit_data *data)
 
 	trace_nfs_direct_commit_complete(dreq);
 
+	spin_lock(&dreq->lock);
 	if (status < 0) {
 		/* Errors in commit are fatal */
 		dreq->error = status;
@@ -614,6 +614,7 @@ static void nfs_direct_commit_complete(struct nfs_commit_data *data)
 	} else {
 		status = dreq->error;
 	}
+	spin_unlock(&dreq->lock);
 
 	nfs_init_cinfo_from_dreq(&cinfo, dreq);
 
@@ -626,7 +627,10 @@ static void nfs_direct_commit_complete(struct nfs_commit_data *data)
 			spin_unlock(&dreq->lock);
 			nfs_release_request(req);
 		} else if (!nfs_write_match_verf(verf, req)) {
-			dreq->flags = NFS_ODIRECT_RESCHED_WRITES;
+			spin_lock(&dreq->lock);
+			if (dreq->flags == 0)
+				dreq->flags = NFS_ODIRECT_RESCHED_WRITES;
+			spin_unlock(&dreq->lock);
 			/*
 			 * Despite the reboot, the write was successful,
 			 * so reset wb_nio.
@@ -881,7 +885,6 @@ static ssize_t nfs_direct_write_schedule_iovec(struct nfs_direct_req *dreq,
 			bytes -= req_len;
 			requested_bytes += req_len;
 			pos += req_len;
-			dreq->bytes_left -= req_len;
 
 			if (defer) {
 				nfs_mark_request_commit(req, NULL, &cinfo, 0);
@@ -988,7 +991,7 @@ ssize_t nfs_file_direct_write(struct kiocb *iocb, struct iov_iter *iter,
 		goto out;
 
 	dreq->inode = inode;
-	dreq->bytes_left = dreq->max_count = count;
+	dreq->max_count = count;
 	dreq->io_start = pos;
 	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
 	l_ctx = nfs_get_lock_context(dreq->ctx);
@@ -1046,8 +1049,7 @@ int __init nfs_init_directcache(void)
 {
 	nfs_direct_cachep = kmem_cache_create("nfs_direct_cache",
 						sizeof(struct nfs_direct_req),
-						0, (SLAB_RECLAIM_ACCOUNT|
-							SLAB_MEM_SPREAD),
+						0, SLAB_RECLAIM_ACCOUNT,
 						NULL);
 	if (nfs_direct_cachep == NULL)
 		return -ENOMEM;

@@ -234,10 +234,7 @@ struct inet_sock {
 	int			uc_index;
 	int			mc_index;
 	__be32			mc_addr;
-	struct {
-		__u16 lo;
-		__u16 hi;
-	}			local_port_range;
+	u32			local_port_range;	/* high << 16 | low */
 
 	struct ip_mc_socklist __rcu	*mc_list;
 	struct inet_cork_full	cork;
@@ -277,6 +274,7 @@ enum {
 	INET_FLAGS_REPFLOW	= 27,
 	INET_FLAGS_RTALERT_ISOLATE = 28,
 	INET_FLAGS_SNDFLOW	= 29,
+	INET_FLAGS_RTALERT	= 30,
 };
 
 /* cmsg flags for inet */

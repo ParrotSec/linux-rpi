@@ -1173,6 +1173,14 @@ int tee_client_close_session(struct tee_context *ctx, u32 session)
 }
 EXPORT_SYMBOL_GPL(tee_client_close_session);
 
+int tee_client_system_session(struct tee_context *ctx, u32 session)
+{
+	if (!ctx->teedev->desc->ops->system_session)
+		return -EINVAL;
+	return ctx->teedev->desc->ops->system_session(ctx, session);
+}
+EXPORT_SYMBOL_GPL(tee_client_system_session);
+
 int tee_client_invoke_func(struct tee_context *ctx,
 			   struct tee_ioctl_invoke_arg *arg,
 			   struct tee_param *param)
@@ -1218,7 +1226,7 @@ static int tee_client_device_uevent(const struct device *dev,
 	return add_uevent_var(env, "MODALIAS=tee:%pUb", dev_id);
 }
 
-struct bus_type tee_bus_type = {
+const struct bus_type tee_bus_type = {
 	.name		= "tee",
 	.match		= tee_client_device_match,
 	.uevent		= tee_client_device_uevent,

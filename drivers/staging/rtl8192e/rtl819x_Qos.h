@@ -8,12 +8,12 @@
 #define __INC_QOS_TYPE_H
 
 struct qos_tsinfo {
-	u8		ucTSID:4;
+	u8		ts_id:4;
 	u8		ucDirection:2;
 };
 
 struct octet_string {
-	u8 *Octet;
+	u8 *octet;
 	u16 Length;
 };
 

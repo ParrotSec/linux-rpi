@@ -9,6 +9,7 @@
 
 #include <linux/device.h>
 #include <linux/cdev.h>
+#include <linux/cleanup.h>
 #include <linux/slab.h>
 #include <linux/iio/types.h>
 /* IIO TODO LIST */
@@ -434,13 +435,7 @@ struct iio_trigger; /* forward declaration */
  * @update_scan_mode:	function to configure device and scan buffer when
  *			channels have changed
  * @debugfs_reg_access:	function to read or write register value of device
- * @of_xlate:		function pointer to obtain channel specifier index.
- *			When #iio-cells is greater than '0', the driver could
- *			provide a custom of_xlate function that reads the
- *			*args* and returns the appropriate index in registered
- *			IIO channels array.
  * @fwnode_xlate:	fwnode based function pointer to obtain channel specifier index.
- *			Functionally the same as @of_xlate.
  * @hwfifo_set_watermark: function pointer to set the current hardware
  *			fifo watermark level; see hwfifo_* entries in
  *			Documentation/ABI/testing/sysfs-bus-iio for details on
@@ -644,10 +639,37 @@ int __devm_iio_device_register(struct device *dev, struct iio_dev *indio_dev,
 int iio_push_event(struct iio_dev *indio_dev, u64 ev_code, s64 timestamp);
 int iio_device_claim_direct_mode(struct iio_dev *indio_dev);
 void iio_device_release_direct_mode(struct iio_dev *indio_dev);
+
+/*
+ * This autocleanup logic is normally used via
+ * iio_device_claim_direct_scoped().
+ */
+DEFINE_GUARD(iio_claim_direct, struct iio_dev *, iio_device_claim_direct_mode(_T),
+	     iio_device_release_direct_mode(_T))
+
+DEFINE_GUARD_COND(iio_claim_direct, _try, ({
+			struct iio_dev *dev;
+			int d = iio_device_claim_direct_mode(_T);
+
+			if (d < 0)
+				dev = NULL;
+			else
+				dev = _T;
+			dev;
+		}))
+
+/**
+ * iio_device_claim_direct_scoped() - Scoped call to iio_device_claim_direct.
+ * @fail: What to do on failure to claim device.
+ * @iio_dev: Pointer to the IIO devices structure
+ */
+#define iio_device_claim_direct_scoped(fail, iio_dev) \
+	scoped_cond_guard(iio_claim_direct_try, fail, iio_dev)
+
 int iio_device_claim_buffer_mode(struct iio_dev *indio_dev);
 void iio_device_release_buffer_mode(struct iio_dev *indio_dev);
 
-extern struct bus_type iio_bus_type;
+extern const struct bus_type iio_bus_type;
 
 /**
  * iio_device_put() - reference counted deallocation of struct device

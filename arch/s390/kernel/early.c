@@ -19,8 +19,10 @@
 #include <linux/kernel.h>
 #include <asm/asm-extable.h>
 #include <linux/memblock.h>
+#include <asm/access-regs.h>
 #include <asm/diag.h>
 #include <asm/ebcdic.h>
+#include <asm/fpu.h>
 #include <asm/ipl.h>
 #include <asm/lowcore.h>
 #include <asm/processor.h>
@@ -31,7 +33,6 @@
 #include <asm/sclp.h>
 #include <asm/facility.h>
 #include <asm/boot_data.h>
-#include <asm/switch_to.h>
 #include "entry.h"
 
 #define decompressor_handled_param(param)			\
@@ -229,10 +230,8 @@ static __init void detect_machine_facilities(void)
 	}
 	if (test_facility(51))
 		S390_lowcore.machine_flags |= MACHINE_FLAG_TLB_LC;
-	if (test_facility(129)) {
-		S390_lowcore.machine_flags |= MACHINE_FLAG_VX;
+	if (test_facility(129))
 		system_ctl_set_bit(0, CR0_VECTOR_BIT);
-	}
 	if (test_facility(130))
 		S390_lowcore.machine_flags |= MACHINE_FLAG_NX;
 	if (test_facility(133))
@@ -270,14 +269,6 @@ static inline void setup_access_registers(void)
 
 	restore_access_regs(acrs);
 }
-
-static int __init disable_vector_extension(char *str)
-{
-	S390_lowcore.machine_flags &= ~MACHINE_FLAG_VX;
-	system_ctl_clear_bit(0, CR0_VECTOR_BIT);
-	return 0;
-}
-early_param("novx", disable_vector_extension);
 
 char __bootdata(early_command_line)[COMMAND_LINE_SIZE];
 static void __init setup_boot_command_line(void)

@@ -435,8 +435,7 @@ befs_init_inodecache(void)
 {
 	befs_inode_cachep = kmem_cache_create_usercopy("befs_inode_cache",
 				sizeof(struct befs_inode_info), 0,
-				(SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD|
-					SLAB_ACCOUNT),
+				SLAB_RECLAIM_ACCOUNT | SLAB_ACCOUNT,
 				offsetof(struct befs_inode_info,
 					i_data.symlink),
 				sizeof_field(struct befs_inode_info,
@@ -671,9 +670,6 @@ static struct dentry *befs_get_parent(struct dentry *child)
 
 	parent = befs_iget(child->d_sb,
 			   (unsigned long)befs_ino->i_parent.start);
-	if (IS_ERR(parent))
-		return ERR_CAST(parent);
-
 	return d_obtain_alias(parent);
 }
 

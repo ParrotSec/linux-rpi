@@ -1,4 +1,11 @@
 ##
+## file: arch/Kconfig
+##
+## choice: MMU page size
+CONFIG_PAGE_SIZE_4KB=y
+## end choice
+
+##
 ## file: arch/sh/Kconfig
 ##
 ## choice: Processor sub-type selection
@@ -31,9 +38,6 @@ CONFIG_MMU=y
 CONFIG_MEMORY_START=0x0c000000
 CONFIG_MEMORY_SIZE=0x04000000
 CONFIG_VSYSCALL=y
-## choice: Kernel page size
-CONFIG_PAGE_SIZE_4KB=y
-## end choice
 
 ##
 ## file: drivers/ata/Kconfig

@@ -1,4 +1,11 @@
 ##
+## file: arch/Kconfig
+##
+## choice: MMU page size
+CONFIG_PAGE_SIZE_4KB=y
+## end choice
+
+##
 ## file: arch/sh/Kconfig
 ##
 ## choice: Processor sub-type selection
@@ -27,9 +34,6 @@ CONFIG_MMU=y
 CONFIG_MEMORY_START=0x48000000
 CONFIG_MEMORY_SIZE=0x18000000
 CONFIG_VSYSCALL=y
-## choice: Kernel page size
-CONFIG_PAGE_SIZE_4KB=y
-## end choice
 ## choice: HugeTLB page size
 CONFIG_HUGETLB_PAGE_SIZE_64K=y
 ## end choice

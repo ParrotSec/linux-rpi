@@ -1,7 +1,7 @@
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri, 19 May 2023 16:57:29 +0200
 Subject: [PATCH 1/4] ARM: vfp: Provide vfp_lock() for VFP locking.
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 kernel_neon_begin() uses local_bh_disable() to ensure exclusive access
 to the VFP unit. This is broken on PREEMPT_RT because a BH disabled
@@ -55,7 +55,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
   * Is 'thread's most up to date state stored in this CPUs hardware?
   * Must be called from non-preemptible context.
   */
-@@ -819,7 +847,7 @@ void kernel_neon_begin(void)
+@@ -837,7 +865,7 @@ void kernel_neon_begin(void)
  	unsigned int cpu;
  	u32 fpexc;
  
@@ -64,7 +64,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  
  	/*
  	 * Kernel mode NEON is only allowed outside of hardirq context with
-@@ -850,7 +878,7 @@ void kernel_neon_end(void)
+@@ -868,7 +896,7 @@ void kernel_neon_end(void)
  {
  	/* Disable the NEON/VFP unit. */
  	fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_EN);

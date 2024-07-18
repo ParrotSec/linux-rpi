@@ -1,4 +1,9 @@
 ##
+## file: init/Kconfig
+##
+# CONFIG_SCHED_AUTOGROUP is not set
+
+##
 ## file: kernel/Kconfig.preempt
 ##
 ## choice: Preemption Model

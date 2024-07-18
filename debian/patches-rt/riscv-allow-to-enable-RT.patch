@@ -1,7 +1,7 @@
 From: Jisheng Zhang <jszhang@kernel.org>
 Date: Tue, 31 Oct 2023 22:35:21 +0800
 Subject: [PATCH] riscv: allow to enable RT
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 Now, it's ready to enable RT on riscv.
 
@@ -13,8 +13,8 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/arch/riscv/Kconfig
 +++ b/arch/riscv/Kconfig
-@@ -49,6 +49,7 @@ config RISCV
- 	select ARCH_SUPPORTS_HUGETLBFS if MMU
+@@ -56,6 +56,7 @@ config RISCV
+ 	select ARCH_SUPPORTS_LTO_CLANG_THIN if LLD_VERSION >= 140000
  	select ARCH_SUPPORTS_PAGE_TABLE_CHECK if MMU
  	select ARCH_SUPPORTS_PER_VMA_LOCK if MMU
 +	select ARCH_SUPPORTS_RT

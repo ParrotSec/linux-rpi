@@ -2039,12 +2039,13 @@ static int pci_moxa_init(struct pci_dev *dev)
 	unsigned short device = dev->device;
 	resource_size_t iobar_addr = pci_resource_start(dev, 2);
 	unsigned int num_ports = (device & 0x00F0) >> 4, i;
-	u8 val;
+	u8 val, init_mode = MOXA_RS232;
 
 	if (!(pci_moxa_supported_rs(dev) & MOXA_SUPP_RS232)) {
-		for (i = 0; i < num_ports; ++i)
-			pci_moxa_set_interface(dev, i, MOXA_RS422);
+		init_mode = MOXA_RS422;
 	}
+	for (i = 0; i < num_ports; ++i)
+		pci_moxa_set_interface(dev, i, init_mode);
 
 	/*
 	 * Enable hardware buffer to prevent break signal output when system boots up.
@@ -5007,12 +5008,6 @@ static const struct pci_device_id serial_pci_tbl[] = {
 		PCI_ANY_ID, PCI_ANY_ID, 0, 0,
 		pbn_b0_bt_2_115200 },
 	{	PCI_VENDOR_ID_LAVA, PCI_DEVICE_ID_LAVA_QUATRO_B,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		pbn_b0_bt_2_115200 },
-	{	PCI_VENDOR_ID_LAVA, PCI_DEVICE_ID_LAVA_QUATTRO_A,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0,
-		pbn_b0_bt_2_115200 },
-	{	PCI_VENDOR_ID_LAVA, PCI_DEVICE_ID_LAVA_QUATTRO_B,
 		PCI_ANY_ID, PCI_ANY_ID, 0, 0,
 		pbn_b0_bt_2_115200 },
 	{	PCI_VENDOR_ID_LAVA, PCI_DEVICE_ID_LAVA_OCTO_A,

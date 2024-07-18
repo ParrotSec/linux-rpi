@@ -51,12 +51,12 @@ void rtl92e_set_reg(struct net_device *dev, u8 variable, u8 *val)
 
 	case HW_VAR_MEDIA_STATUS:
 	{
-		enum rt_op_mode OpMode = *((enum rt_op_mode *)(val));
+		enum rt_op_mode op_mode = *((enum rt_op_mode *)(val));
 		u8 btMsr = rtl92e_readb(dev, MSR);
 
 		btMsr &= 0xfc;
 
-		switch (OpMode) {
+		switch (op_mode) {
 		case RT_OP_MODE_INFRASTRUCTURE:
 			btMsr |= MSR_INFRA;
 			break;
@@ -164,7 +164,7 @@ void rtl92e_set_reg(struct net_device *dev, u8 variable, u8 *val)
 				    eACI);
 			break;
 		}
-		priv->rtllib->SetHwRegHandler(dev, HW_VAR_ACM_CTRL,
+		priv->rtllib->set_hw_reg_handler(dev, HW_VAR_ACM_CTRL,
 					      &pAcParam);
 		break;
 	}
@@ -261,7 +261,6 @@ static void _rtl92e_read_eeprom_info(struct net_device *dev)
 		priv->eeprom_customer_id = usValue & 0xff;
 		usValue = rtl92e_eeprom_read(dev,
 					     EEPROM_ICVersion_ChannelPlan >> 1);
-		priv->eeprom_chnl_plan = usValue & 0xff;
 		IC_Version = (usValue & 0xff00) >> 8;
 
 		ICVer8192 = IC_Version & 0xf;
@@ -283,7 +282,6 @@ static void _rtl92e_read_eeprom_info(struct net_device *dev)
 		priv->eeprom_vid = 0;
 		priv->eeprom_did = 0;
 		priv->eeprom_customer_id = 0;
-		priv->eeprom_chnl_plan = 0;
 	}
 
 	if (!priv->autoload_fail_flag) {
@@ -387,24 +385,14 @@ static void _rtl92e_read_eeprom_info(struct net_device *dev)
 
 	rtl92e_init_adaptive_rate(dev);
 
-	priv->chnl_plan = priv->eeprom_chnl_plan;
-
 	switch (priv->eeprom_customer_id) {
 	case EEPROM_CID_NetCore:
 		priv->customer_id = RT_CID_819X_NETCORE;
 		break;
 	case EEPROM_CID_TOSHIBA:
 		priv->customer_id = RT_CID_TOSHIBA;
-		if (priv->eeprom_chnl_plan & 0x80)
-			priv->chnl_plan = priv->eeprom_chnl_plan & 0x7f;
-		else
-			priv->chnl_plan = 0x0;
 		break;
 	}
-
-	if (priv->chnl_plan > CHANNEL_PLAN_LEN - 1)
-		priv->chnl_plan = 0;
-	priv->chnl_plan = COUNTRY_CODE_WORLD_WIDE_13;
 
 	if (priv->eeprom_vid == 0x1186 &&  priv->eeprom_did == 0x3304)
 		priv->rtllib->bSupportRemoteWakeUp = true;
@@ -705,11 +693,10 @@ void rtl92e_link_change(struct net_device *dev)
 		u32 reg;
 
 		reg = rtl92e_readl(dev, RCR);
-		if (priv->rtllib->link_state == MAC80211_LINKED) {
+		if (priv->rtllib->link_state == MAC80211_LINKED)
 			priv->receive_config = reg |= RCR_CBSSID;
-		} else {
+		else
 			priv->receive_config = reg &= ~RCR_CBSSID;
-		}
 
 		rtl92e_writel(dev, RCR, reg);
 	}
@@ -891,11 +878,11 @@ void  rtl92e_fill_tx_desc(struct net_device *dev, struct tx_desc *pdesc,
 	memset(pTxFwInfo, 0, sizeof(struct tx_fwinfo_8190pci));
 	pTxFwInfo->TxHT = (cb_desc->data_rate & 0x80) ? 1 : 0;
 	pTxFwInfo->TxRate = _rtl92e_rate_mgn_to_hw(cb_desc->data_rate);
-	pTxFwInfo->EnableCPUDur = cb_desc->bTxEnableFwCalcDur;
+	pTxFwInfo->EnableCPUDur = cb_desc->tx_enable_fw_calc_dur;
 	pTxFwInfo->Short = _rtl92e_query_is_short(pTxFwInfo->TxHT,
 						  pTxFwInfo->TxRate, cb_desc);
 
-	if (cb_desc->bAMPDUEnable) {
+	if (cb_desc->ampdu_enable) {
 		pTxFwInfo->AllowAggregation = 1;
 		pTxFwInfo->RxMF = cb_desc->ampdu_factor;
 		pTxFwInfo->RxAMD = cb_desc->ampdu_density;
@@ -1308,7 +1295,6 @@ static void _rtl92e_query_rxphystatus(
 		pwdb_all = rtl92e_rx_db_to_percent(rx_pwr_all);
 
 		pstats->RxPWDBAll = precord_stats->RxPWDBAll = pwdb_all;
-		pstats->RxPower = precord_stats->RxPower =	rx_pwr_all;
 		pstats->RecvSignalPower = rx_pwr_all;
 		if (pdrvinfo->RxHT && pdrvinfo->RxRate >= DESC90_RATEMCS8 &&
 		    pdrvinfo->RxRate <= DESC90_RATEMCS15)
@@ -1360,14 +1346,7 @@ static void _rtl92e_process_phyinfo(struct r8192_priv *priv, u8 *buffer,
 	static u32 slide_beacon_adc_pwdb_index;
 	static u32 slide_beacon_adc_pwdb_statistics;
 	static u32 last_beacon_adc_pwdb;
-	struct ieee80211_hdr_3addr *hdr;
-	u16 sc;
-	unsigned int seq;
 
-	hdr = (struct ieee80211_hdr_3addr *)buffer;
-	sc = le16_to_cpu(hdr->seq_ctrl);
-	seq = WLAN_GET_SEQ_SEQ(sc);
-	curr_st->Seq_Num = seq;
 	if (!prev_st->bIsAMPDU)
 		bcheck = true;
 
@@ -1548,7 +1527,7 @@ static void _rtl92e_update_received_rate_histogram_stats(
 {
 	struct r8192_priv *priv = (struct r8192_priv *)rtllib_priv(dev);
 	u32 rcvType = 1;
-	u32 rateIndex;
+	u32 rate_index;
 
 	if (pstats->bCRC)
 		rcvType = 2;
@@ -1557,95 +1536,95 @@ static void _rtl92e_update_received_rate_histogram_stats(
 
 	switch (pstats->rate) {
 	case MGN_1M:
-		rateIndex = 0;
+		rate_index = 0;
 		break;
 	case MGN_2M:
-		rateIndex = 1;
+		rate_index = 1;
 		break;
 	case MGN_5_5M:
-		rateIndex = 2;
+		rate_index = 2;
 		break;
 	case MGN_11M:
-		rateIndex = 3;
+		rate_index = 3;
 		break;
 	case MGN_6M:
-		rateIndex = 4;
+		rate_index = 4;
 		break;
 	case MGN_9M:
-		rateIndex = 5;
+		rate_index = 5;
 		break;
 	case MGN_12M:
-		rateIndex = 6;
+		rate_index = 6;
 		break;
 	case MGN_18M:
-		rateIndex = 7;
+		rate_index = 7;
 		break;
 	case MGN_24M:
-		rateIndex = 8;
+		rate_index = 8;
 		break;
 	case MGN_36M:
-		rateIndex = 9;
+		rate_index = 9;
 		break;
 	case MGN_48M:
-		rateIndex = 10;
+		rate_index = 10;
 		break;
 	case MGN_54M:
-		rateIndex = 11;
+		rate_index = 11;
 		break;
 	case MGN_MCS0:
-		rateIndex = 12;
+		rate_index = 12;
 		break;
 	case MGN_MCS1:
-		rateIndex = 13;
+		rate_index = 13;
 		break;
 	case MGN_MCS2:
-		rateIndex = 14;
+		rate_index = 14;
 		break;
 	case MGN_MCS3:
-		rateIndex = 15;
+		rate_index = 15;
 		break;
 	case MGN_MCS4:
-		rateIndex = 16;
+		rate_index = 16;
 		break;
 	case MGN_MCS5:
-		rateIndex = 17;
+		rate_index = 17;
 		break;
 	case MGN_MCS6:
-		rateIndex = 18;
+		rate_index = 18;
 		break;
 	case MGN_MCS7:
-		rateIndex = 19;
+		rate_index = 19;
 		break;
 	case MGN_MCS8:
-		rateIndex = 20;
+		rate_index = 20;
 		break;
 	case MGN_MCS9:
-		rateIndex = 21;
+		rate_index = 21;
 		break;
 	case MGN_MCS10:
-		rateIndex = 22;
+		rate_index = 22;
 		break;
 	case MGN_MCS11:
-		rateIndex = 23;
+		rate_index = 23;
 		break;
 	case MGN_MCS12:
-		rateIndex = 24;
+		rate_index = 24;
 		break;
 	case MGN_MCS13:
-		rateIndex = 25;
+		rate_index = 25;
 		break;
 	case MGN_MCS14:
-		rateIndex = 26;
+		rate_index = 26;
 		break;
 	case MGN_MCS15:
-		rateIndex = 27;
+		rate_index = 27;
 		break;
 	default:
-		rateIndex = 28;
+		rate_index = 28;
 		break;
 	}
-	priv->stats.received_rate_histogram[0][rateIndex]++;
-	priv->stats.received_rate_histogram[rcvType][rateIndex]++;
+	priv->stats.received_rate_histogram[0][rate_index]++;
+	priv->stats.received_rate_histogram[rcvType][rate_index]++;
 }
 
 bool rtl92e_get_rx_stats(struct net_device *dev, struct rtllib_rx_stats *stats,
@@ -1662,7 +1641,6 @@ bool rtl92e_get_rx_stats(struct net_device *dev, struct rtllib_rx_stats *stats,
 		stats->bHwError |= 1;
 
 	if (stats->bHwError) {
-		stats->bShift = false;
 		return false;
 	}
 
@@ -1674,7 +1652,6 @@ bool rtl92e_get_rx_stats(struct net_device *dev, struct rtllib_rx_stats *stats,
 
 	stats->rate = _rtl92e_rate_hw_to_mgn((bool)pDrvInfo->RxHT,
 					     pDrvInfo->RxRate);
-	stats->bShortPreamble = pDrvInfo->SPLCP;
 
 	_rtl92e_update_received_rate_histogram_stats(dev, stats);
 
@@ -1685,21 +1662,9 @@ bool rtl92e_get_rx_stats(struct net_device *dev, struct rtllib_rx_stats *stats,
 	stats->TimeStampLow = pDrvInfo->TSFL;
 	stats->TimeStampHigh = rtl92e_readl(dev, TSFR + 4);
 
-	rtl92e_update_rx_pkt_timestamp(dev, stats);
-
-	if ((stats->RxBufShift + stats->RxDrvInfoSize) > 0)
-		stats->bShift = 1;
-
-	stats->RxIs40MHzPacket = pDrvInfo->BW;
-
 	_rtl92e_translate_rx_signal_stats(dev, skb, stats, pdesc, pDrvInfo);
 	skb_trim(skb, skb->len - S_CRC_LEN);
 
-
-	stats->packetlength = stats->Length - 4;
-	stats->fraglength = stats->packetlength;
-	stats->fragoffset = 0;
-	stats->ntotalfrag = 1;
 	return true;
 }
 
@@ -1707,12 +1672,12 @@ void rtl92e_stop_adapter(struct net_device *dev, bool reset)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
 	int i;
-	u8	OpMode;
+	u8	op_mode;
 	u8	u1bTmp;
 	u32	ulRegRead;
 
-	OpMode = RT_OP_MODE_NO_LINK;
-	priv->rtllib->SetHwRegHandler(dev, HW_VAR_MEDIA_STATUS, &OpMode);
+	op_mode = RT_OP_MODE_NO_LINK;
+	priv->rtllib->set_hw_reg_handler(dev, HW_VAR_MEDIA_STATUS, &op_mode);
 
 	if (!priv->rtllib->bSupportRemoteWakeUp) {
 		u1bTmp = 0x0;
@@ -1742,7 +1707,7 @@ void rtl92e_stop_adapter(struct net_device *dev, bool reset)
 	}
 
 	for (i = 0; i < MAX_QUEUE_SIZE; i++)
-		skb_queue_purge(&priv->rtllib->skb_waitQ[i]);
+		skb_queue_purge(&priv->rtllib->skb_waitq[i]);
 
 	skb_queue_purge(&priv->skb_queue);
 }
@@ -1767,20 +1732,17 @@ void rtl92e_update_ratr_table(struct net_device *dev)
 		ratr_value &= 0x00000FF7;
 		break;
 	case WIRELESS_MODE_N_24G:
-		if (ieee->ht_info->peer_mimo_ps == 0)
-			ratr_value &= 0x0007F007;
-		else
-			ratr_value &= 0x000FF007;
+		ratr_value &= 0x000FF007;
 		break;
 	default:
 		break;
 	}
 	ratr_value &= 0x0FFFFFFF;
 	if (ieee->ht_info->cur_tx_bw40mhz &&
-	    ieee->ht_info->bCurShortGI40MHz)
+	    ieee->ht_info->cur_short_gi_40mhz)
 		ratr_value |= 0x80000000;
 	else if (!ieee->ht_info->cur_tx_bw40mhz &&
-		  ieee->ht_info->bCurShortGI20MHz)
+		  ieee->ht_info->cur_short_gi_20mhz)
 		ratr_value |= 0x80000000;
 	rtl92e_writel(dev, RATR0 + rate_index * 4, ratr_value);
 	rtl92e_writeb(dev, UFWP, 1);
@@ -1814,7 +1776,7 @@ rtl92e_init_variables(struct net_device  *dev)
 			    IMR_MGNTDOK | IMR_COMDOK | IMR_HIGHDOK |
 			    IMR_BDOK | IMR_RXCMDOK | IMR_TIMEOUT0 |
 			    IMR_RDU | IMR_RXFOVW | IMR_TXFOVW |
-			    IMR_BcnInt | IMR_TBDOK | IMR_TBDER);
+			    IMR_TBDOK | IMR_TBDER);
 
 	priv->bfirst_after_down = false;
 }
@@ -1869,7 +1831,7 @@ bool rtl92e_is_rx_stuck(struct net_device *dev)
 	u16		  RegRxCounter = rtl92e_readw(dev, 0x130);
 	bool		  bStuck = false;
 	static u8	  rx_chk_cnt;
-	u32		SlotIndex = 0, TotalRxStuckCount = 0;
+	u32		slot_index = 0, TotalRxStuckCount = 0;
 	u8		i;
 	u8		SilentResetRxSoltNum = 4;
 
@@ -1899,10 +1861,10 @@ bool rtl92e_is_rx_stuck(struct net_device *dev)
 	}
 
 
-	SlotIndex = (priv->silent_reset_rx_slot_index++) % SilentResetRxSoltNum;
+	slot_index = (priv->silent_reset_rx_slot_index++) % SilentResetRxSoltNum;
 
 	if (priv->rx_ctr == RegRxCounter) {
-		priv->silent_reset_rx_stuck_event[SlotIndex] = 1;
+		priv->silent_reset_rx_stuck_event[slot_index] = 1;
 
 		for (i = 0; i < SilentResetRxSoltNum; i++)
 			TotalRxStuckCount += priv->silent_reset_rx_stuck_event[i];
@@ -1914,7 +1876,7 @@ bool rtl92e_is_rx_stuck(struct net_device *dev)
 					 priv->silent_reset_rx_stuck_event[i];
 		}
 	} else {
-		priv->silent_reset_rx_stuck_event[SlotIndex] = 0;
+		priv->silent_reset_rx_stuck_event[slot_index] = 0;
 	}
 
 	priv->rx_ctr = RegRxCounter;
@@ -1955,5 +1917,5 @@ bool rtl92e_is_halfn_supported_by_ap(struct net_device *dev)
 	struct r8192_priv *priv = rtllib_priv(dev);
 	struct rtllib_device *ieee = priv->rtllib;
 
-	return ieee->bHalfWirelessN24GMode;
+	return ieee->half_wireless_n24g_mode;
 }

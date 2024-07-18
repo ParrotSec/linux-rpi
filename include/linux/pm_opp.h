@@ -16,6 +16,7 @@
 #include <linux/notifier.h>
 
 struct clk;
+struct cpufreq_frequency_table;
 struct regulator;
 struct dev_pm_opp;
 struct device;
@@ -45,18 +46,6 @@ struct dev_pm_opp_supply {
 	unsigned long u_watt;
 };
 
-/**
- * struct dev_pm_opp_icc_bw - Interconnect bandwidth values
- * @avg:	Average bandwidth corresponding to this OPP (in icc units)
- * @peak:	Peak bandwidth corresponding to this OPP (in icc units)
- *
- * This structure stores the bandwidth values for a single interconnect path.
- */
-struct dev_pm_opp_icc_bw {
-	u32 avg;
-	u32 peak;
-};
-
 typedef int (*config_regulators_t)(struct device *dev,
 			struct dev_pm_opp *old_opp, struct dev_pm_opp *new_opp,
 			struct regulator **regulators, unsigned int count);
@@ -74,8 +63,10 @@ typedef int (*config_clks_t)(struct device *dev, struct opp_table *opp_table,
  * @supported_hw_count: Number of elements in the array.
  * @regulator_names: Array of pointers to the names of the regulator, NULL terminated.
  * @genpd_names: Null terminated array of pointers containing names of genpd to
- *		 attach.
- * @virt_devs: Pointer to return the array of virtual devices.
+ *		attach. Mutually exclusive with required_devs.
+ * @virt_devs: Pointer to return the array of genpd virtual devices. Mutually
+ *		exclusive with required_devs.
+ * @required_devs: Required OPP devices. Mutually exclusive with genpd_names/virt_devs.
  *
  * This structure contains platform specific OPP configurations for the device.
  */
@@ -90,15 +81,21 @@ struct dev_pm_opp_config {
 	const char * const *regulator_names;
 	const char * const *genpd_names;
 	struct device ***virt_devs;
+	struct device **required_devs;
 };
+
+#define OPP_LEVEL_UNSET			U32_MAX
 
 /**
  * struct dev_pm_opp_data - The data to use to initialize an OPP.
- * @level: The performance level for the OPP.
+ * @turbo: Flag to indicate whether the OPP is to be marked turbo or not.
+ * @level: The performance level for the OPP. Set level to OPP_LEVEL_UNSET if
+ * level field isn't used.
  * @freq: The clock rate in Hz for the OPP.
  * @u_volt: The voltage in uV for the OPP.
  */
 struct dev_pm_opp_data {
+	bool turbo;
 	unsigned int level;
 	unsigned long freq;
 	unsigned long u_volt;
@@ -449,6 +446,21 @@ static inline int dev_pm_opp_sync_regulators(struct device *dev)
 }
 
 #endif		/* CONFIG_PM_OPP */
+
+#if defined(CONFIG_CPU_FREQ) && defined(CONFIG_PM_OPP)
+int dev_pm_opp_init_cpufreq_table(struct device *dev, struct cpufreq_frequency_table **table);
+void dev_pm_opp_free_cpufreq_table(struct device *dev, struct cpufreq_frequency_table **table);
+#else
+static inline int dev_pm_opp_init_cpufreq_table(struct device *dev, struct cpufreq_frequency_table **table)
+{
+	return -EINVAL;
+}
+
+static inline void dev_pm_opp_free_cpufreq_table(struct device *dev, struct cpufreq_frequency_table **table)
+{
+}
+#endif
+
 
 #if defined(CONFIG_PM_OPP) && defined(CONFIG_OF)
 int dev_pm_opp_of_add_table(struct device *dev);

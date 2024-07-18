@@ -313,6 +313,13 @@ static struct snd_soc_dai_driver imx8m_dai[] = {
 		.channels_max = 32,
 	},
 },
+{
+	.name = "micfil",
+	.capture = {
+		.channels_min = 1,
+		.channels_max = 8,
+	},
+},
 };
 
 static int imx8m_dsp_set_power_state(struct snd_sof_dev *sdev,
@@ -465,10 +472,21 @@ static struct snd_sof_dsp_ops sof_imx8m_ops = {
 		SNDRV_PCM_INFO_MMAP_VALID |
 		SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_PAUSE |
+		SNDRV_PCM_INFO_BATCH |
 		SNDRV_PCM_INFO_NO_PERIOD_WAKEUP,
 };
 
+static struct snd_sof_of_mach sof_imx8mp_machs[] = {
+	{
+		.compatible = "fsl,imx8mp-evk",
+		.sof_tplg_filename = "sof-imx8mp-wm8960.tplg",
+		.drv_name = "asoc-audio-graph-card2",
+	},
+	{}
+};
+
 static struct sof_dev_desc sof_of_imx8mp_desc = {
+	.of_machines	= sof_imx8mp_machs,
 	.ipc_supported_mask	= BIT(SOF_IPC_TYPE_3),
 	.ipc_default		= SOF_IPC_TYPE_3,
 	.default_fw_path = {

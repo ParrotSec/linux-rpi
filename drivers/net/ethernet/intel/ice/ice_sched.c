@@ -237,7 +237,7 @@ static int
 ice_sched_remove_elems(struct ice_hw *hw, struct ice_sched_node *parent,
 		       u32 node_teid)
 {
-	DEFINE_FLEX(struct ice_aqc_delete_elem, buf, teid, 1);
+	DEFINE_RAW_FLEX(struct ice_aqc_delete_elem, buf, teid, 1);
 	u16 buf_size = __struct_size(buf);
 	u16 num_groups_removed = 0;
 	int status;
@@ -1387,8 +1387,7 @@ void ice_sched_get_psm_clk_freq(struct ice_hw *hw)
 	u32 val, clk_src;
 
 	val = rd32(hw, GLGEN_CLKSTAT_SRC);
-	clk_src = (val & GLGEN_CLKSTAT_SRC_PSM_CLK_SRC_M) >>
-		GLGEN_CLKSTAT_SRC_PSM_CLK_SRC_S;
+	clk_src = FIELD_GET(GLGEN_CLKSTAT_SRC_PSM_CLK_SRC_M, val);
 
 #define PSM_CLK_SRC_367_MHZ 0x0
 #define PSM_CLK_SRC_416_MHZ 0x1
@@ -2220,7 +2219,7 @@ int
 ice_sched_move_nodes(struct ice_port_info *pi, struct ice_sched_node *parent,
 		     u16 num_items, u32 *list)
 {
-	DEFINE_FLEX(struct ice_aqc_move_elem, buf, teid, 1);
+	DEFINE_RAW_FLEX(struct ice_aqc_move_elem, buf, teid, 1);
 	u16 buf_len = __struct_size(buf);
 	struct ice_sched_node *node;
 	u16 i, grps_movd = 0;

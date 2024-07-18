@@ -155,15 +155,27 @@ cannot be explicitly configured.
 
 Control file
 ============
-The master control file debian/control must be generated before
-the package is uploaded. debian/rules contains the debian/control 
-target, which generates the control file by invoking the 
-debian/bin/gencontrol.py script, which combines the templates from
-the templates directory and architecture-specific defines.toml file to
-produce the debian/control file. Note that this target is intentionally
-made to fail with a non-zero exit code to make sure that it is never
-run during an automatic build. The following variables are substituted
-into the templates:
+The master control file debian/control must be generated before the package is
+uploaded. debian/rules contains various targets to facilitate this task:
+
+debian/control  Generates the control file by invoking the
+                debian/bin/gencontrol.py script, which combines the templates
+                from the templates directory and architecture-specific
+                defines.toml file to produce the debian/control file. Note that
+                this target is intentionally made to fail with a non-zero exit
+                code to make sure that it is never run during an automatic
+                build.
+
+orig            Populate the current directory with all files from the unpacked
+                upstream tarball in ../orig/linux_${ver} and apply the Debian
+                quilt patch stack.
+
+clean-generated Clean up all auto-generated files inside the ./debian directory
+
+maintainerclean What clean-generated does and additionally also cleans up all
+                files other than the ./debian and ./.git directories.
+
+The following variables are substituted into the templates:
 
 @version@      Upstream kernel version, for example 2.6.11.
 @arch@         The Debian arch name, such as powerpc or i386.

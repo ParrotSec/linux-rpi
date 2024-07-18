@@ -545,37 +545,9 @@ CONFIG_WANXL=m
 CONFIG_FARSYNC=m
 
 ##
-## file: drivers/net/wireless/atmel/Kconfig
-##
-CONFIG_ATMEL=m
-# CONFIG_PCI_ATMEL is not set
-CONFIG_PCMCIA_ATMEL=m
-
-##
-## file: drivers/net/wireless/cisco/Kconfig
-##
-CONFIG_AIRO_CS=m
-
-##
 ## file: drivers/net/wireless/intel/ipw2x00/Kconfig
 ##
 # CONFIG_IPW2100 is not set
-
-##
-## file: drivers/net/wireless/intersil/orinoco/Kconfig
-##
-CONFIG_HERMES=m
-CONFIG_APPLE_AIRPORT=m
-CONFIG_PLX_HERMES=m
-CONFIG_TMD_HERMES=m
-CONFIG_PCI_HERMES=m
-CONFIG_PCMCIA_HERMES=m
-
-##
-## file: drivers/net/wireless/legacy/Kconfig
-##
-CONFIG_PCMCIA_RAYCS=m
-CONFIG_PCMCIA_WL3501=m
 
 ##
 ## file: drivers/net/wireless/marvell/mwifiex/Kconfig
@@ -583,11 +555,6 @@ CONFIG_PCMCIA_WL3501=m
 CONFIG_MWIFIEX=m
 CONFIG_MWIFIEX_SDIO=m
 CONFIG_MWIFIEX_PCIE=m
-
-##
-## file: drivers/net/wireless/zydas/Kconfig
-##
-CONFIG_USB_ZD1201=m
 
 ##
 ## file: drivers/pci/Kconfig

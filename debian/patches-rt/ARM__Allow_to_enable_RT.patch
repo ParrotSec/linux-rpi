@@ -1,7 +1,7 @@
 Subject: ARM: Allow to enable RT
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri Oct 11 13:14:29 2019 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -17,7 +17,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 ---
 --- a/arch/arm/Kconfig
 +++ b/arch/arm/Kconfig
-@@ -36,6 +36,7 @@
+@@ -37,6 +37,7 @@ config ARM
  	select ARCH_SUPPORTS_ATOMIC_RMW
  	select ARCH_SUPPORTS_HUGETLBFS if ARM_LPAE
  	select ARCH_SUPPORTS_PER_VMA_LOCK
@@ -25,7 +25,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	select ARCH_USE_BUILTIN_BSWAP
  	select ARCH_USE_CMPXCHG_LOCKREF
  	select ARCH_USE_MEMTEST
-@@ -120,6 +121,7 @@
+@@ -122,6 +123,7 @@ config ARM
  	select HAVE_PERF_EVENTS
  	select HAVE_PERF_REGS
  	select HAVE_PERF_USER_STACK_DUMP

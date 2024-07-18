@@ -192,13 +192,13 @@ static struct nfs_page *nfs_folio_find_private_request(struct folio *folio)
 
 	if (!folio_test_private(folio))
 		return NULL;
-	spin_lock(&mapping->private_lock);
+	spin_lock(&mapping->i_private_lock);
 	req = nfs_folio_private_request(folio);
 	if (req) {
 		WARN_ON_ONCE(req->wb_head != req);
 		kref_get(&req->wb_kref);
 	}
-	spin_unlock(&mapping->private_lock);
+	spin_unlock(&mapping->i_private_lock);
 	return req;
 }
 
@@ -667,12 +667,6 @@ static int nfs_writepage_locked(struct folio *folio,
 	struct inode *inode = folio_file_mapping(folio)->host;
 	int err;
 
-	if (wbc->sync_mode == WB_SYNC_NONE &&
-	    NFS_SERVER(inode)->write_congested) {
-		folio_redirty_for_writepage(wbc, folio);
-		return AOP_WRITEPAGE_ACTIVATE;
-	}
-
 	nfs_inc_stats(inode, NFSIOS_VFSWRITEPAGE);
 	nfs_pageio_init_write(&pgio, inode, 0, false,
 			      &nfs_async_write_completion_ops);
@@ -680,17 +674,6 @@ static int nfs_writepage_locked(struct folio *folio,
 	pgio.pg_error = 0;
 	nfs_pageio_complete(&pgio);
 	return err;
-}
-
-int nfs_writepage(struct page *page, struct writeback_control *wbc)
-{
-	struct folio *folio = page_folio(page);
-	int ret;
-
-	ret = nfs_writepage_locked(folio, wbc);
-	if (ret != AOP_WRITEPAGE_ACTIVATE)
-		unlock_page(page);
-	return ret;
 }
 
 static int nfs_writepages_callback(struct folio *folio,
@@ -771,13 +754,13 @@ static void nfs_inode_add_request(struct nfs_page *req)
 	 * Swap-space should not get truncated. Hence no need to plug the race
 	 * with invalidate/truncate.
 	 */
-	spin_lock(&mapping->private_lock);
+	spin_lock(&mapping->i_private_lock);
 	if (likely(!folio_test_swapcache(folio))) {
 		set_bit(PG_MAPPED, &req->wb_flags);
 		folio_set_private(folio);
 		folio->private = req;
 	}
-	spin_unlock(&mapping->private_lock);
+	spin_unlock(&mapping->i_private_lock);
 	atomic_long_inc(&nfsi->nrequests);
 	/* this a head request for a page group - mark it as having an
 	 * extra reference so sub groups can follow suit.
@@ -798,13 +781,13 @@ static void nfs_inode_remove_request(struct nfs_page *req)
 		struct folio *folio = nfs_page_to_folio(req->wb_head);
 		struct address_space *mapping = folio_file_mapping(folio);
 
-		spin_lock(&mapping->private_lock);
+		spin_lock(&mapping->i_private_lock);
 		if (likely(folio && !folio_test_swapcache(folio))) {
 			folio->private = NULL;
 			folio_clear_private(folio);
 			clear_bit(PG_MAPPED, &req->wb_head->wb_flags);
 		}
-		spin_unlock(&mapping->private_lock);
+		spin_unlock(&mapping->i_private_lock);
 	}
 
 	if (test_and_clear_bit(PG_INODE_REF, &req->wb_flags)) {
@@ -1314,7 +1297,7 @@ static bool
 is_whole_file_wrlock(struct file_lock *fl)
 {
 	return fl->fl_start == 0 && fl->fl_end == OFFSET_MAX &&
-			fl->fl_type == F_WRLCK;
+			lock_is_write(fl);
 }
 
 /* If we know the page is up to date, and we're not using byte range locks (or
@@ -1348,13 +1331,13 @@ static int nfs_can_extend_write(struct file *file, struct folio *folio,
 	spin_lock(&flctx->flc_lock);
 	if (!list_empty(&flctx->flc_posix)) {
 		fl = list_first_entry(&flctx->flc_posix, struct file_lock,
-					fl_list);
+					c.flc_list);
 		if (is_whole_file_wrlock(fl))
 			ret = 1;
 	} else if (!list_empty(&flctx->flc_flock)) {
 		fl = list_first_entry(&flctx->flc_flock, struct file_lock,
-					fl_list);
-		if (fl->fl_type == F_WRLCK)
+					c.flc_list);
+		if (lock_is_write(fl))
 			ret = 1;
 	}
 	spin_unlock(&flctx->flc_lock);

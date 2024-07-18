@@ -17,32 +17,27 @@ int bch2_inode_v3_invalid(struct bch_fs *, struct bkey_s_c,
 			  enum bkey_invalid_flags, struct printbuf *);
 void bch2_inode_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
-int bch2_trans_mark_inode(struct btree_trans *, enum btree_id, unsigned,
-			  struct bkey_s_c, struct bkey_i *, unsigned);
-int bch2_mark_inode(struct btree_trans *, enum btree_id, unsigned,
-		    struct bkey_s_c, struct bkey_s_c, unsigned);
+int bch2_trigger_inode(struct btree_trans *, enum btree_id, unsigned,
+			  struct bkey_s_c, struct bkey_s, unsigned);
 
 #define bch2_bkey_ops_inode ((struct bkey_ops) {	\
 	.key_invalid	= bch2_inode_invalid,		\
 	.val_to_text	= bch2_inode_to_text,		\
-	.trans_trigger	= bch2_trans_mark_inode,	\
-	.atomic_trigger	= bch2_mark_inode,		\
+	.trigger	= bch2_trigger_inode,		\
 	.min_val_size	= 16,				\
 })
 
 #define bch2_bkey_ops_inode_v2 ((struct bkey_ops) {	\
 	.key_invalid	= bch2_inode_v2_invalid,	\
 	.val_to_text	= bch2_inode_to_text,		\
-	.trans_trigger	= bch2_trans_mark_inode,	\
-	.atomic_trigger	= bch2_mark_inode,		\
+	.trigger	= bch2_trigger_inode,		\
 	.min_val_size	= 32,				\
 })
 
 #define bch2_bkey_ops_inode_v3 ((struct bkey_ops) {	\
 	.key_invalid	= bch2_inode_v3_invalid,	\
 	.val_to_text	= bch2_inode_to_text,		\
-	.trans_trigger	= bch2_trans_mark_inode,	\
-	.atomic_trigger	= bch2_mark_inode,		\
+	.trigger	= bch2_trigger_inode,		\
 	.min_val_size	= 48,				\
 })
 
@@ -100,6 +95,8 @@ struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
 
 void bch2_inode_unpacked_to_text(struct printbuf *, struct bch_inode_unpacked *);
 
+int bch2_inode_peek_nowarn(struct btree_trans *, struct btree_iter *,
+		    struct bch_inode_unpacked *, subvol_inum, unsigned);
 int bch2_inode_peek(struct btree_trans *, struct btree_iter *,
 		    struct bch_inode_unpacked *, subvol_inum, unsigned);
 
@@ -112,6 +109,9 @@ static inline int bch2_inode_write(struct btree_trans *trans,
 {
 	return bch2_inode_write_flags(trans, iter, inode, 0);
 }
+
+int __bch2_fsck_write_inode(struct btree_trans *, struct bch_inode_unpacked *, u32);
+int bch2_fsck_write_inode(struct btree_trans *, struct bch_inode_unpacked *, u32);
 
 void bch2_inode_init_early(struct bch_fs *,
 			   struct bch_inode_unpacked *);
@@ -175,6 +175,20 @@ static inline u8 mode_to_type(umode_t mode)
 static inline u8 inode_d_type(struct bch_inode_unpacked *inode)
 {
 	return inode->bi_subvol ? DT_SUBVOL : mode_to_type(inode->bi_mode);
+}
+
+static inline u32 bch2_inode_flags(struct bkey_s_c k)
+{
+	switch (k.k->type) {
+	case KEY_TYPE_inode:
+		return le32_to_cpu(bkey_s_c_to_inode(k).v->bi_flags);
+	case KEY_TYPE_inode_v2:
+		return le64_to_cpu(bkey_s_c_to_inode_v2(k).v->bi_flags);
+	case KEY_TYPE_inode_v3:
+		return le64_to_cpu(bkey_s_c_to_inode_v3(k).v->bi_flags);
+	default:
+		return 0;
+	}
 }
 
 /* i_nlink: */

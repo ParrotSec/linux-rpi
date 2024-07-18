@@ -7,8 +7,7 @@ Build-Depends:
 # used by kernel-wedge (only on Linux, thus not declared as a dependency)
  kmod,
 Depends: kmod, linux-base (>= 4.3~), ${misc:Depends}
-Recommends: firmware-linux-free
-Suggests: linux-doc-@version@, debian-kernel-handbook
+Suggests: firmware-linux-free, linux-doc-@version@, debian-kernel-handbook
 Conflicts: linux-image-@abiname@@localversion@
 Replaces: linux-image-@abiname@@localversion@
 Description: Linux @upstreamversion@ for @class@

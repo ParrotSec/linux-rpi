@@ -13,10 +13,9 @@ Build-Depends:
  rsync,
 Built-Using: @source_basename@@source_suffix@ (= @version_complete@)
 Depends: kmod, linux-base (>= 4.3~), ${misc:Depends}
-Recommends: firmware-linux-free
 Conflicts: linux-image-@abiname@@localversion@-unsigned
 Replaces: linux-image-@abiname@@localversion@-unsigned
-Suggests: linux-doc-@version@, debian-kernel-handbook
+Suggests: firmware-linux-free, linux-doc-@version@, debian-kernel-handbook
 Description: Linux @upstreamversion@ for @class@ (signed)
  The Linux kernel @upstreamversion@ and modules for use on @longclass@.
  .

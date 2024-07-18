@@ -58,6 +58,7 @@
 #include <net/timewait_sock.h>
 #include <net/inet_common.h>
 #include <net/secure_seq.h>
+#include <net/hotdata.h>
 #include <net/busy_poll.h>
 
 #include <linux/proc_fs.h>
@@ -94,11 +95,9 @@ static void inet6_sk_rx_dst_set(struct sock *sk, const struct sk_buff *skb)
 	struct dst_entry *dst = skb_dst(skb);
 
 	if (dst && dst_hold_safe(dst)) {
-		const struct rt6_info *rt = (const struct rt6_info *)dst;
-
 		rcu_assign_pointer(sk->sk_rx_dst, dst);
 		sk->sk_rx_dst_ifindex = skb->skb_iif;
-		sk->sk_rx_dst_cookie = rt6_get_cookie(rt);
+		sk->sk_rx_dst_cookie = rt6_get_cookie(dst_rt6_info(dst));
 	}
 }
 
@@ -1439,7 +1438,6 @@ static struct sock *tcp_v6_syn_recv_sock(const struct sock *sk, struct sk_buff *
 	 */
 
 	newsk->sk_gso_type = SKB_GSO_TCPV6;
-	ip6_dst_store(newsk, dst, NULL, NULL);
 	inet6_sk_rx_dst_set(newsk, skb);
 
 	inet_sk(newsk)->pinet6 = tcp_inet6_sk(newsk);
@@ -1449,6 +1447,8 @@ static struct sock *tcp_v6_syn_recv_sock(const struct sock *sk, struct sk_buff *
 	newnp = tcp_inet6_sk(newsk);
 
 	memcpy(newnp, np, sizeof(struct ipv6_pinfo));
+
+	ip6_dst_store(newsk, dst, NULL, NULL);
 
 	newsk->sk_v6_daddr = ireq->ir_v6_rmt_addr;
 	newnp->saddr = ireq->ir_v6_loc_addr;
@@ -1623,7 +1623,6 @@ int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 	if (np->rxopt.all)
 		opt_skb = skb_clone_and_charge_r(skb, sk);
 
-	reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
 		struct dst_entry *dst;
 
@@ -1653,12 +1652,12 @@ int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 	if (sk->sk_state == TCP_LISTEN) {
 		struct sock *nsk = tcp_v6_cookie_check(sk, skb);
 
-		if (!nsk)
-			goto discard;
-
 		if (nsk != sk) {
-			if (tcp_child_process(sk, nsk, skb))
-				goto reset;
+			if (nsk) {
+				reason = tcp_child_process(sk, nsk, skb);
+				if (reason)
+					goto reset;
+			}
 			if (opt_skb)
 				__kfree_skb(opt_skb);
 			return 0;
@@ -1666,7 +1665,8 @@ int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 	} else
 		sock_rps_save_rxhash(sk, skb);
 
-	if (tcp_rcv_state_process(sk, skb))
+	reason = tcp_rcv_state_process(sk, skb);
+	if (reason)
 		goto reset;
 	if (opt_skb)
 		goto ipv6_pktoptions;
@@ -1699,7 +1699,7 @@ ipv6_pktoptions:
 	if (TCP_SKB_CB(opt_skb)->end_seq == tp->rcv_nxt &&
 	    !((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))) {
 		if (np->rxopt.bits.rxinfo || np->rxopt.bits.rxoinfo)
-			np->mcast_oif = tcp_v6_iif(opt_skb);
+			WRITE_ONCE(np->mcast_oif, tcp_v6_iif(opt_skb));
 		if (np->rxopt.bits.rxhlim || np->rxopt.bits.rxohlim)
 			WRITE_ONCE(np->mcast_hops,
 				   ipv6_hdr(opt_skb)->hop_limit);
@@ -1856,10 +1856,12 @@ process:
 		if (nsk == sk) {
 			reqsk_put(req);
 			tcp_v6_restore_cb(skb);
-		} else if (tcp_child_process(sk, nsk, skb)) {
-			tcp_v6_send_reset(nsk, skb);
-			goto discard_and_relse;
 		} else {
+			drop_reason = tcp_child_process(sk, nsk, skb);
+			if (drop_reason) {
+				tcp_v6_send_reset(nsk, skb);
+				goto discard_and_relse;
+			}
 			sock_put(sk);
 			return 0;
 		}
@@ -2365,11 +2367,6 @@ struct proto tcpv6_prot = {
 };
 EXPORT_SYMBOL_GPL(tcpv6_prot);
 
-static const struct inet6_protocol tcpv6_protocol = {
-	.handler	=	tcp_v6_rcv,
-	.err_handler	=	tcp_v6_err,
-	.flags		=	INET6_PROTO_NOPOLICY|INET6_PROTO_FINAL,
-};
 
 static struct inet_protosw tcpv6_protosw = {
 	.type		=	SOCK_STREAM,
@@ -2406,7 +2403,12 @@ int __init tcpv6_init(void)
 {
 	int ret;
 
-	ret = inet6_add_protocol(&tcpv6_protocol, IPPROTO_TCP);
+	net_hotdata.tcpv6_protocol = (struct inet6_protocol) {
+		.handler     = tcp_v6_rcv,
+		.err_handler = tcp_v6_err,
+		.flags	     = INET6_PROTO_NOPOLICY | INET6_PROTO_FINAL,
+	};
+	ret = inet6_add_protocol(&net_hotdata.tcpv6_protocol, IPPROTO_TCP);
 	if (ret)
 		goto out;
 
@@ -2431,7 +2433,7 @@ out_tcpv6_pernet_subsys:
 out_tcpv6_protosw:
 	inet6_unregister_protosw(&tcpv6_protosw);
 out_tcpv6_protocol:
-	inet6_del_protocol(&tcpv6_protocol, IPPROTO_TCP);
+	inet6_del_protocol(&net_hotdata.tcpv6_protocol, IPPROTO_TCP);
 	goto out;
 }
 
@@ -2439,5 +2441,5 @@ void tcpv6_exit(void)
 {
 	unregister_pernet_subsys(&tcpv6_net_ops);
 	inet6_unregister_protosw(&tcpv6_protosw);
-	inet6_del_protocol(&tcpv6_protocol, IPPROTO_TCP);
+	inet6_del_protocol(&net_hotdata.tcpv6_protocol, IPPROTO_TCP);
 }

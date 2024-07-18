@@ -562,7 +562,7 @@ class _ControlFileDict(collections.abc.MutableMapping):
                     value = cls(value)
         except KeyError:
             warnings.warn(
-                f'setting unknown field { key } in { type(self).__name__ }',
+                f'setting unknown field {key} in {type(self).__name__}',
                 stacklevel=2)
         self.__data[key] = value
 
@@ -589,7 +589,7 @@ class _ControlFileDict(collections.abc.MutableMapping):
                 ret = self[key] = self._fields[key]()
             except KeyError:
                 warnings.warn(
-                    f'setting unknown field { key } in { type(self).__name__ }',
+                    f'setting unknown field {key} in {type(self).__name__}',
                     stacklevel=2)
                 ret = self[key] = ''
             return ret

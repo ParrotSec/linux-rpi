@@ -23,6 +23,15 @@ CONFIG_ARCH_THEAD=y
 CONFIG_SOC_VIRT=y
 
 ##
+## file: arch/riscv/crypto/Kconfig
+##
+CONFIG_CRYPTO_AES_RISCV64=m
+CONFIG_CRYPTO_CHACHA_RISCV64=m
+CONFIG_CRYPTO_GHASH_RISCV64=m
+CONFIG_CRYPTO_SHA256_RISCV64=m
+CONFIG_CRYPTO_SHA512_RISCV64=m
+
+##
 ## file: arch/riscv/kvm/Kconfig
 ##
 CONFIG_VIRTUALIZATION=y
@@ -38,6 +47,11 @@ CONFIG_ACPI=y
 ##
 CONFIG_SATA_AHCI_PLATFORM=m
 CONFIG_AHCI_DWC=m
+
+##
+## file: drivers/cache/Kconfig
+##
+CONFIG_SIFIVE_CCACHE=y
 
 ##
 ## file: drivers/char/hw_random/Kconfig
@@ -62,6 +76,11 @@ CONFIG_CXL_BUS=y
 CONFIG_DMADEVICES=y
 CONFIG_DMA_SUN6I=m
 CONFIG_DW_AXI_DMAC=m
+
+##
+## file: drivers/firmware/microchip/Kconfig
+##
+CONFIG_POLARFIRE_SOC_AUTO_UPDATE=m
 
 ##
 ## file: drivers/gpio/Kconfig
@@ -124,6 +143,7 @@ CONFIG_LEDS_PWM=m
 ##
 ## file: drivers/leds/rgb/Kconfig
 ##
+CONFIG_LEDS_GROUP_MULTICOLOR=m
 CONFIG_LEDS_PWM_MULTICOLOR=m
 
 ##
@@ -148,6 +168,7 @@ CONFIG_MMC=m
 ## file: drivers/mmc/host/Kconfig
 ##
 CONFIG_MMC_SDHCI_PLTFM=m
+CONFIG_MMC_SDHCI_OF_DWCMSHC=m
 CONFIG_MMC_SDHCI_CADENCE=m
 CONFIG_MMC_SPI=m
 CONFIG_MMC_DW=m
@@ -193,6 +214,11 @@ CONFIG_PCIE_DW_PLAT_HOST=y
 CONFIG_PCIE_FU740=y
 
 ##
+## file: drivers/perf/Kconfig
+##
+CONFIG_STARFIVE_STARLINK_PMU=y
+
+##
 ## file: drivers/phy/allwinner/Kconfig
 ##
 CONFIG_PHY_SUN4I_USB=m
@@ -211,6 +237,11 @@ CONFIG_POWER_RESET=y
 CONFIG_POWER_RESET_GPIO=y
 CONFIG_POWER_RESET_GPIO_RESTART=y
 CONFIG_POWER_RESET_RESTART=y
+
+##
+## file: drivers/pps/clients/Kconfig
+##
+CONFIG_PPS_CLIENT_GPIO=m
 
 ##
 ## file: drivers/pwm/Kconfig
@@ -273,6 +304,20 @@ CONFIG_SERIAL_OF_PLATFORM=y
 CONFIG_USB=m
 
 ##
+## file: drivers/usb/cdns3/Kconfig
+##
+CONFIG_USB_CDNS_SUPPORT=m
+CONFIG_USB_CDNS3=m
+CONFIG_USB_CDNS3_GADGET=y
+CONFIG_USB_CDNS3_HOST=y
+CONFIG_USB_CDNS3_STARFIVE=m
+
+##
+## file: drivers/usb/gadget/Kconfig
+##
+CONFIG_USB_GADGET=m
+
+##
 ## file: drivers/usb/host/Kconfig
 ##
 CONFIG_USB_XHCI_PLATFORM=m
@@ -286,6 +331,7 @@ CONFIG_USB_OHCI_HCD_PLATFORM=m
 ##
 CONFIG_USB_MUSB_HDRC=m
 CONFIG_USB_MUSB_SUNXI=m
+CONFIG_USB_MUSB_POLARFIRE_SOC=m
 
 ##
 ## file: drivers/usb/phy/Kconfig
@@ -323,7 +369,18 @@ CONFIG_SND_HDA_INTEL=m
 CONFIG_SND_SOC=m
 
 ##
+## file: sound/soc/dwc/Kconfig
+##
+CONFIG_SND_DESIGNWARE_I2S=m
+
+##
+## file: sound/soc/generic/Kconfig
+##
+CONFIG_SND_SIMPLE_CARD=m
+
+##
 ## file: sound/soc/starfive/Kconfig
 ##
 CONFIG_SND_SOC_STARFIVE=m
+CONFIG_SND_SOC_JH7110_PWMDAC=m
 CONFIG_SND_SOC_JH7110_TDM=m

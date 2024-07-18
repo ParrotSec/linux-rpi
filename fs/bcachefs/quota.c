@@ -560,13 +560,11 @@ static int bch2_fs_quota_read_inode(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct bch_inode_unpacked u;
 	struct bch_snapshot_tree s_t;
-	int ret;
+	u32 tree = bch2_snapshot_tree(c, k.k->p.snapshot);
 
-	ret = bch2_snapshot_tree_lookup(trans,
-			bch2_snapshot_tree(c, k.k->p.snapshot), &s_t);
+	int ret = bch2_snapshot_tree_lookup(trans, tree, &s_t);
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), c,
-			"%s: snapshot tree %u not found", __func__,
-			snapshot_t(c, k.k->p.snapshot)->tree);
+			"%s: snapshot tree %u not found", __func__, tree);
 	if (ret)
 		return ret;
 
@@ -599,14 +597,9 @@ advance:
 
 int bch2_fs_quota_read(struct bch_fs *c)
 {
-	struct bch_sb_field_quota *sb_quota;
-	struct btree_trans *trans;
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	int ret;
 
 	mutex_lock(&c->sb_lock);
-	sb_quota = bch2_sb_get_or_create_quota(&c->disk_sb);
+	struct bch_sb_field_quota *sb_quota = bch2_sb_get_or_create_quota(&c->disk_sb);
 	if (!sb_quota) {
 		mutex_unlock(&c->sb_lock);
 		return -BCH_ERR_ENOSPC_sb_quota;
@@ -615,19 +608,14 @@ int bch2_fs_quota_read(struct bch_fs *c)
 	bch2_sb_quota_read(c);
 	mutex_unlock(&c->sb_lock);
 
-	trans = bch2_trans_get(c);
-
-	ret = for_each_btree_key2(trans, iter, BTREE_ID_quotas,
-			POS_MIN, BTREE_ITER_PREFETCH, k,
-		__bch2_quota_set(c, k, NULL)) ?:
-	      for_each_btree_key2(trans, iter, BTREE_ID_inodes,
-			POS_MIN, BTREE_ITER_PREFETCH|BTREE_ITER_ALL_SNAPSHOTS, k,
-		bch2_fs_quota_read_inode(trans, &iter, k));
-
-	bch2_trans_put(trans);
-
-	if (ret)
-		bch_err_fn(c, ret);
+	int ret = bch2_trans_run(c,
+		for_each_btree_key(trans, iter, BTREE_ID_quotas, POS_MIN,
+				   BTREE_ITER_PREFETCH, k,
+			__bch2_quota_set(c, k, NULL)) ?:
+		for_each_btree_key(trans, iter, BTREE_ID_inodes, POS_MIN,
+				   BTREE_ITER_PREFETCH|BTREE_ITER_ALL_SNAPSHOTS, k,
+			bch2_fs_quota_read_inode(trans, &iter, k)));
+	bch_err_fn(c, ret);
 	return ret;
 }
 

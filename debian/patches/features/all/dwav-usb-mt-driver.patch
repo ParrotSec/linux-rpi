@@ -16,7 +16,7 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
 
 --- a/drivers/hid/hid-ids.h
 +++ b/drivers/hid/hid-ids.h
-@@ -1434,4 +1434,10 @@
+@@ -1461,4 +1461,10 @@
  #define USB_VENDOR_ID_SIGNOTEC			0x2133
  #define USB_DEVICE_ID_SIGNOTEC_VIEWSONIC_PD1011	0x0018
  
@@ -29,7 +29,7 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
  #endif
 --- a/drivers/hid/hid-quirks.c
 +++ b/drivers/hid/hid-quirks.c
-@@ -879,6 +879,10 @@ static const struct hid_device_id hid_ig
+@@ -891,6 +891,10 @@ static const struct hid_device_id hid_ig
  	{ HID_USB_DEVICE(USB_VENDOR_ID_SYNAPTICS, USB_DEVICE_ID_SYNAPTICS_DPAD) },
  #endif
  	{ HID_USB_DEVICE(USB_VENDOR_ID_YEALINK, USB_DEVICE_ID_YEALINK_P1K_P4K_B2K) },
@@ -42,7 +42,7 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
  
 --- a/drivers/input/touchscreen/Kconfig
 +++ b/drivers/input/touchscreen/Kconfig
-@@ -1377,4 +1377,14 @@ config TOUCHSCREEN_HIMAX_HX83112B
+@@ -1399,4 +1399,14 @@ config TOUCHSCREEN_HIMAX_HX83112B
  	  To compile this driver as a module, choose M here: the
  	  module will be called himax_hx83112b.
  
@@ -59,8 +59,8 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
  endif
 --- a/drivers/input/touchscreen/Makefile
 +++ b/drivers/input/touchscreen/Makefile
-@@ -116,3 +116,4 @@ obj-$(CONFIG_TOUCHSCREEN_RASPBERRYPI_FW)
- obj-$(CONFIG_TOUCHSCREEN_IQS5XX)	+= iqs5xx.o
+@@ -118,3 +118,4 @@ obj-$(CONFIG_TOUCHSCREEN_IQS5XX)	+= iqs5
+ obj-$(CONFIG_TOUCHSCREEN_IQS7211)	+= iqs7211.o
  obj-$(CONFIG_TOUCHSCREEN_ZINITIX)	+= zinitix.o
  obj-$(CONFIG_TOUCHSCREEN_HIMAX_HX83112B)	+= himax_hx83112b.o
 +obj-$(CONFIG_TOUCHSCREEN_DWAV_USB_MT)  += dwav-usb-mt.o
@@ -528,7 +528,7 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
 +	dwav_usb_mt->interface  = intf;
 +
 +	if (udev->manufacturer)
-+		strlcpy(dwav_usb_mt->name,
++		strscpy(dwav_usb_mt->name,
 +				udev->manufacturer, sizeof(dwav_usb_mt->name));
 +
 +	if (udev->product) {
@@ -622,3 +622,4 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
 +
 +MODULE_ALIAS("dwav_usb_mt");
 \ No newline at end of file
+

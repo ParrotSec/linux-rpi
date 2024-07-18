@@ -26,7 +26,7 @@ Signed-off-by: Salvatore Bonaccorso <carnil@debian.org>
 
 --- a/arch/x86/kernel/setup.c
 +++ b/arch/x86/kernel/setup.c
-@@ -902,6 +902,8 @@ void __init setup_arch(char **cmdline_p)
+@@ -900,6 +900,8 @@ void __init setup_arch(char **cmdline_p)
  	if (efi_enabled(EFI_BOOT))
  		efi_init();
  
@@ -35,7 +35,7 @@ Signed-off-by: Salvatore Bonaccorso <carnil@debian.org>
  	reserve_ibft_region();
  	x86_init.resources.dmi_setup();
  
-@@ -1063,8 +1065,6 @@ void __init setup_arch(char **cmdline_p)
+@@ -1061,8 +1063,6 @@ void __init setup_arch(char **cmdline_p)
  	/* Allocate bigger log buffer */
  	setup_log_buf(1);
  
@@ -67,17 +67,17 @@ Signed-off-by: Salvatore Bonaccorso <carnil@debian.org>
  		default:
 --- a/include/linux/security.h
 +++ b/include/linux/security.h
-@@ -486,6 +486,7 @@ int security_inode_notifysecctx(struct i
- int security_inode_setsecctx(struct dentry *dentry, void *ctx, u32 ctxlen);
- int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen);
+@@ -509,6 +509,7 @@ int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen);
  int security_locked_down(enum lockdown_reason what);
+ int lsm_fill_user_ctx(struct lsm_ctx __user *uctx, u32 *uctx_len,
+ 		      void *val, size_t val_len, u64 id, u64 flags);
 +int lock_kernel_down(const char *where, enum lockdown_reason level);
  #else /* CONFIG_SECURITY */
  
  static inline int call_blocking_lsm_notifier(enum lsm_event event, void *data)
-@@ -1404,6 +1405,11 @@ static inline int security_locked_down(e
+@@ -1483,6 +1484,11 @@ static inline int lsm_fill_user_ctx(struct lsm_ctx __user *uctx,
  {
- 	return 0;
+ 	return -EOPNOTSUPP;
  }
 +static inline int
 +lock_kernel_down(const char *where, enum lockdown_reason level)
@@ -110,7 +110,7 @@ Signed-off-by: Salvatore Bonaccorso <carnil@debian.org>
 +	  triggered in integrity mode if EFI Secure Boot is set.
 --- a/security/lockdown/lockdown.c
 +++ b/security/lockdown/lockdown.c
-@@ -23,7 +23,7 @@ static const enum lockdown_reason lockdo
+@@ -24,7 +24,7 @@ static const enum lockdown_reason lockdo
  /*
   * Put the kernel into lock-down mode.
   */

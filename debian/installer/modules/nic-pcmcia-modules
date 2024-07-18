@@ -2,9 +2,4 @@
 drivers/net/ethernet/**_cs
 drivers/net/wireless/**_cs
 b44 ?
-hostap_plx ?
 xircom_cb
-
-# Exclude drivers packaged in nic-wireless-modules
-libertas_cs -
-spectrum_cs -

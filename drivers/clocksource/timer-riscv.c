@@ -61,12 +61,19 @@ static int riscv_clock_next_event(unsigned long delta,
 	return 0;
 }
 
+static int riscv_clock_shutdown(struct clock_event_device *evt)
+{
+	riscv_clock_event_stop();
+	return 0;
+}
+
 static unsigned int riscv_clock_event_irq;
 static DEFINE_PER_CPU(struct clock_event_device, riscv_clock_event) = {
 	.name			= "riscv_timer_clockevent",
 	.features		= CLOCK_EVT_FEAT_ONESHOT,
 	.rating			= 100,
 	.set_next_event		= riscv_clock_next_event,
+	.set_state_shutdown	= riscv_clock_shutdown,
 };
 
 /*
@@ -110,7 +117,7 @@ static int riscv_timer_starting_cpu(unsigned int cpu)
 		ce->features |= CLOCK_EVT_FEAT_C3STOP;
 	if (static_branch_likely(&riscv_sstc_available))
 		ce->rating = 450;
-	clockevents_config_and_register(ce, riscv_timebase, 100, 0x7fffffff);
+	clockevents_config_and_register(ce, riscv_timebase, 100, ULONG_MAX);
 
 	enable_percpu_irq(riscv_clock_event_irq,
 			  irq_get_trigger_type(riscv_clock_event_irq));

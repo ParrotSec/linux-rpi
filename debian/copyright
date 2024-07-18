@@ -6,6 +6,7 @@ Files-Excluded: Documentation/netlabel/draft-ietf-cipso-ipsecurity-01.txt
  drivers/media/usb/dvb-usb/af9005-script.h
  drivers/video/fbdev/nvidia
  drivers/video/fbdev/riva
+ tools/testing/selftests/tc-testing/action-ebpf
 Comment:
  The 'perf' tool is dynamically linked with the Python interpreter,
  which is itself dynamically linked with OpenSSL, which is not

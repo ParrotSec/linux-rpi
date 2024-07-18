@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "btree_cache.h"
 #include "disk_groups.h"
 #include "opts.h"
 #include "replicas.h"
@@ -123,9 +124,9 @@ static int validate_member(struct printbuf *err,
 			   struct bch_sb *sb,
 			   int i)
 {
-	if (le64_to_cpu(m.nbuckets) > LONG_MAX) {
-		prt_printf(err, "device %u: too many buckets (got %llu, max %lu)",
-			   i, le64_to_cpu(m.nbuckets), LONG_MAX);
+	if (le64_to_cpu(m.nbuckets) > BCH_MEMBER_NBUCKETS_MAX) {
+		prt_printf(err, "device %u: too many buckets (got %llu, max %u)",
+			   i, le64_to_cpu(m.nbuckets), BCH_MEMBER_NBUCKETS_MAX);
 		return -BCH_ERR_invalid_sb_members;
 	}
 
@@ -235,6 +236,11 @@ static void member_to_text(struct printbuf *out,
 		prt_printf(out, "(never)");
 	prt_newline(out);
 
+	prt_printf(out, "Last superblock write:");
+	prt_tab(out);
+	prt_u64(out, le64_to_cpu(m.seq));
+	prt_newline(out);
+
 	prt_printf(out, "State:");
 	prt_tab(out);
 	prt_printf(out, "%s",
@@ -246,7 +252,7 @@ static void member_to_text(struct printbuf *out,
 	prt_printf(out, "Data allowed:");
 	prt_tab(out);
 	if (BCH_MEMBER_DATA_ALLOWED(&m))
-		prt_bitflags(out, bch2_data_types, BCH_MEMBER_DATA_ALLOWED(&m));
+		prt_bitflags(out, __bch2_data_types, BCH_MEMBER_DATA_ALLOWED(&m));
 	else
 		prt_printf(out, "(none)");
 	prt_newline(out);
@@ -254,9 +260,14 @@ static void member_to_text(struct printbuf *out,
 	prt_printf(out, "Has data:");
 	prt_tab(out);
 	if (data_have)
-		prt_bitflags(out, bch2_data_types, data_have);
+		prt_bitflags(out, __bch2_data_types, data_have);
 	else
 		prt_printf(out, "(none)");
+	prt_newline(out);
+
+	prt_str(out, "Durability:");
+	prt_tab(out);
+	prt_printf(out, "%llu", BCH_MEMBER_DURABILITY(&m) ? BCH_MEMBER_DURABILITY(&m) - 1 : 1);
 	prt_newline(out);
 
 	prt_printf(out, "Discard:");
@@ -353,14 +364,12 @@ const struct bch_sb_field_ops bch_sb_field_ops_members_v2 = {
 void bch2_sb_members_from_cpu(struct bch_fs *c)
 {
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
-	struct bch_dev *ca;
-	unsigned i, e;
 
 	rcu_read_lock();
-	for_each_member_device_rcu(ca, c, i, NULL) {
-		struct bch_member *m = __bch2_members_v2_get_mut(mi, i);
+	for_each_member_device_rcu(c, ca, NULL) {
+		struct bch_member *m = __bch2_members_v2_get_mut(mi, ca->dev_idx);
 
-		for (e = 0; e < BCH_MEMBER_ERROR_NR; e++)
+		for (unsigned e = 0; e < BCH_MEMBER_ERROR_NR; e++)
 			m->errors[e] = cpu_to_le64(atomic64_read(&ca->errors[e]));
 	}
 	rcu_read_unlock();
@@ -413,8 +422,60 @@ void bch2_dev_errors_reset(struct bch_dev *ca)
 	m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	for (unsigned i = 0; i < ARRAY_SIZE(m->errors_at_reset); i++)
 		m->errors_at_reset[i] = cpu_to_le64(atomic64_read(&ca->errors[i]));
-	m->errors_reset_time = ktime_get_real_seconds();
+	m->errors_reset_time = cpu_to_le64(ktime_get_real_seconds());
 
 	bch2_write_super(c);
 	mutex_unlock(&c->sb_lock);
+}
+
+/*
+ * Per member "range has btree nodes" bitmap:
+ *
+ * This is so that if we ever have to run the btree node scan to repair we don't
+ * have to scan full devices:
+ */
+
+bool bch2_dev_btree_bitmap_marked(struct bch_fs *c, struct bkey_s_c k)
+{
+	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr)
+		if (!bch2_dev_btree_bitmap_marked_sectors(bch_dev_bkey_exists(c, ptr->dev),
+							  ptr->offset, btree_sectors(c)))
+			return false;
+	return true;
+}
+
+static void __bch2_dev_btree_bitmap_mark(struct bch_sb_field_members_v2 *mi, unsigned dev,
+				u64 start, unsigned sectors)
+{
+	struct bch_member *m = __bch2_members_v2_get_mut(mi, dev);
+	u64 bitmap = le64_to_cpu(m->btree_allocated_bitmap);
+
+	u64 end = start + sectors;
+
+	int resize = ilog2(roundup_pow_of_two(end)) - (m->btree_bitmap_shift + 6);
+	if (resize > 0) {
+		u64 new_bitmap = 0;
+
+		for (unsigned i = 0; i < 64; i++)
+			if (bitmap & BIT_ULL(i))
+				new_bitmap |= BIT_ULL(i >> resize);
+		bitmap = new_bitmap;
+		m->btree_bitmap_shift += resize;
+	}
+
+	for (unsigned bit = start >> m->btree_bitmap_shift;
+	     (u64) bit << m->btree_bitmap_shift < end;
+	     bit++)
+		bitmap |= BIT_ULL(bit);
+
+	m->btree_allocated_bitmap = cpu_to_le64(bitmap);
+}
+
+void bch2_dev_btree_bitmap_mark(struct bch_fs *c, struct bkey_s_c k)
+{
+	lockdep_assert_held(&c->sb_lock);
+
+	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
+	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr)
+		__bch2_dev_btree_bitmap_mark(mi, ptr->dev, ptr->offset, btree_sectors(c));
 }

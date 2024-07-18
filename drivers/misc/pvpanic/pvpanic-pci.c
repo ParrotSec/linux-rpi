@@ -5,17 +5,13 @@
  *  Copyright (C) 2021 Oracle.
  */
 
-#include <linux/kernel.h>
+#include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/types.h>
-#include <linux/slab.h>
-
-#include <uapi/misc/pvpanic.h>
 
 #include "pvpanic.h"
 
-#define PCI_VENDOR_ID_REDHAT             0x1b36
 #define PCI_DEVICE_ID_REDHAT_PVPANIC     0x0011
 
 MODULE_AUTHOR("Mihai Carabas <mihai.carabas@oracle.com>");
@@ -48,8 +44,6 @@ static struct pci_driver pvpanic_pci_driver = {
 	.name =         "pvpanic-pci",
 	.id_table =     pvpanic_pci_id_tbl,
 	.probe =        pvpanic_pci_probe,
-	.driver = {
-		.dev_groups = pvpanic_dev_groups,
-	},
+	.dev_groups =   pvpanic_dev_groups,
 };
 module_pci_driver(pvpanic_pci_driver);

@@ -2,9 +2,6 @@
 ## file: arch/arm/Kconfig
 ##
 CONFIG_ARCH_MULTIPLATFORM=y
-# CONFIG_ARCH_MULTI_V6 is not set
-CONFIG_ARCH_MULTI_V7=y
-CONFIG_ARCH_VIRT=y
 CONFIG_ARM_ERRATA_430973=y
 CONFIG_ARM_ERRATA_643719=y
 CONFIG_ARM_ERRATA_754327=y
@@ -33,6 +30,13 @@ CONFIG_KERNEL_MODE_NEON=y
 ##
 #. DEBUG_LL is incompatible with multiplatform
 # CONFIG_DEBUG_LL is not set
+
+##
+## file: arch/arm/Kconfig.platforms
+##
+# CONFIG_ARCH_MULTI_V6 is not set
+CONFIG_ARCH_MULTI_V7=y
+CONFIG_ARCH_VIRT=y
 
 ##
 ## file: arch/arm/crypto/Kconfig
@@ -464,12 +468,12 @@ CONFIG_OMAP2_DSS_DSI=y
 ##
 ## file: drivers/gpu/drm/panel/Kconfig
 ##
-CONFIG_DRM_PANEL_SIMPLE=m
-CONFIG_DRM_PANEL_EDP=m
 CONFIG_DRM_PANEL_FEIYANG_FY07024DI26A30D=m
 CONFIG_DRM_PANEL_ORISETECH_OTM8009A=m
 CONFIG_DRM_PANEL_RASPBERRYPI_TOUCHSCREEN=m
 CONFIG_DRM_PANEL_SONY_ACX565AKM=m
+CONFIG_DRM_PANEL_EDP=m
+CONFIG_DRM_PANEL_SIMPLE=m
 CONFIG_DRM_PANEL_TPO_TD028TTEC1=m
 CONFIG_DRM_PANEL_TPO_TD043MTEA1=m
 
@@ -555,6 +559,7 @@ CONFIG_SENSORS_ASPEED=m
 CONFIG_SENSORS_G762=m
 CONFIG_SENSORS_GPIO_FAN=m
 CONFIG_SENSORS_LM75=m
+CONFIG_SENSORS_LM90=m
 CONFIG_SENSORS_PWM_FAN=m
 
 ##
@@ -729,6 +734,7 @@ CONFIG_MEDIA_CONTROLLER=y
 ## file: drivers/media/cec/platform/Kconfig
 ##
 CONFIG_CEC_STM32=m
+CONFIG_CEC_TEGRA=m
 
 ##
 ## file: drivers/media/platform/Kconfig
@@ -741,7 +747,7 @@ CONFIG_VIDEO_MUX=m
 CONFIG_VIDEO_ASPEED=m
 
 ##
-## file: drivers/media/platform/chips-media/Kconfig
+## file: drivers/media/platform/chips-media/coda/Kconfig
 ##
 CONFIG_VIDEO_CODA=m
 
@@ -1080,6 +1086,12 @@ CONFIG_BRCMFMAC=m
 CONFIG_BRCMFMAC_SDIO=y
 
 ##
+## file: drivers/net/wireless/marvell/mwifiex/Kconfig
+##
+CONFIG_MWIFIEX=m
+CONFIG_MWIFIEX_SDIO=m
+
+##
 ## file: drivers/net/wireless/ti/Kconfig
 ##
 CONFIG_WLAN_VENDOR_TI=y
@@ -1255,6 +1267,12 @@ CONFIG_CHARGER_ISP1704=m
 CONFIG_CHARGER_TWL4030=m
 CONFIG_CHARGER_GPIO=m
 CONFIG_CHARGER_BQ2415X=m
+CONFIG_CHARGER_BQ24735=m
+
+##
+## file: drivers/pps/clients/Kconfig
+##
+CONFIG_PPS_CLIENT_GPIO=m
 
 ##
 ## file: drivers/pwm/Kconfig
@@ -1612,7 +1630,6 @@ CONFIG_BACKLIGHT_GPIO=m
 ##
 ## file: drivers/video/fbdev/Kconfig
 ##
-CONFIG_FB_ARMCLCD=y
 CONFIG_FB_EFI=y
 CONFIG_FB_VT8500=y
 CONFIG_FB_WM8505=y
@@ -1704,6 +1721,7 @@ CONFIG_SND_BCM2835_SOC_I2S=m
 ##
 CONFIG_SND_SOC_CS42L51_I2C=m
 CONFIG_SND_SOC_SPDIF=y
+CONFIG_SND_SOC_WM8804_I2C=m
 
 ##
 ## file: sound/soc/fsl/Kconfig

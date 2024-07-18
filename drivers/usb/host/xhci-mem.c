@@ -84,7 +84,7 @@ static void xhci_free_segments_for_ring(struct xhci_hcd *xhci,
 	struct xhci_segment *seg;
 
 	seg = first->next;
-	while (seg != first) {
+	while (seg && seg != first) {
 		struct xhci_segment *next = seg->next;
 		xhci_segment_free(xhci, seg);
 		seg = next;
@@ -323,6 +323,7 @@ void xhci_initialize_ring_info(struct xhci_ring *ring,
 	 */
 	ring->num_trbs_free = ring->num_segs * (TRBS_PER_SEGMENT - 1) - 1;
 }
+EXPORT_SYMBOL_GPL(xhci_initialize_ring_info);
 
 /* Allocate segments and link them for a ring */
 static int xhci_alloc_segments_for_ring(struct xhci_hcd *xhci,
@@ -350,17 +351,10 @@ static int xhci_alloc_segments_for_ring(struct xhci_hcd *xhci,
 
 		next = xhci_segment_alloc(xhci, cycle_state, max_packet, num,
 					  flags);
-		if (!next) {
-			prev = *first;
-			while (prev) {
-				next = prev->next;
-				xhci_segment_free(xhci, prev);
-				prev = next;
-			}
-			return -ENOMEM;
-		}
-		xhci_link_segments(prev, next, type, chain_links);
+		if (!next)
+			goto free_segments;
 
+		xhci_link_segments(prev, next, type, chain_links);
 		prev = next;
 		num++;
 	}
@@ -368,6 +362,10 @@ static int xhci_alloc_segments_for_ring(struct xhci_hcd *xhci,
 	*last = prev;
 
 	return 0;
+
+free_segments:
+	xhci_free_segments_for_ring(xhci, *first);
+	return -ENOMEM;
 }
 
 /*
@@ -443,19 +441,11 @@ int xhci_ring_expansion(struct xhci_hcd *xhci, struct xhci_ring *ring,
 	if (ret)
 		return -ENOMEM;
 
-	if (ring->type == TYPE_STREAM)
+	if (ring->type == TYPE_STREAM) {
 		ret = xhci_update_stream_segment_mapping(ring->trb_address_map,
 						ring, first, last, flags);
-	if (ret) {
-		struct xhci_segment *next;
-		do {
-			next = first->next;
-			xhci_segment_free(xhci, first);
-			if (first == last)
-				break;
-			first = next;
-		} while (true);
-		return ret;
+		if (ret)
+			goto free_segments;
 	}
 
 	xhci_link_rings(xhci, ring, first, last, num_new_segs);
@@ -465,6 +455,10 @@ int xhci_ring_expansion(struct xhci_hcd *xhci, struct xhci_ring *ring,
 			ring->num_segs);
 
 	return 0;
+
+free_segments:
+	xhci_free_segments_for_ring(xhci, first);
+	return ret;
 }
 
 struct xhci_container_ctx *xhci_alloc_container_ctx(struct xhci_hcd *xhci,
@@ -788,15 +782,14 @@ static void xhci_free_tt_info(struct xhci_hcd *xhci,
 	bool slot_found = false;
 
 	/* If the device never made it past the Set Address stage,
-	 * it may not have the real_port set correctly.
+	 * it may not have the root hub port pointer set correctly.
 	 */
-	if (virt_dev->real_port == 0 ||
-			virt_dev->real_port > HCS_MAX_PORTS(xhci->hcs_params1)) {
-		xhci_dbg(xhci, "Bad real port.\n");
+	if (!virt_dev->rhub_port) {
+		xhci_dbg(xhci, "Bad rhub port.\n");
 		return;
 	}
 
-	tt_list_head = &(xhci->rh_bw[virt_dev->real_port - 1].tts);
+	tt_list_head = &(xhci->rh_bw[virt_dev->rhub_port->hw_portnum].tts);
 	list_for_each_entry_safe(tt_info, next, tt_list_head, tt_list) {
 		/* Multi-TT hubs will have more than one entry */
 		if (tt_info->slot_id == slot_id) {
@@ -833,7 +826,7 @@ int xhci_alloc_tt_info(struct xhci_hcd *xhci,
 			goto free_tts;
 		INIT_LIST_HEAD(&tt_info->tt_list);
 		list_add(&tt_info->tt_list,
-				&xhci->rh_bw[virt_dev->real_port - 1].tts);
+				&xhci->rh_bw[virt_dev->rhub_port->hw_portnum].tts);
 		tt_info->slot_id = virt_dev->udev->slot_id;
 		if (tt->multi)
 			tt_info->ttport = i+1;
@@ -907,6 +900,8 @@ void xhci_free_virt_device(struct xhci_hcd *xhci, int slot_id)
 
 	if (dev->udev && dev->udev->slot_id)
 		dev->udev->slot_id = 0;
+	if (dev->rhub_port && dev->rhub_port->slot_id == slot_id)
+		dev->rhub_port->slot_id = 0;
 	kfree(xhci->devs[slot_id]);
 	xhci->devs[slot_id] = NULL;
 }
@@ -928,13 +923,12 @@ static void xhci_free_virt_devices_depth_first(struct xhci_hcd *xhci, int slot_i
 	if (!vdev)
 		return;
 
-	if (vdev->real_port == 0 ||
-			vdev->real_port > HCS_MAX_PORTS(xhci->hcs_params1)) {
-		xhci_dbg(xhci, "Bad vdev->real_port.\n");
+	if (!vdev->rhub_port) {
+		xhci_dbg(xhci, "Bad rhub port.\n");
 		goto out;
 	}
 
-	tt_list_head = &(xhci->rh_bw[vdev->real_port - 1].tts);
+	tt_list_head = &(xhci->rh_bw[vdev->rhub_port->hw_portnum].tts);
 	list_for_each_entry_safe(tt_info, next, tt_list_head, tt_list) {
 		/* is this a hub device that added a tt_info to the tts list */
 		if (tt_info->slot_id == slot_id) {
@@ -1050,16 +1044,16 @@ void xhci_copy_ep0_dequeue_into_input_ctx(struct xhci_hcd *xhci,
  * The xHCI roothub may have ports of differing speeds in any order in the port
  * status registers.
  *
- * The xHCI hardware wants to know the roothub port number that the USB device
+ * The xHCI hardware wants to know the roothub port that the USB device
  * is attached to (or the roothub port its ancestor hub is attached to).  All we
  * know is the index of that port under either the USB 2.0 or the USB 3.0
  * roothub, but that doesn't give us the real index into the HW port status
- * registers. Call xhci_find_raw_port_number() to get real index.
+ * registers.
  */
-static u32 xhci_find_real_port_number(struct xhci_hcd *xhci,
-		struct usb_device *udev)
+static struct xhci_port *xhci_find_rhub_port(struct xhci_hcd *xhci, struct usb_device *udev)
 {
 	struct usb_device *top_dev;
+	struct xhci_hub *rhub;
 	struct usb_hcd *hcd;
 
 	if (udev->speed >= USB_SPEED_SUPER)
@@ -1071,7 +1065,8 @@ static u32 xhci_find_real_port_number(struct xhci_hcd *xhci,
 			top_dev = top_dev->parent)
 		/* Found device below root hub */;
 
-	return	xhci_find_raw_port_number(hcd, top_dev->portnum);
+	rhub = xhci_get_rhub(hcd);
+	return rhub->ports[top_dev->portnum - 1];
 }
 
 /* Setup an xHCI virtual device for a Set Address command */
@@ -1080,9 +1075,7 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	struct xhci_virt_device *dev;
 	struct xhci_ep_ctx	*ep0_ctx;
 	struct xhci_slot_ctx    *slot_ctx;
-	u32			port_num;
 	u32			max_packets;
-	struct usb_device *top_dev;
 
 	dev = xhci->devs[udev->slot_id];
 	/* Slot ID 0 is reserved */
@@ -1123,18 +1116,15 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 		return -EINVAL;
 	}
 	/* Find the root hub port this device is under */
-	port_num = xhci_find_real_port_number(xhci, udev);
-	if (!port_num)
+	dev->rhub_port = xhci_find_rhub_port(xhci, udev);
+	if (!dev->rhub_port)
 		return -EINVAL;
-	slot_ctx->dev_info2 |= cpu_to_le32(ROOT_HUB_PORT(port_num));
-	/* Set the port number in the virtual_device to the faked port number */
-	for (top_dev = udev; top_dev->parent && top_dev->parent->parent;
-			top_dev = top_dev->parent)
-		/* Found device below root hub */;
-	dev->fake_port = top_dev->portnum;
-	dev->real_port = port_num;
-	xhci_dbg(xhci, "Set root hub portnum to %d\n", port_num);
-	xhci_dbg(xhci, "Set fake root hub portnum to %d\n", dev->fake_port);
+	/* Slot ID is set to the device directly below the root hub */
+	if (!udev->parent->parent)
+		dev->rhub_port->slot_id = udev->slot_id;
+	slot_ctx->dev_info2 |= cpu_to_le32(ROOT_HUB_PORT(dev->rhub_port->hw_portnum + 1));
+	xhci_dbg(xhci, "Slot ID %d: HW portnum %d, hcd portnum %d\n",
+		 udev->slot_id, dev->rhub_port->hw_portnum, dev->rhub_port->hcd_portnum);
 
 	/* Find the right bandwidth table that this device will be a part of.
 	 * If this is a full speed device attached directly to a root port (or a
@@ -1143,12 +1133,12 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	 * will never be created for the HS root hub.
 	 */
 	if (!udev->tt || !udev->tt->hub->parent) {
-		dev->bw_table = &xhci->rh_bw[port_num - 1].bw_table;
+		dev->bw_table = &xhci->rh_bw[dev->rhub_port->hw_portnum].bw_table;
 	} else {
 		struct xhci_root_port_bw_info *rh_bw;
 		struct xhci_tt_bw_info *tt_bw;
 
-		rh_bw = &xhci->rh_bw[port_num - 1];
+		rh_bw = &xhci->rh_bw[dev->rhub_port->hw_portnum];
 		/* Find the right TT. */
 		list_for_each_entry(tt_bw, &rh_bw->tts, tt_list) {
 			if (tt_bw->slot_id != udev->tt->hub->slot_id)
@@ -1739,6 +1729,8 @@ struct xhci_command *xhci_alloc_command(struct xhci_hcd *xhci,
 	}
 
 	command->status = 0;
+	/* set default timeout to 5000 ms */
+	command->timeout_ms = XHCI_CMD_DEFAULT_TIMEOUT;
 	INIT_LIST_HEAD(&command->cmd_list);
 	return command;
 }
@@ -1853,6 +1845,31 @@ xhci_free_interrupter(struct xhci_hcd *xhci, struct xhci_interrupter *ir)
 	kfree(ir);
 }
 
+void xhci_remove_secondary_interrupter(struct usb_hcd *hcd, struct xhci_interrupter *ir)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	unsigned int intr_num;
+
+	spin_lock_irq(&xhci->lock);
+
+	/* interrupter 0 is primary interrupter, don't touch it */
+	if (!ir || !ir->intr_num || ir->intr_num >= xhci->max_interrupters) {
+		xhci_dbg(xhci, "Invalid secondary interrupter, can't remove\n");
+		spin_unlock_irq(&xhci->lock);
+		return;
+	}
+
+	intr_num = ir->intr_num;
+
+	xhci_remove_interrupter(xhci, ir);
+	xhci->interrupters[intr_num] = NULL;
+
+	spin_unlock_irq(&xhci->lock);
+
+	xhci_free_interrupter(xhci, ir);
+}
+EXPORT_SYMBOL_GPL(xhci_remove_secondary_interrupter);
+
 void xhci_mem_cleanup(struct xhci_hcd *xhci)
 {
 	struct device	*dev = xhci_to_hcd(xhci)->self.sysdev;
@@ -1860,10 +1877,14 @@ void xhci_mem_cleanup(struct xhci_hcd *xhci)
 
 	cancel_delayed_work_sync(&xhci->cmd_timer);
 
-	xhci_remove_interrupter(xhci, xhci->interrupter);
-	xhci_free_interrupter(xhci, xhci->interrupter);
-	xhci->interrupter = NULL;
-	xhci_dbg_trace(xhci, trace_xhci_dbg_init, "Freed primary event ring");
+	for (i = 0; i < xhci->max_interrupters; i++) {
+		if (xhci->interrupters[i]) {
+			xhci_remove_interrupter(xhci, xhci->interrupters[i]);
+			xhci_free_interrupter(xhci, xhci->interrupters[i]);
+			xhci->interrupters[i] = NULL;
+		}
+	}
+	xhci_dbg_trace(xhci, trace_xhci_dbg_init, "Freed interrupters");
 
 	if (xhci->cmd_ring)
 		xhci_ring_free(xhci, xhci->cmd_ring);
@@ -1933,6 +1954,7 @@ no_bw:
 	for (i = 0; i < xhci->num_port_caps; i++)
 		kfree(xhci->port_caps[i].psi);
 	kfree(xhci->port_caps);
+	kfree(xhci->interrupters);
 	xhci->num_port_caps = 0;
 
 	xhci->usb2_rhub.ports = NULL;
@@ -1941,6 +1963,7 @@ no_bw:
 	xhci->rh_bw = NULL;
 	xhci->ext_caps = NULL;
 	xhci->port_caps = NULL;
+	xhci->interrupters = NULL;
 
 	xhci->page_size = 0;
 	xhci->page_shift = 0;
@@ -2246,22 +2269,24 @@ static int xhci_setup_port_arrays(struct xhci_hcd *xhci, gfp_t flags)
 }
 
 static struct xhci_interrupter *
-xhci_alloc_interrupter(struct xhci_hcd *xhci, gfp_t flags)
+xhci_alloc_interrupter(struct xhci_hcd *xhci, unsigned int segs, gfp_t flags)
 {
 	struct device *dev = xhci_to_hcd(xhci)->self.sysdev;
 	struct xhci_interrupter *ir;
-	unsigned int num_segs;
+	unsigned int max_segs;
 	int ret;
+
+	if (!segs)
+		segs = ERST_DEFAULT_SEGS;
+
+	max_segs = BIT(HCS_ERST_MAX(xhci->hcs_params2));
+	segs = min(segs, max_segs);
 
 	ir = kzalloc_node(sizeof(*ir), flags, dev_to_node(dev));
 	if (!ir)
 		return NULL;
 
-	num_segs = min_t(unsigned int, 1 << HCS_ERST_MAX(xhci->hcs_params2),
-			 ERST_MAX_SEGS);
-
-	ir->event_ring = xhci_ring_alloc(xhci, num_segs, 1, TYPE_EVENT, 0,
-					 flags);
+	ir->event_ring = xhci_ring_alloc(xhci, segs, 1, TYPE_EVENT, 0, flags);
 	if (!ir->event_ring) {
 		xhci_warn(xhci, "Failed to allocate interrupter event ring\n");
 		kfree(ir);
@@ -2286,12 +2311,19 @@ xhci_add_interrupter(struct xhci_hcd *xhci, struct xhci_interrupter *ir,
 	u64 erst_base;
 	u32 erst_size;
 
-	if (intr_num > xhci->max_interrupters) {
+	if (intr_num >= xhci->max_interrupters) {
 		xhci_warn(xhci, "Can't add interrupter %d, max interrupters %d\n",
 			  intr_num, xhci->max_interrupters);
 		return -EINVAL;
 	}
 
+	if (xhci->interrupters[intr_num]) {
+		xhci_warn(xhci, "Interrupter %d\n already set up", intr_num);
+		return -EINVAL;
+	}
+
+	xhci->interrupters[intr_num] = ir;
+	ir->intr_num = intr_num;
 	ir->ir_set = &xhci->run_regs->ir_set[intr_num];
 
 	/* set ERST count with the number of entries in the segment table */
@@ -2311,10 +2343,52 @@ xhci_add_interrupter(struct xhci_hcd *xhci, struct xhci_interrupter *ir,
 	return 0;
 }
 
+struct xhci_interrupter *
+xhci_create_secondary_interrupter(struct usb_hcd *hcd, unsigned int segs)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	struct xhci_interrupter *ir;
+	unsigned int i;
+	int err = -ENOSPC;
+
+	if (!xhci->interrupters || xhci->max_interrupters <= 1)
+		return NULL;
+
+	ir = xhci_alloc_interrupter(xhci, segs, GFP_KERNEL);
+	if (!ir)
+		return NULL;
+
+	spin_lock_irq(&xhci->lock);
+
+	/* Find available secondary interrupter, interrupter 0 is reserved for primary */
+	for (i = 1; i < xhci->max_interrupters; i++) {
+		if (xhci->interrupters[i] == NULL) {
+			err = xhci_add_interrupter(xhci, ir, i);
+			break;
+		}
+	}
+
+	spin_unlock_irq(&xhci->lock);
+
+	if (err) {
+		xhci_warn(xhci, "Failed to add secondary interrupter, max interrupters %d\n",
+			  xhci->max_interrupters);
+		xhci_free_interrupter(xhci, ir);
+		return NULL;
+	}
+
+	xhci_dbg(xhci, "Add secondary interrupter %d, max interrupters %d\n",
+		 i, xhci->max_interrupters);
+
+	return ir;
+}
+EXPORT_SYMBOL_GPL(xhci_create_secondary_interrupter);
+
 int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
 {
-	dma_addr_t	dma;
+	struct xhci_interrupter *ir;
 	struct device	*dev = xhci_to_hcd(xhci)->self.sysdev;
+	dma_addr_t	dma;
 	unsigned int	val, val2;
 	u64		val_64;
 	u32		page_size, temp;
@@ -2438,14 +2512,17 @@ int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
 	/* Allocate and set up primary interrupter 0 with an event ring. */
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 		       "Allocating primary event ring");
-	xhci->interrupter = xhci_alloc_interrupter(xhci, flags);
-	if (!xhci->interrupter)
+	xhci->interrupters = kcalloc_node(xhci->max_interrupters, sizeof(*xhci->interrupters),
+					  flags, dev_to_node(dev));
+
+	ir = xhci_alloc_interrupter(xhci, 0, flags);
+	if (!ir)
 		goto fail;
 
-	if (xhci_add_interrupter(xhci, xhci->interrupter, 0))
+	if (xhci_add_interrupter(xhci, ir, 0))
 		goto fail;
 
-	xhci->isoc_bei_interval = AVOID_BEI_INTERVAL_MAX;
+	ir->isoc_bei_interval = AVOID_BEI_INTERVAL_MAX;
 
 	/*
 	 * XXX: Might need to set the Interrupter Moderation Register to

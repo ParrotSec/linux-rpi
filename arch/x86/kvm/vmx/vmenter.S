@@ -275,6 +275,8 @@ SYM_INNER_LABEL_ALIGN(vmx_vmexit, SYM_L_GLOBAL)
 
 	call vmx_spec_ctrl_restore_host
 
+	CLEAR_BRANCH_HISTORY_VMEXIT
+
 	/* Put return value in AX */
 	mov %_ASM_BX, %_ASM_AX
 
@@ -292,7 +294,7 @@ SYM_INNER_LABEL_ALIGN(vmx_vmexit, SYM_L_GLOBAL)
 	RET
 
 .Lfixup:
-	cmpb $0, kvm_rebooting
+	cmpb $0, _ASM_RIP(kvm_rebooting)
 	jne .Lvmfail
 	ud2
 .Lvmfail:

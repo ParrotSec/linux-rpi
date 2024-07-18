@@ -273,9 +273,8 @@ static bool igbvf_clean_rx_irq(struct igbvf_adapter *adapter,
 		 * that case, it fills the header buffer and spills the rest
 		 * into the page.
 		 */
-		hlen = (le16_to_cpu(rx_desc->wb.lower.lo_dword.hs_rss.hdr_info)
-		       & E1000_RXDADV_HDRBUFLEN_MASK) >>
-		       E1000_RXDADV_HDRBUFLEN_SHIFT;
+		hlen = le16_get_bits(rx_desc->wb.lower.lo_dword.hs_rss.hdr_info,
+				     E1000_RXDADV_HDRBUFLEN_MASK);
 		if (hlen > adapter->rx_ps_hdr_size)
 			hlen = adapter->rx_ps_hdr_size;
 
@@ -2656,7 +2655,7 @@ igbvf_features_check(struct sk_buff *skb, struct net_device *dev,
 	unsigned int network_hdr_len, mac_hdr_len;
 
 	/* Make certain the headers can be described by a context descriptor */
-	mac_hdr_len = skb_network_header(skb) - skb->data;
+	mac_hdr_len = skb_network_offset(skb);
 	if (unlikely(mac_hdr_len > IGBVF_MAX_MAC_HDR_LEN))
 		return features & ~(NETIF_F_HW_CSUM |
 				    NETIF_F_SCTP_CRC |

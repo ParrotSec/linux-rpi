@@ -1,9 +1,13 @@
 ##
 ## file: arch/arm/Kconfig
 ##
+CONFIG_VFP=y
+
+##
+## file: arch/arm/Kconfig.platforms
+##
 CONFIG_ARCH_MULTI_V6=y
 # CONFIG_ARCH_MULTI_V7 is not set
-CONFIG_VFP=y
 
 ##
 ## file: arch/arm/mach-bcm/Kconfig
@@ -110,6 +114,11 @@ CONFIG_NVMEM_RMEM=m
 ## file: drivers/pmdomain/bcm/Kconfig
 ##
 CONFIG_RASPBERRYPI_POWER=y
+
+##
+## file: drivers/pps/clients/Kconfig
+##
+CONFIG_PPS_CLIENT_GPIO=m
 
 ##
 ## file: drivers/pwm/Kconfig

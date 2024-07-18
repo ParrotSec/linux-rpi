@@ -327,9 +327,6 @@ static int ovl_create_upper(struct dentry *dentry, struct inode *inode,
 	struct dentry *newdentry;
 	int err;
 
-	if (!attr->hardlink && !IS_POSIXACL(udir))
-		attr->mode &= ~current_umask();
-
 	inode_lock_nested(udir, I_MUTEX_PARENT);
 	newdentry = ovl_create_real(ofs, udir,
 				    ovl_lookup_upper(ofs, dentry->d_name.name,
@@ -1180,6 +1177,10 @@ static int ovl_rename(struct mnt_idmap *idmap, struct inode *olddir,
 	}
 
 	trap = lock_rename(new_upperdir, old_upperdir);
+	if (IS_ERR(trap)) {
+		err = PTR_ERR(trap);
+		goto out_revert_creds;
+	}
 
 	olddentry = ovl_lookup_upper(ofs, old->d_name.name, old_upperdir,
 				     old->d_name.len);

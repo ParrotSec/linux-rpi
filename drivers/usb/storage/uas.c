@@ -21,6 +21,7 @@
 #include <scsi/scsi.h>
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_dbg.h>
+#include <scsi/scsi_devinfo.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
@@ -820,6 +821,12 @@ static int uas_slave_alloc(struct scsi_device *sdev)
 	struct uas_dev_info *devinfo =
 		(struct uas_dev_info *)sdev->host->hostdata;
 
+	/*
+	 * Some USB storage devices reset if the IO advice hints grouping mode
+	 * page is queried. Hence skip that mode page.
+	 */
+	sdev->sdev_bflags |= BLIST_SKIP_IO_HINTS;
+
 	sdev->hostdata = devinfo;
 
 	/*
@@ -1251,7 +1258,7 @@ static struct usb_driver uas_driver = {
 	.suspend = uas_suspend,
 	.resume = uas_resume,
 	.reset_resume = uas_reset_resume,
-	.drvwrap.driver.shutdown = uas_shutdown,
+	.driver.shutdown = uas_shutdown,
 	.id_table = uas_usb_ids,
 };
 

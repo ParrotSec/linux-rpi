@@ -125,7 +125,8 @@ static void zonefs_readahead(struct readahead_control *rac)
  * which implies that the page range can only be within the fixed inode size.
  */
 static int zonefs_write_map_blocks(struct iomap_writepage_ctx *wpc,
-				   struct inode *inode, loff_t offset)
+				   struct inode *inode, loff_t offset,
+				   unsigned int len)
 {
 	struct zonefs_zone *z = zonefs_inode_zone(inode);
 
@@ -180,7 +181,7 @@ const struct address_space_operations zonefs_file_aops = {
 	.invalidate_folio	= iomap_invalidate_folio,
 	.migrate_folio		= filemap_migrate_folio,
 	.is_partially_uptodate	= iomap_is_partially_uptodate,
-	.error_remove_page	= generic_error_remove_page,
+	.error_remove_folio	= generic_error_remove_folio,
 	.swap_activate		= zonefs_swap_activate,
 };
 

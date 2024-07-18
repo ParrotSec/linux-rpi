@@ -490,6 +490,7 @@ void page_cache_ra_order(struct readahead_control *ractl,
 	pgoff_t index = readahead_index(ractl);
 	pgoff_t limit = (i_size_read(mapping->host) - 1) >> PAGE_SHIFT;
 	pgoff_t mark = index + ra->size - ra->async_size;
+	unsigned int nofs;
 	int err = 0;
 	gfp_t gfp = readahead_gfp_mask(mapping);
 
@@ -500,27 +501,22 @@ void page_cache_ra_order(struct readahead_control *ractl,
 
 	if (new_order < MAX_PAGECACHE_ORDER) {
 		new_order += 2;
-		if (new_order > MAX_PAGECACHE_ORDER)
-			new_order = MAX_PAGECACHE_ORDER;
-		while ((1 << new_order) > ra->size)
-			new_order--;
+		new_order = min_t(unsigned int, MAX_PAGECACHE_ORDER, new_order);
+		new_order = min_t(unsigned int, new_order, ilog2(ra->size));
 	}
 
+	/* See comment in page_cache_ra_unbounded() */
+	nofs = memalloc_nofs_save();
 	filemap_invalidate_lock_shared(mapping);
 	while (index <= limit) {
 		unsigned int order = new_order;
 
 		/* Align with smaller pages if needed */
-		if (index & ((1UL << order) - 1)) {
+		if (index & ((1UL << order) - 1))
 			order = __ffs(index);
-			if (order == 1)
-				order = 0;
-		}
 		/* Don't allocate pages past EOF */
-		while (index + (1UL << order) - 1 > limit) {
-			if (--order == 1)
-				order = 0;
-		}
+		while (index + (1UL << order) - 1 > limit)
+			order--;
 		err = ra_alloc_folio(ractl, index, mark, order, gfp);
 		if (err)
 			break;
@@ -534,6 +530,7 @@ void page_cache_ra_order(struct readahead_control *ractl,
 
 	read_pages(ractl);
 	filemap_invalidate_unlock_shared(mapping);
+	memalloc_nofs_restore(nofs);
 
 	/*
 	 * If there were already pages in the page cache, then we may have

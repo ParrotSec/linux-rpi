@@ -10,7 +10,6 @@ debian/dfsg/documentation-fix-broken-link-to-cipso-draft.patch
 debian/version.patch
 debian/uname-version-timestamp.patch
 debian/kernelvariables.patch
-debian/mips-disable-werror.patch
 debian/mips-boston-disable-its.patch
 debian/mips-ieee754-relaxed.patch
 debian/arch-sh4-fix-uimage-build.patch
@@ -26,14 +25,13 @@ debian/kbuild-abort-build-if-subdirs-used.patch
 debian/module-avoid-abi-changes-when-debug-info-is-disabled.patch
 debian/makefile-make-compiler-version-comparison-optional.patch
 debian/fixdep-allow-overriding-hostcc-and-hostld.patch
+debian/tools-rtla-Restore-option-to-set-VERSION-var-to-VERS.patch
 
 # Fixes/improvements to firmware loading
 features/all/drivers-media-dvb-usb-af9005-request_firmware.patch
 debian/iwlwifi-do-not-request-unreleased-firmware.patch
-bugfix/all/firmware_class-log-every-success-and-failure.patch
-bugfix/all/firmware-remove-redundant-log-messages-from-drivers.patch
+debian/firmware_loader-log-direct-loading-failures-as-info-for-d-i.path
 bugfix/all/radeon-amdgpu-firmware-is-required-for-drm-and-kms-on-r600-onward.patch
-debian/firmware_class-refer-to-debian-wiki-firmware-page.patch
 
 # Change some defaults for security reasons
 debian/af_802154-Disable-auto-loading-as-mitigation-against.patch
@@ -43,12 +41,16 @@ debian/hamradio-disable-auto-loading-as-mitigation-against-local-exploits.patch
 debian/fs-enable-link-security-restrictions-by-default.patch
 
 # Set various features runtime-disabled by default
-debian/sched-autogroup-disabled.patch
 debian/yama-disable-by-default.patch
 debian/add-sysctl-to-disallow-unprivileged-CLONE_NEWUSER-by-default.patch
 features/all/security-perf-allow-further-restriction-of-perf_event_open.patch
 features/x86/intel-iommu-add-option-to-exclude-integrated-gpu-only.patch
 features/x86/intel-iommu-add-kconfig-option-to-exclude-igpu-by-default.patch
+
+# Parrot patches
+features/all/wifi-injection.patch
+features/all/wireless-carl9170-Enable-sniffer-mode-promisc-flag-t.patch
+features/all/dwav-usb-mt-driver.patch
 
 # Disable autoloading/probing of various drivers by default
 debian/cdc_ncm-cdc_mbim-use-ncm-by-default.patch
@@ -78,12 +80,6 @@ bugfix/all/disable-some-marvell-phys.patch
 bugfix/all/fs-add-module_softdep-declarations-for-hard-coded-cr.patch
 
 # Miscellaneous features
-features/all/driver-core-Emit-reason-for-pending-deferred-probe.patch
-
-# Parrot patches
-#features/all/wifi-injection.patch
-features/all/wireless-carl9170-Enable-sniffer-mode-promisc-flag-t.patch
-#features/all/dwav-usb-mt-driver.patch
 
 # Lockdown missing pieces
 features/all/lockdown/efi-add-an-efi_secure_boot-flag-to-indicate-secure-b.patch
@@ -98,7 +94,6 @@ features/all/db-mok-keyring/trust-machine-keyring-by-default.patch
 
 # Security fixes
 debian/i386-686-pae-pci-set-pci-nobios-by-default.patch
-debian/ntfs-mark-it-as-broken.patch
 
 # Fix exported symbol versions
 bugfix/all/module-disable-matching-missing-version-crc.patch

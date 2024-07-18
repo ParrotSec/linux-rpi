@@ -1279,9 +1279,9 @@ static void qcom_pcie_host_post_init(struct dw_pcie_rp *pp)
 }
 
 static const struct dw_pcie_host_ops qcom_pcie_dw_ops = {
-	.host_init	= qcom_pcie_host_init,
-	.host_deinit	= qcom_pcie_host_deinit,
-	.host_post_init	= qcom_pcie_host_post_init,
+	.init		= qcom_pcie_host_init,
+	.deinit		= qcom_pcie_host_deinit,
+	.post_init	= qcom_pcie_host_post_init,
 };
 
 /* Qcom IP rev.: 2.1.0	Synopsys IP rev.: 4.01a */
@@ -1679,6 +1679,7 @@ static const struct of_device_id qcom_pcie_match[] = {
 	{ .compatible = "qcom,pcie-sm8450-pcie0", .data = &cfg_1_9_0 },
 	{ .compatible = "qcom,pcie-sm8450-pcie1", .data = &cfg_1_9_0 },
 	{ .compatible = "qcom,pcie-sm8550", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-x1e80100", .data = &cfg_1_9_0 },
 	{ }
 };
 

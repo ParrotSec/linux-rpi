@@ -1,11 +1,15 @@
 ##
+## file: arch/Kconfig
+##
+## choice: MMU page size
+CONFIG_PAGE_SIZE_4KB=y
+## end choice
+
+##
 ## file: arch/mips/Kconfig
 ##
 ## choice: System type
 CONFIG_MIPS_MALTA=y
-## end choice
-## choice: Kernel page size
-CONFIG_PAGE_SIZE_4KB=y
 ## end choice
 
 ##
@@ -224,35 +228,16 @@ CONFIG_EPIC100=m
 CONFIG_VIA_RHINE=m
 
 ##
-## file: drivers/net/wireless/atmel/Kconfig
-##
-CONFIG_ATMEL=m
-CONFIG_PCI_ATMEL=m
-
-##
 ## file: drivers/net/wireless/intel/ipw2x00/Kconfig
 ##
 CONFIG_IPW2100=m
 CONFIG_IPW2100_MONITOR=y
 
 ##
-## file: drivers/net/wireless/intersil/orinoco/Kconfig
-##
-CONFIG_HERMES=m
-CONFIG_PLX_HERMES=m
-CONFIG_TMD_HERMES=m
-CONFIG_PCI_HERMES=m
-
-##
 ## file: drivers/net/wireless/marvell/mwifiex/Kconfig
 ##
 CONFIG_MWIFIEX=m
 CONFIG_MWIFIEX_SDIO=m
-
-##
-## file: drivers/net/wireless/zydas/Kconfig
-##
-CONFIG_USB_ZD1201=m
 
 ##
 ## file: drivers/pci/pcie/Kconfig

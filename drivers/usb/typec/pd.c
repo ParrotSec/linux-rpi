@@ -157,7 +157,7 @@ static const struct attribute_group source_fixed_supply_group = {
 };
 __ATTRIBUTE_GROUPS(source_fixed_supply);
 
-static struct device_type source_fixed_supply_type = {
+static const struct device_type source_fixed_supply_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = source_fixed_supply_groups,
@@ -182,7 +182,7 @@ static const struct attribute_group sink_fixed_supply_group = {
 };
 __ATTRIBUTE_GROUPS(sink_fixed_supply);
 
-static struct device_type sink_fixed_supply_type = {
+static const struct device_type sink_fixed_supply_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = sink_fixed_supply_groups,
@@ -213,7 +213,7 @@ static struct attribute *source_variable_supply_attrs[] = {
 };
 ATTRIBUTE_GROUPS(source_variable_supply);
 
-static struct device_type source_variable_supply_type = {
+static const struct device_type source_variable_supply_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = source_variable_supply_groups,
@@ -227,7 +227,7 @@ static struct attribute *sink_variable_supply_attrs[] = {
 };
 ATTRIBUTE_GROUPS(sink_variable_supply);
 
-static struct device_type sink_variable_supply_type = {
+static const struct device_type sink_variable_supply_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = sink_variable_supply_groups,
@@ -258,7 +258,7 @@ static struct attribute *source_battery_attrs[] = {
 };
 ATTRIBUTE_GROUPS(source_battery);
 
-static struct device_type source_battery_type = {
+static const struct device_type source_battery_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = source_battery_groups,
@@ -272,7 +272,7 @@ static struct attribute *sink_battery_attrs[] = {
 };
 ATTRIBUTE_GROUPS(sink_battery);
 
-static struct device_type sink_battery_type = {
+static const struct device_type sink_battery_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = sink_battery_groups,
@@ -339,7 +339,7 @@ static struct attribute *source_pps_attrs[] = {
 };
 ATTRIBUTE_GROUPS(source_pps);
 
-static struct device_type source_pps_type = {
+static const struct device_type source_pps_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = source_pps_groups,
@@ -353,7 +353,7 @@ static struct attribute *sink_pps_attrs[] = {
 };
 ATTRIBUTE_GROUPS(sink_pps);
 
-static struct device_type sink_pps_type = {
+static const struct device_type sink_pps_type = {
 	.name = "pdo",
 	.release = pdo_release,
 	.groups = sink_pps_groups,
@@ -371,30 +371,30 @@ static const char * const apdo_supply_name[] = {
 	[APDO_TYPE_PPS]  = "programmable_supply",
 };
 
-static struct device_type *source_type[] = {
+static const struct device_type *source_type[] = {
 	[PDO_TYPE_FIXED] = &source_fixed_supply_type,
 	[PDO_TYPE_BATT]  = &source_battery_type,
 	[PDO_TYPE_VAR]   = &source_variable_supply_type,
 };
 
-static struct device_type *source_apdo_type[] = {
+static const struct device_type *source_apdo_type[] = {
 	[APDO_TYPE_PPS]  = &source_pps_type,
 };
 
-static struct device_type *sink_type[] = {
+static const struct device_type *sink_type[] = {
 	[PDO_TYPE_FIXED] = &sink_fixed_supply_type,
 	[PDO_TYPE_BATT]  = &sink_battery_type,
 	[PDO_TYPE_VAR]   = &sink_variable_supply_type,
 };
 
-static struct device_type *sink_apdo_type[] = {
+static const struct device_type *sink_apdo_type[] = {
 	[APDO_TYPE_PPS]  = &sink_pps_type,
 };
 
 /* REVISIT: Export when EPR_*_Capabilities need to be supported. */
 static int add_pdo(struct usb_power_delivery_capabilities *cap, u32 pdo, int position)
 {
-	struct device_type *type;
+	const struct device_type *type;
 	const char *name;
 	struct pdo *p;
 	int ret;
@@ -460,7 +460,7 @@ static void pd_capabilities_release(struct device *dev)
 	kfree(to_usb_power_delivery_capabilities(dev));
 }
 
-static struct device_type pd_capabilities_type = {
+static const struct device_type pd_capabilities_type = {
 	.name = "capabilities",
 	.release = pd_capabilities_release,
 };
@@ -468,7 +468,7 @@ static struct device_type pd_capabilities_type = {
 /**
  * usb_power_delivery_register_capabilities - Register a set of capabilities.
  * @pd: The USB PD instance that the capabilities belong to.
- * @desc: Description of the Capablities Message.
+ * @desc: Description of the Capabilities Message.
  *
  * This function registers a Capabilities Message described in @desc. The
  * capabilities will have their own sub-directory under @pd in sysfs.
@@ -571,11 +571,11 @@ static void pd_release(struct device *dev)
 {
 	struct usb_power_delivery *pd = to_usb_power_delivery(dev);
 
-	ida_simple_remove(&pd_ida, pd->id);
+	ida_free(&pd_ida, pd->id);
 	kfree(pd);
 }
 
-static struct device_type pd_type = {
+static const struct device_type pd_type = {
 	.name = "usb_power_delivery",
 	.release = pd_release,
 	.groups = pd_groups,
@@ -616,7 +616,7 @@ usb_power_delivery_register(struct device *parent, struct usb_power_delivery_des
 	if (!pd)
 		return ERR_PTR(-ENOMEM);
 
-	ret = ida_simple_get(&pd_ida, 0, 0, GFP_KERNEL);
+	ret = ida_alloc(&pd_ida, GFP_KERNEL);
 	if (ret < 0) {
 		kfree(pd);
 		return ERR_PTR(ret);

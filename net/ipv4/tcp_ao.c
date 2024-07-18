@@ -509,9 +509,9 @@ static int tcp_ao_hash_header(struct tcp_sigpool *hp,
 			      bool exclude_options, u8 *hash,
 			      int hash_offset, int hash_len)
 {
-	int err, len = th->doff << 2;
 	struct scatterlist sg;
 	u8 *hdr = hp->scratch;
+	int err, len;
 
 	/* We are not allowed to change tcphdr, make a local copy */
 	if (exclude_options) {
@@ -844,18 +844,30 @@ static struct tcp_ao_key *tcp_ao_inbound_lookup(unsigned short int family,
 }
 
 void tcp_ao_syncookie(struct sock *sk, const struct sk_buff *skb,
-		      struct tcp_request_sock *treq,
-		      unsigned short int family, int l3index)
+		      struct request_sock *req, unsigned short int family)
 {
+	struct tcp_request_sock *treq = tcp_rsk(req);
 	const struct tcphdr *th = tcp_hdr(skb);
 	const struct tcp_ao_hdr *aoh;
 	struct tcp_ao_key *key;
+	int l3index;
+
+	/* treq->af_specific is used to perform TCP_AO lookup
+	 * in tcp_create_openreq_child().
+	 */
+#if IS_ENABLED(CONFIG_IPV6)
+	if (family == AF_INET6)
+		treq->af_specific = &tcp_request_sock_ipv6_ops;
+	else
+#endif
+		treq->af_specific = &tcp_request_sock_ipv4_ops;
 
 	treq->used_tcp_ao = false;
 
 	if (tcp_parse_auth_options(th, NULL, &aoh) || !aoh)
 		return;
 
+	l3index = l3mdev_master_ifindex_by_index(sock_net(sk), inet_rsk(req)->ir_iif);
 	key = tcp_ao_inbound_lookup(family, sk, skb, -1, aoh->keyid, l3index);
 	if (!key)
 		/* Key not found, continue without TCP-AO */
@@ -921,6 +933,7 @@ tcp_inbound_ao_hash(struct sock *sk, const struct sk_buff *skb,
 	struct tcp_ao_key *key;
 	__be32 sisn, disn;
 	u8 *traffic_key;
+	int state;
 	u32 sne = 0;
 
 	info = rcu_dereference(tcp_sk(sk)->ao_info);
@@ -936,8 +949,9 @@ tcp_inbound_ao_hash(struct sock *sk, const struct sk_buff *skb,
 		disn = 0;
 	}
 
+	state = READ_ONCE(sk->sk_state);
 	/* Fast-path */
-	if (likely((1 << sk->sk_state) & TCP_AO_ESTABLISHED)) {
+	if (likely((1 << state) & TCP_AO_ESTABLISHED)) {
 		enum skb_drop_reason err;
 		struct tcp_ao_key *current_key;
 
@@ -976,6 +990,9 @@ tcp_inbound_ao_hash(struct sock *sk, const struct sk_buff *skb,
 		return SKB_NOT_DROPPED_YET;
 	}
 
+	if (unlikely(state == TCP_CLOSE))
+		return SKB_DROP_REASON_TCP_CLOSE;
+
 	/* Lookup key based on peer address and keyid.
 	 * current_key and rnext_key must not be used on tcp listen
 	 * sockets as otherwise:
@@ -989,7 +1006,7 @@ tcp_inbound_ao_hash(struct sock *sk, const struct sk_buff *skb,
 	if (th->syn && !th->ack)
 		goto verify_hash;
 
-	if ((1 << sk->sk_state) & (TCPF_LISTEN | TCPF_NEW_SYN_RECV)) {
+	if ((1 << state) & (TCPF_LISTEN | TCPF_NEW_SYN_RECV)) {
 		/* Make the initial syn the likely case here */
 		if (unlikely(req)) {
 			sne = tcp_ao_compute_sne(0, tcp_rsk(req)->rcv_isn,
@@ -1006,14 +1023,14 @@ tcp_inbound_ao_hash(struct sock *sk, const struct sk_buff *skb,
 			/* no way to figure out initial sisn/disn - drop */
 			return SKB_DROP_REASON_TCP_FLAGS;
 		}
-	} else if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
+	} else if ((1 << state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		disn = info->lisn;
 		if (th->syn || th->rst)
 			sisn = th->seq;
 		else
 			sisn = info->risn;
 	} else {
-		WARN_ONCE(1, "TCP-AO: Unexpected sk_state %d", sk->sk_state);
+		WARN_ONCE(1, "TCP-AO: Unexpected sk_state %d", state);
 		return SKB_DROP_REASON_TCP_AOFAILURE;
 	}
 verify_hash:
@@ -1056,6 +1073,7 @@ void tcp_ao_connect_init(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_ao_info *ao_info;
+	struct hlist_node *next;
 	union tcp_ao_addr *addr;
 	struct tcp_ao_key *key;
 	int family, l3index;
@@ -1078,7 +1096,7 @@ void tcp_ao_connect_init(struct sock *sk)
 	l3index = l3mdev_master_ifindex_by_index(sock_net(sk),
 						 sk->sk_bound_dev_if);
 
-	hlist_for_each_entry_rcu(key, &ao_info->head, node) {
+	hlist_for_each_entry_safe(key, next, &ao_info->head, node) {
 		if (!tcp_ao_key_cmp(key, l3index, addr, key->prefixlen, family, -1, -1))
 			continue;
 
@@ -1950,8 +1968,10 @@ static int tcp_ao_info_cmd(struct sock *sk, unsigned short int family,
 		first = true;
 	}
 
-	if (cmd.ao_required && tcp_ao_required_verify(sk))
-		return -EKEYREJECTED;
+	if (cmd.ao_required && tcp_ao_required_verify(sk)) {
+		err = -EKEYREJECTED;
+		goto out;
+	}
 
 	/* For sockets in TCP_CLOSED it's possible set keys that aren't
 	 * matching the future peer (address/port/VRF/etc),

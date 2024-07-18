@@ -1,7 +1,7 @@
 Subject: POWERPC: Allow to enable RT
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri Oct 11 13:14:41 2019 +0200
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -25,7 +25,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
  	select ARCH_USE_BUILTIN_BSWAP
  	select ARCH_USE_CMPXCHG_LOCKREF		if PPC64
  	select ARCH_USE_MEMTEST
-@@ -269,6 +270,7 @@ config PPC
+@@ -270,6 +271,7 @@ config PPC
  	select HAVE_PERF_USER_STACK_DUMP
  	select HAVE_REGS_AND_STACK_ACCESS_API
  	select HAVE_RELIABLE_STACKTRACE

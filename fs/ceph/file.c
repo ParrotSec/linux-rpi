@@ -12,6 +12,7 @@
 #include <linux/falloc.h>
 #include <linux/iversion.h>
 #include <linux/ktime.h>
+#include <linux/splice.h>
 
 #include "super.h"
 #include "mds_client.h"
@@ -1028,6 +1029,7 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 		struct ceph_osd_req_op *op;
 		u64 read_off = off;
 		u64 read_len = len;
+		int extent_cnt;
 
 		/* determine new offset/length if encrypted */
 		ceph_fscrypt_adjust_off_and_len(inode, &read_off, &read_len);
@@ -1067,7 +1069,8 @@ ssize_t __ceph_sync_read(struct inode *inode, loff_t *ki_pos,
 
 		op = &req->r_ops[0];
 		if (sparse) {
-			ret = ceph_alloc_sparse_ext_map(op);
+			extent_cnt = __ceph_sparse_read_ext_count(inode, read_len);
+			ret = ceph_alloc_sparse_ext_map(op, extent_cnt);
 			if (ret) {
 				ceph_osdc_put_request(req);
 				break;
@@ -1467,6 +1470,7 @@ ceph_direct_read_write(struct kiocb *iocb, struct iov_iter *iter,
 		ssize_t len;
 		struct ceph_osd_req_op *op;
 		int readop = sparse ? CEPH_OSD_OP_SPARSE_READ : CEPH_OSD_OP_READ;
+		int extent_cnt;
 
 		if (write)
 			size = min_t(u64, size, fsc->mount_options->wsize);
@@ -1530,7 +1534,8 @@ ceph_direct_read_write(struct kiocb *iocb, struct iov_iter *iter,
 		osd_req_op_extent_osd_data_bvecs(req, 0, bvecs, num_pages, len);
 		op = &req->r_ops[0];
 		if (sparse) {
-			ret = ceph_alloc_sparse_ext_map(op);
+			extent_cnt = __ceph_sparse_read_ext_count(inode, size);
+			ret = ceph_alloc_sparse_ext_map(op, extent_cnt);
 			if (ret) {
 				ceph_osdc_put_request(req);
 				break;
@@ -2124,14 +2129,16 @@ again:
 		int statret;
 		struct page *page = NULL;
 		loff_t i_size;
+		int mask = CEPH_STAT_CAP_SIZE;
 		if (retry_op == READ_INLINE) {
 			page = __page_cache_alloc(GFP_KERNEL);
 			if (!page)
 				return -ENOMEM;
+
+			mask = CEPH_STAT_CAP_INLINE_DATA;
 		}
 
-		statret = __ceph_do_getattr(inode, page,
-					    CEPH_STAT_CAP_INLINE_DATA, !!page);
+		statret = __ceph_do_getattr(inode, page, mask, !!page);
 		if (statret < 0) {
 			if (page)
 				__free_page(page);
@@ -2172,7 +2179,7 @@ again:
 		/* hit EOF or hole? */
 		if (retry_op == CHECK_EOF && iocb->ki_pos < i_size &&
 		    ret < len) {
-			doutc(cl, "hit hole, ppos %lld < size %lld, reading more\n",
+			doutc(cl, "may hit hole, ppos %lld < size %lld, reading more\n",
 			      iocb->ki_pos, i_size);
 
 			read += ret;
@@ -3013,8 +3020,8 @@ static ssize_t __ceph_copy_file_range(struct file *src_file, loff_t src_off,
 		 * {read,write}_iter, which will get caps again.
 		 */
 		put_rd_wr_caps(src_ci, src_got, dst_ci, dst_got);
-		ret = do_splice_direct(src_file, &src_off, dst_file,
-				       &dst_off, src_objlen, flags);
+		ret = splice_file_range(src_file, &src_off, dst_file, &dst_off,
+					src_objlen);
 		/* Abort on short copies or on error */
 		if (ret < (long)src_objlen) {
 			doutc(cl, "Failed partial copy (%zd)\n", ret);
@@ -3068,8 +3075,8 @@ out_caps:
 	 */
 	if (len && (len < src_ci->i_layout.object_size)) {
 		doutc(cl, "Final partial copy of %zu bytes\n", len);
-		bytes = do_splice_direct(src_file, &src_off, dst_file,
-					 &dst_off, len, flags);
+		bytes = splice_file_range(src_file, &src_off, dst_file,
+					  &dst_off, len);
 		if (bytes > 0)
 			ret += bytes;
 		else
@@ -3092,8 +3099,8 @@ static ssize_t ceph_copy_file_range(struct file *src_file, loff_t src_off,
 				     len, flags);
 
 	if (ret == -EOPNOTSUPP || ret == -EXDEV)
-		ret = generic_copy_file_range(src_file, src_off, dst_file,
-					      dst_off, len, flags);
+		ret = splice_copy_file_range(src_file, src_off, dst_file,
+					     dst_off, len);
 	return ret;
 }
 

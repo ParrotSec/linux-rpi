@@ -93,7 +93,7 @@ endif
 
 CLEAN_PATTERNS := $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_linux/*.pyc debian/lib/python/debian_linux/__pycache__ $$(find debian -maxdepth 1 -type d -name 'linux-*') debian/*-modules-*-di* debian/kernel-image-*-di* debian/*-tmp debian/*.substvars
 
-maintainerclean:
+clean-generated:
 	rm -rf $(CLEAN_PATTERNS)
 # We cannot use dh_clean here because it requires debian/control to exist
 	rm -rf debian/.debhelper debian/*.debhelper* debian/files debian/generated.*
@@ -114,6 +114,8 @@ maintainerclean:
 		debian/linux-source.maintscript \
 		debian/rules.gen \
 		debian/tests/control
+
+maintainerclean: clean-generated
 	rm -rf $(filter-out debian .git, $(wildcard * .[^.]*))
 
 clean: debian/control
@@ -154,4 +156,4 @@ debian/control-real: debian/bin/gencontrol.py $(CONTROL_FILES)
 	@echo
 	exit 1
 
-.PHONY: binary binary-% build build-% clean debian/control-real orig setup source
+.PHONY: binary binary-% build build-% clean debian/control-real orig setup source clean-generated

@@ -23,8 +23,9 @@
 #include <linux/serial.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
-
 #include <linux/io.h>
+
+#include <asm/txx9/generic.h>
 
 #define PASS_LIMIT	256
 
@@ -1052,7 +1053,7 @@ static int serial_txx9_probe(struct platform_device *dev)
 /*
  * Remove serial ports registered against a platform device.
  */
-static int serial_txx9_remove(struct platform_device *dev)
+static void serial_txx9_remove(struct platform_device *dev)
 {
 	int i;
 
@@ -1062,7 +1063,6 @@ static int serial_txx9_remove(struct platform_device *dev)
 		if (up->dev == &dev->dev)
 			serial_txx9_unregister_port(i);
 	}
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1097,7 +1097,7 @@ static int serial_txx9_resume(struct platform_device *dev)
 
 static struct platform_driver serial_txx9_plat_driver = {
 	.probe		= serial_txx9_probe,
-	.remove		= serial_txx9_remove,
+	.remove_new	= serial_txx9_remove,
 #ifdef CONFIG_PM
 	.suspend	= serial_txx9_suspend,
 	.resume		= serial_txx9_resume,

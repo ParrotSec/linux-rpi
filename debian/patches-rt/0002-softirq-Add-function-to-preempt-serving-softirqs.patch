@@ -1,7 +1,7 @@
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri, 4 Aug 2023 13:30:38 +0200
 Subject: [PATCH 2/3] softirq: Add function to preempt serving softirqs.
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 Add a functionality for the softirq handler to preempt its current work
 if needed. The softirq core has no particular state. It reads and resets
@@ -38,7 +38,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  #endif /* _LINUX_BH_H */
 --- a/kernel/softirq.c
 +++ b/kernel/softirq.c
-@@ -247,6 +247,19 @@ void __local_bh_enable_ip(unsigned long
+@@ -248,6 +248,19 @@ void __local_bh_enable_ip(unsigned long
  }
  EXPORT_SYMBOL(__local_bh_enable_ip);
  

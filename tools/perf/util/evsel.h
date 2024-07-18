@@ -191,6 +191,7 @@ struct perf_missing_features {
 	bool code_page_size;
 	bool weight_struct;
 	bool read_lost;
+	bool branch_counters;
 };
 
 extern struct perf_missing_features perf_missing_features;
@@ -338,6 +339,7 @@ struct perf_sample;
 void *evsel__rawptr(struct evsel *evsel, struct perf_sample *sample, const char *name);
 u64 evsel__intval(struct evsel *evsel, struct perf_sample *sample, const char *name);
 u64 evsel__intval_common(struct evsel *evsel, struct perf_sample *sample, const char *name);
+char evsel__taskstate(struct evsel *evsel, struct perf_sample *sample, const char *name);
 
 static inline char *evsel__strval(struct evsel *evsel, struct perf_sample *sample, const char *name)
 {
@@ -459,7 +461,8 @@ static inline bool evsel__is_clock(const struct evsel *evsel)
 	       evsel__match(evsel, SOFTWARE, SW_TASK_CLOCK);
 }
 
-bool evsel__fallback(struct evsel *evsel, int err, char *msg, size_t msgsize);
+bool evsel__fallback(struct evsel *evsel, struct target *target, int err,
+		     char *msg, size_t msgsize);
 int evsel__open_strerror(struct evsel *evsel, struct target *target,
 			 int err, char *msg, size_t size);
 

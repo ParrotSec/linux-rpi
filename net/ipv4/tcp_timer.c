@@ -483,8 +483,12 @@ static bool tcp_rtx_probe0_timed_out(const struct sock *sk,
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	const int timeout = TCP_RTO_MAX * 2;
-	u32 rcv_delta;
+	s32 rcv_delta;
 
+	/* Note: timer interrupt might have been delayed by at least one jiffy,
+	 * and tp->rcv_tstamp might very well have been written recently.
+	 * rcv_delta can thus be negative.
+	 */
 	rcv_delta = inet_csk(sk)->icsk_timeout - tp->rcv_tstamp;
 	if (rcv_delta <= timeout)
 		return false;
@@ -626,7 +630,6 @@ void tcp_retransmit_timer(struct sock *sk)
 	 * implemented ftp to mars will work nicely. We will have to fix
 	 * the 120 second clamps though!
 	 */
-	icsk->icsk_backoff++;
 
 out_reset_timer:
 	/* If stream is thin, use linear timeouts. Since 'icsk_backoff' is
@@ -647,11 +650,12 @@ out_reset_timer:
 				       tcp_rto_min(sk),
 				       TCP_RTO_MAX);
 	} else if (sk->sk_state != TCP_SYN_SENT ||
-		   icsk->icsk_backoff >
+		   tp->total_rto >
 		   READ_ONCE(net->ipv4.sysctl_tcp_syn_linear_timeouts)) {
 		/* Use normal (exponential) backoff unless linear timeouts are
 		 * activated.
 		 */
+		icsk->icsk_backoff++;
 		icsk->icsk_rto = min(icsk->icsk_rto << 1, TCP_RTO_MAX);
 	}
 	inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,

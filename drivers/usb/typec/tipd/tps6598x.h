@@ -235,4 +235,33 @@
 /* SLEEP CONF REG */
 #define TPS_SLEEP_CONF_SLEEP_MODE_ALLOWED	BIT(0)
 
+/* Start Patch Download Sequence */
+#define TPS_PTCS_CONTENT_APP			BIT(0)
+#define TPS_PTCS_CONTENT_DEV			BIT(1)
+#define TPS_PTCS_OUT_BYTES			4
+#define TPS_PTCS_STATUS				1
+
+#define TPS_PTCS_STATUS_FAIL			0x80
+/* Patch Download */
+#define TPS_PTCD_OUT_BYTES			10
+#define TPS_PTCD_TRANSFER_STATUS		1
+#define TPS_PTCD_LOADING_STATE			2
+
+#define TPS_PTCD_LOAD_ERR			0x09
+/* Patch Download Complete */
+#define TPS_PTCC_OUT_BYTES			4
+#define TPS_PTCC_DEV				2
+#define TPS_PTCC_APP				3
+
+/* Version Register */
+#define TPS_VERSION_HW_VERSION_MASK            GENMASK(31, 24)
+#define TPS_VERSION_HW_VERSION(x)              TPS_FIELD_GET(TPS_VERSION_HW_VERSION_MASK, (x))
+#define TPS_VERSION_HW_65981_2_6               0x00
+#define TPS_VERSION_HW_65987_8_DH              0xF7
+#define TPS_VERSION_HW_65987_8_DK              0xF9
+
+/* Int Event Register length */
+#define TPS_65981_2_6_INTEVENT_LEN             8
+#define TPS_65987_8_INTEVENT_LEN               11
+
 #endif /* __TPS6598X_H__ */

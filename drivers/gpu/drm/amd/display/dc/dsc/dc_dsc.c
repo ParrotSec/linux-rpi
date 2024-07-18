@@ -137,6 +137,11 @@ uint32_t dc_bandwidth_in_kbps_from_timing(
 	if (link_encoding == DC_LINK_ENCODING_DP_128b_132b)
 		kbps = apply_128b_132b_stream_overhead(timing, kbps);
 
+	if (link_encoding == DC_LINK_ENCODING_HDMI_FRL &&
+			timing->vic == 0 && timing->hdmi_vic == 0 &&
+			timing->frl_uncompressed_video_bandwidth_in_kbps != 0)
+		kbps = timing->frl_uncompressed_video_bandwidth_in_kbps;
+
 	return kbps;
 }
 
@@ -331,8 +336,9 @@ bool dc_dsc_parse_dsc_dpcd(const struct dc *dc,
 		int buff_block_size;
 		int buff_size;
 
-		if (!dsc_buff_block_size_from_dpcd(dpcd_dsc_basic_data[DP_DSC_RC_BUF_BLK_SIZE - DP_DSC_SUPPORT],
-										   &buff_block_size))
+		if (!dsc_buff_block_size_from_dpcd(
+				dpcd_dsc_basic_data[DP_DSC_RC_BUF_BLK_SIZE - DP_DSC_SUPPORT] & 0x03,
+				&buff_block_size))
 			return false;
 
 		buff_size = dpcd_dsc_basic_data[DP_DSC_RC_BUF_SIZE - DP_DSC_SUPPORT] + 1;
@@ -357,10 +363,15 @@ bool dc_dsc_parse_dsc_dpcd(const struct dc *dc,
 
 	{
 		int dpcd_throughput = dpcd_dsc_basic_data[DP_DSC_PEAK_THROUGHPUT - DP_DSC_SUPPORT];
+		int dsc_throughput_granular_delta;
+
+		dsc_throughput_granular_delta = dpcd_dsc_basic_data[DP_DSC_RC_BUF_BLK_SIZE - DP_DSC_SUPPORT] >> 3;
+		dsc_throughput_granular_delta *= 2;
 
 		if (!dsc_throughput_from_dpcd(dpcd_throughput & DP_DSC_THROUGHPUT_MODE_0_MASK,
 									  &dsc_sink_caps->throughput_mode_0_mps))
 			return false;
+		dsc_sink_caps->throughput_mode_0_mps += dsc_throughput_granular_delta;
 
 		dpcd_throughput = (dpcd_throughput & DP_DSC_THROUGHPUT_MODE_1_MASK) >> DP_DSC_THROUGHPUT_MODE_1_SHIFT;
 		if (!dsc_throughput_from_dpcd(dpcd_throughput, &dsc_sink_caps->throughput_mode_1_mps))
@@ -1044,7 +1055,12 @@ static bool setup_dsc_config(
 	if (!is_dsc_possible)
 		goto done;
 
-	dsc_cfg->num_slices_v = pic_height/slice_height;
+	if (slice_height > 0) {
+		dsc_cfg->num_slices_v = pic_height / slice_height;
+	} else {
+		is_dsc_possible = false;
+		goto done;
+	}
 
 	if (target_bandwidth_kbps > 0) {
 		is_dsc_possible = decide_dsc_target_bpp_x16(

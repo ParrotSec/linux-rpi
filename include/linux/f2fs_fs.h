@@ -41,12 +41,6 @@
 
 #define F2FS_ENC_UTF8_12_1	1
 
-#define F2FS_IO_SIZE(sbi)	BIT(F2FS_OPTION(sbi).write_io_size_bits) /* Blocks */
-#define F2FS_IO_SIZE_KB(sbi)	BIT(F2FS_OPTION(sbi).write_io_size_bits + 2) /* KB */
-#define F2FS_IO_SIZE_BITS(sbi)	(F2FS_OPTION(sbi).write_io_size_bits) /* power of 2 */
-#define F2FS_IO_SIZE_MASK(sbi)	(F2FS_IO_SIZE(sbi) - 1)
-#define F2FS_IO_ALIGNED(sbi)	(F2FS_IO_SIZE(sbi) > 1)
-
 /* This flag is used by node and meta inodes, and by recovery */
 #define GFP_F2FS_ZERO		(GFP_NOFS | __GFP_ZERO)
 
@@ -82,6 +76,7 @@ enum stop_cp_reason {
 	STOP_CP_REASON_CORRUPTED_SUMMARY,
 	STOP_CP_REASON_UPDATE_INODE,
 	STOP_CP_REASON_FLUSH_FAIL,
+	STOP_CP_REASON_NO_SEGMENT,
 	STOP_CP_REASON_MAX,
 };
 
@@ -442,7 +437,7 @@ struct f2fs_sit_block {
  * ex) data_blkaddr = (block_t)(nodepage_start_address + ofs_in_node)
  */
 #define ENTRIES_IN_SUM		(F2FS_BLKSIZE / 8)
-#define	SUMMARY_SIZE		(7)	/* sizeof(struct summary) */
+#define	SUMMARY_SIZE		(7)	/* sizeof(struct f2fs_summary) */
 #define	SUM_FOOTER_SIZE		(5)	/* sizeof(struct summary_footer) */
 #define SUM_ENTRY_SIZE		(SUMMARY_SIZE * ENTRIES_IN_SUM)
 

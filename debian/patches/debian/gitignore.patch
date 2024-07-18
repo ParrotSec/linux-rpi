@@ -21,7 +21,7 @@ Index: linux/.gitignore
  #
  # Snap directory (make snap-pkg)
  #
-@@ -91,18 +86,6 @@ modules.order
+@@ -91,19 +86,6 @@ modules.order
  #
  /tar-install/
  
@@ -30,6 +30,7 @@ Index: linux/.gitignore
 -#
 -!.clang-format
 -!.cocciconfig
+-!.editorconfig
 -!.get_maintainer.ignore
 -!.gitattributes
 -!.gitignore

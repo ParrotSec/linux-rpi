@@ -44,8 +44,8 @@ static int __bch2_lru_set(struct btree_trans *trans, u16 lru_id,
 			  u64 dev_bucket, u64 time, bool set)
 {
 	return time
-		? bch2_btree_bit_mod(trans, BTREE_ID_lru,
-				     lru_pos(lru_id, dev_bucket, time), set)
+		? bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru,
+					      lru_pos(lru_id, dev_bucket, time), set)
 		: 0;
 }
 
@@ -125,8 +125,7 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 			goto out;
 		}
 
-		if (c->opts.reconstruct_alloc ||
-		    fsck_err(c, lru_entry_bad,
+		if (fsck_err(c, lru_entry_bad,
 			     "incorrect lru entry: lru %s time %llu\n"
 			     "  %s\n"
 			     "  for %s",
@@ -147,18 +146,13 @@ fsck_err:
 
 int bch2_check_lrus(struct bch_fs *c)
 {
-	struct btree_iter iter;
-	struct bkey_s_c k;
 	struct bpos last_flushed_pos = POS_MIN;
-	int ret = 0;
-
-	ret = bch2_trans_run(c,
+	int ret = bch2_trans_run(c,
 		for_each_btree_key_commit(trans, iter,
 				BTREE_ID_lru, POS_MIN, BTREE_ITER_PREFETCH, k,
-				NULL, NULL, BTREE_INSERT_NOFAIL|BTREE_INSERT_LAZY_RW,
+				NULL, NULL, BCH_TRANS_COMMIT_no_enospc|BCH_TRANS_COMMIT_lazy_rw,
 			bch2_check_lru_key(trans, &iter, k, &last_flushed_pos)));
-	if (ret)
-		bch_err_fn(c, ret);
+	bch_err_fn(c, ret);
 	return ret;
 
 }

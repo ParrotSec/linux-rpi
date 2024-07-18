@@ -44,7 +44,6 @@
 		mmc0 = &sdhci;
 		mmc1 = &sdmmc;
 		mmc2 = &sdio;
-		serial2 = &uart2;
 	};
 
 	chosen {
@@ -139,6 +138,10 @@
 };
 
 &combphy0_ps {
+	status = "okay";
+};
+
+&combphy2_psu {
 	status = "okay";
 };
 
@@ -841,5 +844,9 @@
 };
 
 &usb_host1_ohci {
+	status = "okay";
+};
+
+&usb_host2_xhci {
 	status = "okay";
 };

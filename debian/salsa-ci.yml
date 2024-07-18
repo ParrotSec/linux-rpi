@@ -2,7 +2,7 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
 
 variables:
-  RELEASE: 'unstable'
+  RELEASE: 'bookworm-backports'
   # Make that build quicker
   DEB_BUILD_PROFILES: pkg.linux.quick
   # We have to bump the version in source preparation, not later
@@ -216,10 +216,23 @@ python-static:
       apt-get update && eatmydata apt-get install --no-install-recommends -y \
         flake8 python3 python3-dacite python3-jinja2 python3-pytest
 
+    # Check Python modules under debian/lib and Python scripts under
+    # debian/bin or debian/rules.d.
+    - sources="$(mktemp)"
+    - find debian/lib/python -name '*.py' > "$sources"
+    - |
+      find debian/bin debian/rules.d -type f -perm /111 |
+          while read script; do
+              if awk '/^#!.*python/ { exit 0 } { exit 1 }' "$script"; then
+                  echo "$script"
+              fi
+          done \
+          >> "$sources"
+
     # Run both checkers and coalesce their results rather than exiting
     # on first failure
     - pass=true
-    - flake8 debian --max-line-length=100 || pass=false
+    - xargs flake8 --max-line-length=100 < "$sources" || pass=false
     - py.test debian/lib/python || pass=false
     - $pass
   needs: []

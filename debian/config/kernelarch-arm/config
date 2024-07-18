@@ -14,7 +14,6 @@ CONFIG_CPU_SW_DOMAIN_PAN=y
 ##
 ## file: arch/arm/Kconfig.debug
 ##
-CONFIG_DEBUG_WX=y
 CONFIG_DEBUG_LL=y
 CONFIG_EARLY_PRINTK=y
 
@@ -159,3 +158,8 @@ CONFIG_CRASH_DUMP=y
 ##
 CONFIG_XZ_DEC_ARM=y
 CONFIG_XZ_DEC_ARMTHUMB=y
+
+##
+## file: mm/Kconfig.debug
+##
+CONFIG_DEBUG_WX=y

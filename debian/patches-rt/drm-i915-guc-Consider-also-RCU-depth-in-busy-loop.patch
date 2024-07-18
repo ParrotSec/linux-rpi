@@ -1,7 +1,7 @@
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Tue, 3 Oct 2023 21:37:21 +0200
 Subject: [PATCH] drm/i915/guc: Consider also RCU depth in busy loop.
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 intel_guc_send_busy_loop() looks at in_atomic() and irqs_disabled() to
 decide if it should busy-spin while waiting or if it may sleep.
@@ -18,7 +18,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/drivers/gpu/drm/i915/gt/uc/intel_guc.h
 +++ b/drivers/gpu/drm/i915/gt/uc/intel_guc.h
-@@ -349,7 +349,7 @@ static inline int intel_guc_send_busy_lo
+@@ -360,7 +360,7 @@ static inline int intel_guc_send_busy_lo
  {
  	int err;
  	unsigned int sleep_period_ms = 1;

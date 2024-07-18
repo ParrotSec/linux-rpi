@@ -378,7 +378,7 @@ static void ar933x_uart_rx_chars(struct ar933x_uart_port *up)
 		up->port.icount.rx++;
 		ch = rdata & AR933X_UART_DATA_TX_RX_MASK;
 
-		if (uart_handle_sysrq_char(&up->port, ch))
+		if (uart_prepare_sysrq_char(&up->port, ch))
 			continue;
 
 		if ((up->port.ignore_status_mask & AR933X_DUMMY_STATUS_RD) == 0)
@@ -468,7 +468,7 @@ static irqreturn_t ar933x_uart_interrupt(int irq, void *dev_id)
 		ar933x_uart_tx_chars(up);
 	}
 
-	uart_port_unlock(&up->port);
+	uart_unlock_and_check_sysrq(&up->port);
 
 	return IRQ_HANDLED;
 }
@@ -627,14 +627,10 @@ static void ar933x_uart_console_write(struct console *co, const char *s,
 	unsigned int int_en;
 	int locked = 1;
 
-	local_irq_save(flags);
-
-	if (up->port.sysrq)
-		locked = 0;
-	else if (oops_in_progress)
-		locked = uart_port_trylock(&up->port);
+	if (oops_in_progress)
+		locked = uart_port_trylock_irqsave(&up->port, &flags);
 	else
-		uart_port_lock(&up->port);
+		uart_port_lock_irqsave(&up->port, &flags);
 
 	/*
 	 * First save the IER then disable the interrupts
@@ -654,9 +650,7 @@ static void ar933x_uart_console_write(struct console *co, const char *s,
 	ar933x_uart_write(up, AR933X_UART_INT_REG, AR933X_UART_INT_ALLINTS);
 
 	if (locked)
-		uart_port_unlock(&up->port);
-
-	local_irq_restore(flags);
+		uart_port_unlock_irqrestore(&up->port, flags);
 }
 
 static int ar933x_uart_console_setup(struct console *co, char *options)
@@ -818,7 +812,7 @@ err_disable_clk:
 	return ret;
 }
 
-static int ar933x_uart_remove(struct platform_device *pdev)
+static void ar933x_uart_remove(struct platform_device *pdev)
 {
 	struct ar933x_uart_port *up;
 
@@ -828,8 +822,6 @@ static int ar933x_uart_remove(struct platform_device *pdev)
 		uart_remove_one_port(&ar933x_uart_driver, &up->port);
 		clk_disable_unprepare(up->clk);
 	}
-
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -842,7 +834,7 @@ MODULE_DEVICE_TABLE(of, ar933x_uart_of_ids);
 
 static struct platform_driver ar933x_uart_platform_driver = {
 	.probe		= ar933x_uart_probe,
-	.remove		= ar933x_uart_remove,
+	.remove_new	= ar933x_uart_remove,
 	.driver		= {
 		.name		= DRIVER_NAME,
 		.of_match_table = of_match_ptr(ar933x_uart_of_ids),

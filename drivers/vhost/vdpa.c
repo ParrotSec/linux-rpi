@@ -59,6 +59,7 @@ struct vhost_vdpa {
 	int in_batch;
 	struct vdpa_iova_range range;
 	u32 batch_asid;
+	bool suspended;
 };
 
 static DEFINE_IDA(vhost_vdpa_ida);
@@ -231,6 +232,8 @@ static int _compat_vdpa_reset(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
 	u32 flags = 0;
+
+	v->suspended = false;
 
 	if (v->vdev.vqs) {
 		flags |= !vhost_backend_has_feature(v->vdev.vqs[0],
@@ -590,11 +593,19 @@ static long vhost_vdpa_suspend(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
 	const struct vdpa_config_ops *ops = vdpa->config;
+	int ret;
+
+	if (!(ops->get_status(vdpa) & VIRTIO_CONFIG_S_DRIVER_OK))
+		return 0;
 
 	if (!ops->suspend)
 		return -EOPNOTSUPP;
 
-	return ops->suspend(vdpa);
+	ret = ops->suspend(vdpa);
+	if (!ret)
+		v->suspended = true;
+
+	return ret;
 }
 
 /* After a successful return of this ioctl the device resumes processing
@@ -605,11 +616,19 @@ static long vhost_vdpa_resume(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
 	const struct vdpa_config_ops *ops = vdpa->config;
+	int ret;
+
+	if (!(ops->get_status(vdpa) & VIRTIO_CONFIG_S_DRIVER_OK))
+		return 0;
 
 	if (!ops->resume)
 		return -EOPNOTSUPP;
 
-	return ops->resume(vdpa);
+	ret = ops->resume(vdpa);
+	if (!ret)
+		v->suspended = false;
+
+	return ret;
 }
 
 static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
@@ -668,6 +687,14 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 		if (!ops->set_group_asid)
 			return -EOPNOTSUPP;
 		return ops->set_group_asid(vdpa, idx, s.num);
+	case VHOST_VDPA_GET_VRING_SIZE:
+		if (!ops->get_vq_size)
+			return -EOPNOTSUPP;
+		s.index = idx;
+		s.num = ops->get_vq_size(vdpa, idx);
+		if (copy_to_user(argp, &s, sizeof(s)))
+			return -EFAULT;
+		return 0;
 	case VHOST_GET_VRING_BASE:
 		r = ops->get_vq_state(v->vdpa, idx, &vq_state);
 		if (r)
@@ -690,6 +717,9 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 
 	switch (cmd) {
 	case VHOST_SET_VRING_ADDR:
+		if ((ops->get_status(vdpa) & VIRTIO_CONFIG_S_DRIVER_OK) && !v->suspended)
+			return -EINVAL;
+
 		if (ops->set_vq_address(vdpa, idx,
 					(u64)(uintptr_t)vq->desc,
 					(u64)(uintptr_t)vq->avail,
@@ -698,6 +728,9 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 		break;
 
 	case VHOST_SET_VRING_BASE:
+		if ((ops->get_status(vdpa) & VIRTIO_CONFIG_S_DRIVER_OK) && !v->suspended)
+			return -EINVAL;
+
 		if (vhost_has_feature(vq, VIRTIO_F_RING_PACKED)) {
 			vq_state.packed.last_avail_idx = vq->last_avail_idx & 0x7fff;
 			vq_state.packed.last_avail_counter = !!(vq->last_avail_idx & 0x8000);
@@ -968,7 +1001,8 @@ static int vhost_vdpa_map(struct vhost_vdpa *v, struct vhost_iotlb *iotlb,
 			r = ops->set_map(vdpa, asid, iotlb);
 	} else {
 		r = iommu_map(v->domain, iova, pa, size,
-			      perm_to_iommu_flags(perm), GFP_KERNEL);
+			      perm_to_iommu_flags(perm),
+			      GFP_KERNEL_ACCOUNT);
 	}
 	if (r) {
 		vhost_iotlb_del_range(iotlb, iova, iova + size - 1);

@@ -14,6 +14,7 @@
 #include "move.h"
 #include "nocow_locking.h"
 #include "rebalance.h"
+#include "snapshot.h"
 #include "subvolume.h"
 #include "trace.h"
 
@@ -267,19 +268,31 @@ restart_drop_extra_replicas:
 			goto out;
 		}
 
+		if (trace_data_update_enabled()) {
+			struct printbuf buf = PRINTBUF;
+
+			prt_str(&buf, "\nold: ");
+			bch2_bkey_val_to_text(&buf, c, old);
+			prt_str(&buf, "\nk:   ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_str(&buf, "\nnew: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
+
+			trace_data_update(c, buf.buf);
+			printbuf_exit(&buf);
+		}
+
 		ret =   bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, bkey_start_pos(&insert->k)) ?:
 			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, insert->k.p) ?:
-			bch2_bkey_set_needs_rebalance(c, insert,
-						      op->opts.background_target,
-						      op->opts.background_compression) ?:
+			bch2_bkey_set_needs_rebalance(c, insert, &op->opts) ?:
 			bch2_trans_update(trans, &iter, insert,
 				BTREE_UPDATE_INTERNAL_SNAPSHOT_NODE) ?:
 			bch2_trans_commit(trans, &op->res,
 				NULL,
-				BTREE_INSERT_NOCHECK_RW|
-				BTREE_INSERT_NOFAIL|
+				BCH_TRANS_COMMIT_no_check_rw|
+				BCH_TRANS_COMMIT_no_enospc|
 				m->data_opts.btree_insert_flags);
 		if (!ret) {
 			bch2_btree_iter_set_pos(&iter, next_pos);
@@ -300,14 +313,14 @@ next:
 		}
 		continue;
 nowork:
-		if (m->stats && m->stats) {
+		if (m->stats) {
 			BUG_ON(k.k->p.offset <= iter.pos.offset);
 			atomic64_inc(&m->stats->keys_raced);
 			atomic64_add(k.k->p.offset - iter.pos.offset,
 				     &m->stats->sectors_raced);
 		}
 
-		this_cpu_inc(c->counters[BCH_COUNTER_move_extent_fail]);
+		count_event(c, move_extent_fail);
 
 		bch2_btree_iter_advance(&iter);
 		goto next;
@@ -342,7 +355,6 @@ void bch2_data_update_exit(struct data_update *update)
 	struct bch_fs *c = update->op.c;
 	struct bkey_ptrs_c ptrs =
 		bch2_bkey_ptrs_c(bkey_i_to_s_c(update->k.k));
-	const struct bch_extent_ptr *ptr;
 
 	bkey_for_each_ptr(ptrs, ptr) {
 		if (c->opts.nocow_enabled)
@@ -363,7 +375,6 @@ static void bch2_update_unwritten_extent(struct btree_trans *trans,
 	struct bio *bio = &update->op.wbio.bio;
 	struct bkey_i_extent *e;
 	struct write_point *wp;
-	struct bch_extent_ptr *ptr;
 	struct closure cl;
 	struct btree_iter iter;
 	struct bkey_s_c k;
@@ -403,6 +414,8 @@ static void bch2_update_unwritten_extent(struct btree_trans *trans,
 			closure_sync(&cl);
 			continue;
 		}
+
+		bch_err_fn_ratelimited(c, ret);
 
 		if (ret)
 			return;
@@ -476,7 +489,7 @@ int bch2_extent_drop_ptrs(struct btree_trans *trans,
 
 	return bch2_trans_relock(trans) ?:
 		bch2_trans_update(trans, iter, n, BTREE_UPDATE_INTERNAL_SNAPSHOT_NODE) ?:
-		bch2_trans_commit(trans, NULL, NULL, BTREE_INSERT_NOFAIL);
+		bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
 
 int bch2_data_update_init(struct btree_trans *trans,
@@ -493,10 +506,17 @@ int bch2_data_update_init(struct btree_trans *trans,
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
-	const struct bch_extent_ptr *ptr;
 	unsigned i, reserve_sectors = k.k->size * data_opts.extra_replicas;
 	unsigned ptrs_locked = 0;
 	int ret = 0;
+
+	/*
+	 * fs is corrupt  we have a key for a snapshot node that doesn't exist,
+	 * and we have to check for this because we go rw before repairing the
+	 * snapshots table - just skip it, we can move it later.
+	 */
+	if (unlikely(k.k->p.snapshot && !bch2_snapshot_equiv(c, k.k->p.snapshot)))
+		return -BCH_ERR_data_update_done;
 
 	bch2_bkey_buf_init(&m->k);
 	bch2_bkey_buf_reassemble(&m->k, c, k);
@@ -516,7 +536,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 		BCH_WRITE_DATA_ENCODED|
 		BCH_WRITE_MOVE|
 		m->data_opts.write_flags;
-	m->op.compression_opt	= io_opts.background_compression ?: io_opts.compression;
+	m->op.compression_opt	= background_compression(io_opts);
 	m->op.watermark		= m->data_opts.btree_insert_flags & BCH_WATERMARK_MASK;
 
 	bkey_for_each_ptr(ptrs, ptr)
@@ -560,8 +580,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 				move_ctxt_wait_event(ctxt,
 						(locked = bch2_bucket_nocow_trylock(&c->nocow_locks,
 									  PTR_BUCKET_POS(c, &p.ptr), 0)) ||
-						(!atomic_read(&ctxt->read_sectors) &&
-						 !atomic_read(&ctxt->write_sectors)));
+						list_empty(&ctxt->ios));
 
 				if (!locked)
 					bch2_bucket_nocow_lock(&c->nocow_locks,
@@ -579,6 +598,8 @@ int bch2_data_update_init(struct btree_trans *trans,
 		i++;
 	}
 
+	unsigned durability_required = max(0, (int) (io_opts.data_replicas - durability_have));
+
 	/*
 	 * If current extent durability is less than io_opts.data_replicas,
 	 * we're not trying to rereplicate the extent up to data_replicas here -
@@ -588,7 +609,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 	 * rereplicate, currently, so that users don't get an unexpected -ENOSPC
 	 */
 	if (!(m->data_opts.write_flags & BCH_WRITE_CACHED) &&
-	    durability_have >= io_opts.data_replicas) {
+	    !durability_required) {
 		m->data_opts.kill_ptrs |= m->data_opts.rewrite_ptrs;
 		m->data_opts.rewrite_ptrs = 0;
 		/* if iter == NULL, it's just a promote */
@@ -597,11 +618,18 @@ int bch2_data_update_init(struct btree_trans *trans,
 		goto done;
 	}
 
-	m->op.nr_replicas = min(durability_removing, io_opts.data_replicas - durability_have) +
+	m->op.nr_replicas = min(durability_removing, durability_required) +
 		m->data_opts.extra_replicas;
-	m->op.nr_replicas_required = m->op.nr_replicas;
 
-	BUG_ON(!m->op.nr_replicas);
+	/*
+	 * If device(s) were set to durability=0 after data was written to them
+	 * we can end up with a duribilty=0 extent, and the normal algorithm
+	 * that tries not to increase durability doesn't work:
+	 */
+	if (!(durability_have + durability_removing))
+		m->op.nr_replicas = max((unsigned) m->op.nr_replicas, 1);
+
+	m->op.nr_replicas_required = m->op.nr_replicas;
 
 	if (reserve_sectors) {
 		ret = bch2_disk_reservation_add(c, &m->op.res, reserve_sectors,
@@ -639,7 +667,6 @@ done:
 void bch2_data_update_opts_normalize(struct bkey_s_c k, struct data_update_opts *opts)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const struct bch_extent_ptr *ptr;
 	unsigned i = 0;
 
 	bkey_for_each_ptr(ptrs, ptr) {

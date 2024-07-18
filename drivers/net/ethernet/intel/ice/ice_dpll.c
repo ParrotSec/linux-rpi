@@ -527,6 +527,7 @@ ice_dpll_hw_input_prio_set(struct ice_pf *pf, struct ice_dpll *dpll,
  * @dpll: registered dpll pointer
  * @dpll_priv: private data pointer passed on dpll registration
  * @status: on success holds dpll's lock status
+ * @status_error: status error value
  * @extack: error reporting
  *
  * Dpll subsystem callback, provides dpll's lock status.
@@ -539,6 +540,7 @@ ice_dpll_hw_input_prio_set(struct ice_pf *pf, struct ice_dpll *dpll,
 static int
 ice_dpll_lock_status_get(const struct dpll_device *dpll, void *dpll_priv,
 			 enum dpll_lock_status *status,
+			 enum dpll_lock_status_error *status_error,
 			 struct netlink_ext_ack *extack)
 {
 	struct ice_dpll *d = dpll_priv;
@@ -549,31 +551,6 @@ ice_dpll_lock_status_get(const struct dpll_device *dpll, void *dpll_priv,
 	mutex_unlock(&pf->dplls.lock);
 
 	return 0;
-}
-
-/**
- * ice_dpll_mode_supported - check if dpll's working mode is supported
- * @dpll: registered dpll pointer
- * @dpll_priv: private data pointer passed on dpll registration
- * @mode: mode to be checked for support
- * @extack: error reporting
- *
- * Dpll subsystem callback. Provides information if working mode is supported
- * by dpll.
- *
- * Return:
- * * true - mode is supported
- * * false - mode is not supported
- */
-static bool ice_dpll_mode_supported(const struct dpll_device *dpll,
-				    void *dpll_priv,
-				    enum dpll_mode mode,
-				    struct netlink_ext_ack *extack)
-{
-	if (mode == DPLL_MODE_AUTOMATIC)
-		return true;
-
-	return false;
 }
 
 /**
@@ -1259,7 +1236,6 @@ static const struct dpll_pin_ops ice_dpll_output_ops = {
 
 static const struct dpll_device_ops ice_dpll_ops = {
 	.lock_status_get = ice_dpll_lock_status_get,
-	.mode_supported = ice_dpll_mode_supported,
 	.mode_get = ice_dpll_mode_get,
 };
 
@@ -1623,7 +1599,7 @@ static void ice_dpll_deinit_rclk_pin(struct ice_pf *pf)
 	}
 	if (WARN_ON_ONCE(!vsi || !vsi->netdev))
 		return;
-	netdev_dpll_pin_clear(vsi->netdev);
+	dpll_netdev_pin_clear(vsi->netdev);
 	dpll_pin_put(rclk->pin);
 }
 
@@ -1667,7 +1643,7 @@ ice_dpll_init_rclk_pins(struct ice_pf *pf, struct ice_dpll_pin *pin,
 	}
 	if (WARN_ON((!vsi || !vsi->netdev)))
 		return -EINVAL;
-	netdev_dpll_pin_set(vsi->netdev, pf->dplls.rclk.pin);
+	dpll_netdev_pin_set(vsi->netdev, pf->dplls.rclk.pin);
 
 	return 0;
 

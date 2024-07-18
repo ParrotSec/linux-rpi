@@ -105,7 +105,7 @@ lib-y				:= $(patsubst %.o,%.stub.o,$(lib-y))
 # Even when -mbranch-protection=none is set, Clang will generate a
 # .note.gnu.property for code-less object files (like lib/ctype.c),
 # so work around this by explicitly removing the unwanted section.
-# https://bugs.llvm.org/show_bug.cgi?id=46480
+# https://llvm.org/pr46480
 STUBCOPY_FLAGS-y		+= --remove-section=.note.gnu.property
 
 STUBCOPY_RELOC-$(CONFIG_X86_32)	:= R_386_32
@@ -143,7 +143,7 @@ STUBCOPY_RELOC-$(CONFIG_ARM64)	:= R_AARCH64_ABS
 # exist.
 STUBCOPY_FLAGS-$(CONFIG_RISCV)	+= --prefix-alloc-sections=.init \
 				   --prefix-symbols=__efistub_
-STUBCOPY_RELOC-$(CONFIG_RISCV)	:= R_RISCV_HI20
+STUBCOPY_RELOC-$(CONFIG_RISCV)	:= -E R_RISCV_HI20\|R_RISCV_$(BITS)\|R_RISCV_RELAX
 
 # For LoongArch, keep all the symbols in .init section and make sure that no
 # absolute symbols references exist.

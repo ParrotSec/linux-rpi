@@ -81,7 +81,7 @@ CONFIG_VEXPRESS_CONFIG=y
 # CONFIG_CLK_QORIQ is not set
 
 ##
-## file: drivers/cpufreq/Kconfig.arm
+## file: drivers/cpufreq/Kconfig
 ##
 CONFIG_ACPI_CPPC_CPUFREQ=m
 

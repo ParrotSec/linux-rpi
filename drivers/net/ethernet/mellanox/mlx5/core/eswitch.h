@@ -618,13 +618,6 @@ static inline bool mlx5_esw_allowed(const struct mlx5_eswitch *esw)
 	return esw && MLX5_ESWITCH_MANAGER(esw->dev);
 }
 
-/* The returned number is valid only when the dev is eswitch manager. */
-static inline u16 mlx5_eswitch_manager_vport(struct mlx5_core_dev *dev)
-{
-	return mlx5_core_is_ecpf_esw_manager(dev) ?
-		MLX5_VPORT_ECPF : MLX5_VPORT_PF;
-}
-
 static inline bool
 mlx5_esw_is_manager_vport(const struct mlx5_eswitch *esw, u16 vport_num)
 {
@@ -840,7 +833,7 @@ int mlx5_eswitch_offloads_single_fdb_add_one(struct mlx5_eswitch *master_esw,
 					     struct mlx5_eswitch *slave_esw, int max_slaves);
 void mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,
 					      struct mlx5_eswitch *slave_esw);
-int mlx5_eswitch_reload_reps(struct mlx5_eswitch *esw);
+int mlx5_eswitch_reload_ib_reps(struct mlx5_eswitch *esw);
 
 bool mlx5_eswitch_block_encap(struct mlx5_core_dev *dev);
 void mlx5_eswitch_unblock_encap(struct mlx5_core_dev *dev);
@@ -932,7 +925,7 @@ mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,
 static inline int mlx5_eswitch_get_npeers(struct mlx5_eswitch *esw) { return 0; }
 
 static inline int
-mlx5_eswitch_reload_reps(struct mlx5_eswitch *esw)
+mlx5_eswitch_reload_ib_reps(struct mlx5_eswitch *esw)
 {
 	return 0;
 }

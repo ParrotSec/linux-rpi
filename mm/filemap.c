@@ -45,6 +45,7 @@
 #include <linux/migrate.h>
 #include <linux/pipe_fs_i.h>
 #include <linux/splice.h>
+#include <linux/rcupdate_wait.h>
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -113,15 +114,24 @@
  *    ->i_pages lock		(try_to_unmap_one)
  *    ->lruvec->lru_lock	(follow_page->mark_page_accessed)
  *    ->lruvec->lru_lock	(check_pte_range->isolate_lru_page)
- *    ->private_lock		(page_remove_rmap->set_page_dirty)
- *    ->i_pages lock		(page_remove_rmap->set_page_dirty)
- *    bdi.wb->list_lock		(page_remove_rmap->set_page_dirty)
- *    ->inode->i_lock		(page_remove_rmap->set_page_dirty)
- *    ->memcg->move_lock	(page_remove_rmap->folio_memcg_lock)
+ *    ->private_lock		(folio_remove_rmap_pte->set_page_dirty)
+ *    ->i_pages lock		(folio_remove_rmap_pte->set_page_dirty)
+ *    bdi.wb->list_lock		(folio_remove_rmap_pte->set_page_dirty)
+ *    ->inode->i_lock		(folio_remove_rmap_pte->set_page_dirty)
+ *    ->memcg->move_lock	(folio_remove_rmap_pte->folio_memcg_lock)
  *    bdi.wb->list_lock		(zap_pte_range->set_page_dirty)
  *    ->inode->i_lock		(zap_pte_range->set_page_dirty)
  *    ->private_lock		(zap_pte_range->block_dirty_folio)
  */
+
+static void mapping_set_update(struct xa_state *xas,
+		struct address_space *mapping)
+{
+	if (dax_mapping(mapping) || shmem_mapping(mapping))
+		return;
+	xas_set_update(xas, workingset_update_node);
+	xas_set_lru(xas, &shadow_nodes);
+}
 
 static void page_cache_delete(struct address_space *mapping,
 				   struct folio *folio, void *shadow)
@@ -842,7 +852,7 @@ noinline int __filemap_add_folio(struct address_space *mapping,
 		struct folio *folio, pgoff_t index, gfp_t gfp, void **shadowp)
 {
 	XA_STATE(xas, &mapping->i_pages, index);
-	int huge = folio_test_hugetlb(folio);
+	bool huge = folio_test_hugetlb(folio);
 	bool charged = false;
 	long nr = 1;
 
@@ -1353,7 +1363,7 @@ void migration_entry_wait_on_locked(swp_entry_t entry, spinlock_t *ptl)
 	unsigned long pflags;
 	bool in_thrashing;
 	wait_queue_head_t *q;
-	struct folio *folio = page_folio(pfn_swap_entry_to_page(entry));
+	struct folio *folio = pfn_swap_entry_folio(entry);
 
 	q = folio_waitqueue(folio);
 	if (!folio_test_uptodate(folio) && folio_test_workingset(folio)) {
@@ -1623,7 +1633,7 @@ EXPORT_SYMBOL_GPL(__folio_lock_killable);
 static int __folio_lock_async(struct folio *folio, struct wait_page_queue *wait)
 {
 	struct wait_queue_head *q = folio_waitqueue(folio);
-	int ret = 0;
+	int ret;
 
 	wait->folio = folio;
 	wait->bit_nr = PG_locked;
@@ -1911,8 +1921,6 @@ no_page:
 			gfp_t alloc_gfp = gfp;
 
 			err = -ENOMEM;
-			if (order == 1)
-				order = 0;
 			if (order > 0)
 				alloc_gfp |= __GFP_NORETRY | __GFP_NOWARN;
 			folio = filemap_alloc_folio(alloc_gfp, order);
@@ -2173,7 +2181,7 @@ update_start:
 
 	if (nr) {
 		folio = fbatch->folios[nr - 1];
-		*start = folio->index + folio_nr_pages(folio);
+		*start = folio_next_index(folio);
 	}
 out:
 	rcu_read_unlock();
@@ -2608,15 +2616,6 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 		end_offset = min_t(loff_t, isize, iocb->ki_pos + iter->count);
 
 		/*
-		 * Pairs with a barrier in
-		 * block_write_end()->mark_buffer_dirty() or other page
-		 * dirtying routines like iomap_write_end() to ensure
-		 * changes to page contents are visible before we see
-		 * increased inode size.
-		 */
-		smp_rmb();
-
-		/*
 		 * Once we start copying data, we don't want to be touching any
 		 * cachelines that might be contended:
 		 */
@@ -2687,6 +2686,7 @@ int kiocb_write_and_wait(struct kiocb *iocb, size_t count)
 
 	return filemap_write_and_wait_range(mapping, pos, end);
 }
+EXPORT_SYMBOL_GPL(kiocb_write_and_wait);
 
 int kiocb_invalidate_pages(struct kiocb *iocb, size_t count)
 {
@@ -2714,6 +2714,7 @@ int kiocb_invalidate_pages(struct kiocb *iocb, size_t count)
 	return invalidate_inode_pages2_range(mapping, pos >> PAGE_SHIFT,
 					     end >> PAGE_SHIFT);
 }
+EXPORT_SYMBOL_GPL(kiocb_invalidate_pages);
 
 /**
  * generic_file_read_iter - generic filesystem read routine
@@ -3180,6 +3181,48 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 	return fpin;
 }
 
+static vm_fault_t filemap_fault_recheck_pte_none(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	vm_fault_t ret = 0;
+	pte_t *ptep;
+
+	/*
+	 * We might have COW'ed a pagecache folio and might now have an mlocked
+	 * anon folio mapped. The original pagecache folio is not mlocked and
+	 * might have been evicted. During a read+clear/modify/write update of
+	 * the PTE, such as done in do_numa_page()/change_pte_range(), we
+	 * temporarily clear the PTE under PT lock and might detect it here as
+	 * "none" when not holding the PT lock.
+	 *
+	 * Not rechecking the PTE under PT lock could result in an unexpected
+	 * major fault in an mlock'ed region. Recheck only for this special
+	 * scenario while holding the PT lock, to not degrade non-mlocked
+	 * scenarios. Recheck the PTE without PT lock firstly, thereby reducing
+	 * the number of times we hold PT lock.
+	 */
+	if (!(vma->vm_flags & VM_LOCKED))
+		return 0;
+
+	if (!(vmf->flags & FAULT_FLAG_ORIG_PTE_VALID))
+		return 0;
+
+	ptep = pte_offset_map(vmf->pmd, vmf->address);
+	if (unlikely(!ptep))
+		return VM_FAULT_NOPAGE;
+
+	if (unlikely(!pte_none(ptep_get_lockless(ptep)))) {
+		ret = VM_FAULT_NOPAGE;
+	} else {
+		spin_lock(vmf->ptl);
+		if (unlikely(!pte_none(ptep_get(ptep))))
+			ret = VM_FAULT_NOPAGE;
+		spin_unlock(vmf->ptl);
+	}
+	pte_unmap(ptep);
+	return ret;
+}
+
 /**
  * filemap_fault - read in file data for page fault handling
  * @vmf:	struct vm_fault containing details of the fault
@@ -3235,6 +3278,10 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 			mapping_locked = true;
 		}
 	} else {
+		ret = filemap_fault_recheck_pte_none(vmf);
+		if (unlikely(ret))
+			return ret;
+
 		/* No page in the page cache at all */
 		count_vm_event(PGMAJFAULT);
 		count_memcg_event_mm(vmf->vma->vm_mm, PGMAJFAULT);

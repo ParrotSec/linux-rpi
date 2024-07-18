@@ -1,7 +1,7 @@
 From: Frederic Weisbecker <frederic@kernel.org>
 Date: Tue, 5 Apr 2022 03:07:52 +0200
 Subject: [PATCH] tick: Fix timer storm since introduction of timersd
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.7/older/patches-6.7-rt6.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
 
 If timers are pending while the tick is reprogrammed on nohz_mode, the
 next expiry is not armed to fire now, it is delayed one jiffy forward
@@ -48,7 +48,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
 
 --- a/include/linux/interrupt.h
 +++ b/include/linux/interrupt.h
-@@ -611,9 +611,16 @@ extern void raise_softirq(unsigned int n
+@@ -614,9 +614,16 @@ extern void raise_softirq(unsigned int n
  
  #ifdef CONFIG_PREEMPT_RT
  DECLARE_PER_CPU(struct task_struct *, timersd);
@@ -65,7 +65,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
  #else
  static inline void raise_timer_softirq(void)
  {
-@@ -624,6 +631,11 @@ static inline void raise_hrtimer_softirq
+@@ -627,6 +634,11 @@ static inline void raise_hrtimer_softirq
  {
  	raise_softirq_irqoff(HRTIMER_SOFTIRQ);
  }
@@ -79,7 +79,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
  DECLARE_PER_CPU(struct task_struct *, ksoftirqd);
 --- a/kernel/softirq.c
 +++ b/kernel/softirq.c
-@@ -621,12 +621,7 @@ static inline void tick_irq_exit(void)
+@@ -626,12 +626,7 @@ static inline void tick_irq_exit(void)
  
  #ifdef CONFIG_PREEMPT_RT
  DEFINE_PER_CPU(struct task_struct *, timersd);
@@ -95,7 +95,7 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
  {
 --- a/kernel/time/tick-sched.c
 +++ b/kernel/time/tick-sched.c
-@@ -796,7 +796,7 @@ static void tick_nohz_restart(struct tic
+@@ -859,7 +859,7 @@ static void tick_nohz_restart(struct tic
  
  static inline bool local_timer_softirq_pending(void)
  {
@@ -103,4 +103,4 @@ Link: https://lkml.kernel.org/r/20220405010752.1347437-2-frederic@kernel.org
 +	return local_pending_timers() & BIT(TIMER_SOFTIRQ);
  }
  
- static ktime_t tick_nohz_next_event(struct tick_sched *ts, int cpu)
+ /*

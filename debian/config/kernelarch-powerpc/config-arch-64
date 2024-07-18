@@ -15,6 +15,8 @@ CONFIG_KERNEL_START=0xc000000000000000
 ## file: arch/powerpc/crypto/Kconfig
 ##
 CONFIG_CRYPTO_CRC32C_VPMSUM=m
+CONFIG_CRYPTO_DEV_VMX=y
+CONFIG_CRYPTO_DEV_VMX_ENCRYPT=m
 
 ##
 ## file: arch/powerpc/kvm/Kconfig
@@ -76,7 +78,6 @@ CONFIG_HW_RANDOM_POWERNV=m
 ## file: drivers/crypto/Kconfig
 ##
 CONFIG_CRYPTO_DEV_NX=y
-CONFIG_CRYPTO_DEV_VMX=y
 
 ##
 ## file: drivers/crypto/nx/Kconfig
@@ -85,11 +86,6 @@ CONFIG_CRYPTO_DEV_NX_ENCRYPT=m
 CONFIG_CRYPTO_DEV_NX_COMPRESS=m
 CONFIG_CRYPTO_DEV_NX_COMPRESS_PSERIES=m
 CONFIG_CRYPTO_DEV_NX_COMPRESS_POWERNV=m
-
-##
-## file: drivers/crypto/vmx/Kconfig
-##
-CONFIG_CRYPTO_DEV_VMX_ENCRYPT=m
 
 ##
 ## file: drivers/gpu/drm/amd/amdgpu/Kconfig

@@ -6,12 +6,6 @@
  * Copyright(c) 2020-2022 Intel Corporation. All rights reserved.
  */
 
-/* HDA Registers */
-#define MTL_PPLCLLPL_BASE		0x948
-#define MTL_PPLCLLPU_STRIDE		0x10
-#define MTL_PPLCLLPL(x)			(MTL_PPLCLLPL_BASE + (x) * MTL_PPLCLLPU_STRIDE)
-#define MTL_PPLCLLPU(x)			(MTL_PPLCLLPL_BASE + 0x4 + (x) * MTL_PPLCLLPU_STRIDE)
-
 /* DSP Registers */
 #define MTL_HFDSSCS			0x1000
 #define MTL_HFDSSCS_SPA_MASK		BIT(16)
@@ -76,8 +70,8 @@
 #define MTL_DSP_ROM_STS			MTL_SRAM_WINDOW_OFFSET(0) /* ROM status */
 #define MTL_DSP_ROM_ERROR		(MTL_SRAM_WINDOW_OFFSET(0) + 0x4) /* ROM error code */
 
-#define MTL_DSP_REG_HFFLGPXQWY		0x163200 /* ROM debug status */
-#define MTL_DSP_REG_HFFLGPXQWY_ERROR	0x163204 /* ROM debug error code */
+#define MTL_DSP_REG_HFFLGPXQWY		0x163200 /* DSP core0 status */
+#define MTL_DSP_REG_HFFLGPXQWY_ERROR	0x163204 /* DSP core0 error */
 #define MTL_DSP_REG_HfIMRIS1		0x162088
 #define MTL_DSP_REG_HfIMRIS1_IU_MASK	BIT(0)
 
@@ -103,6 +97,5 @@ int mtl_dsp_ipc_get_window_offset(struct snd_sof_dev *sdev, u32 id);
 
 void mtl_ipc_dump(struct snd_sof_dev *sdev);
 
-u64 mtl_dsp_get_stream_hda_link_position(struct snd_sof_dev *sdev,
-					 struct snd_soc_component *component,
-					 struct snd_pcm_substream *substream);
+int mtl_dsp_core_get(struct snd_sof_dev *sdev, int core);
+int mtl_dsp_core_put(struct snd_sof_dev *sdev, int core);

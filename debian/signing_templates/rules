@@ -4,6 +4,7 @@ include /usr/share/dpkg/architecture.mk
 
 SHELL := sh -e
 
+include debian/rules.defs
 
 build: build-arch build-indep
 build-arch:
@@ -11,6 +12,7 @@ build-indep:
 
 clean:
 	dh_testdir
+	rm -rf $(BUILD_DIR) $(STAMPS_DIR)
 	dh_clean
 
 binary: binary-arch binary-indep

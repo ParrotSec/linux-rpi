@@ -894,14 +894,14 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 			dev_info->ids_flags |= AMDGPU_IDS_FLAGS_CONFORMANT_TRUNC_COORD;
 
 		vm_size = adev->vm_manager.max_pfn * AMDGPU_GPU_PAGE_SIZE;
-		vm_size -= AMDGPU_VA_RESERVED_SIZE;
+		vm_size -= AMDGPU_VA_RESERVED_TOP;
 
 		/* Older VCE FW versions are buggy and can handle only 40bits */
 		if (adev->vce.fw_version &&
 		    adev->vce.fw_version < AMDGPU_VCE_FW_53_45)
 			vm_size = min(vm_size, 1ULL << 40);
 
-		dev_info->virtual_address_offset = AMDGPU_VA_RESERVED_SIZE;
+		dev_info->virtual_address_offset = AMDGPU_VA_RESERVED_BOTTOM;
 		dev_info->virtual_address_max =
 			min(vm_size, AMDGPU_GMC_HOLE_START);
 
@@ -1111,6 +1111,15 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 							   (void *)&ui32, &ui32_size)) {
 					return -EINVAL;
 				}
+			}
+			ui32 >>= 8;
+			break;
+		case AMDGPU_INFO_SENSOR_GPU_INPUT_POWER:
+			/* get input GPU power */
+			if (amdgpu_dpm_read_sensor(adev,
+						   AMDGPU_PP_SENSOR_GPU_INPUT_POWER,
+						   (void *)&ui32, &ui32_size)) {
+				return -EINVAL;
 			}
 			ui32 >>= 8;
 			break;
@@ -1370,6 +1379,10 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 			goto error_vm;
 	}
 
+	r = amdgpu_seq64_map(adev, &fpriv->vm, &fpriv->seq64_va);
+	if (r)
+		goto error_vm;
+
 	mutex_init(&fpriv->bo_list_lock);
 	idr_init_base(&fpriv->bo_list_handles, 1);
 
@@ -1432,6 +1445,8 @@ void amdgpu_driver_postclose_kms(struct drm_device *dev,
 						fpriv->csa_va, csa_addr));
 		fpriv->csa_va = NULL;
 	}
+
+	amdgpu_seq64_unmap(adev, fpriv);
 
 	pasid = fpriv->vm.pasid;
 	pd = amdgpu_bo_ref(fpriv->vm.root.bo);

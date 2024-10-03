@@ -1,5 +1,5 @@
 1039abb899e94df227cfd4de6f1f6ae0  debian/bin/gencontrol.py
-86c750008382f4120a9348d9d973c620  debian/build/version-info
+261aa2d83bcb3ce2077cfd59f12b8106  debian/build/version-info
 ba2c200f8c43f7ec8d8323561739379a  debian/config/alpha/defines.toml
 7a40edfef0ed7d44bca95972a4160696  debian/config/amd64/defines.toml
 22f6f69a5c8bf0238d090f8e06f1c037  debian/config/arm64/defines.toml
@@ -22,7 +22,7 @@ fbff991d47599c6bf2eb39809b430d0c  debian/config/mips64r6el/defines.toml
 bce18e184331a5df2f341c82a68a5412  debian/config/s390x/defines.toml
 b36eadccfa78781ed995270e3ad17a73  debian/config/sh4/defines.toml
 e6aecae3ea3f53f24605e42e76971e3f  debian/config/sparc64/defines.toml
-87f105a6fb205307cfd5ac0222706709  debian/installer/package-list
+064fc7b7612ab54e8758144c8d4a322e  debian/installer/package-list
 c06195eaf3f5d361e55133652fb46a6d  debian/templates/config.control.in
 d010dac283dad435d3bc0ef4e08f4af9  debian/templates/docs.control.in
 a1db96c9e708a9ebb7f8f097f68d79e9  debian/templates/docs.meta.control.in

@@ -16,7 +16,7 @@ Provides_mips64r6el: i2c-modules, rtc-modules, mtd-core-modules, mtd-modules
 Provides_mipsel: i2c-modules, rtc-modules, mtd-core-modules, mtd-modules
 Provides_mipsr6: i2c-modules, rtc-modules, mtd-core-modules, mtd-modules
 Provides_mipsr6el: i2c-modules, rtc-modules, mtd-core-modules, mtd-modules
-Provides_parisc64: i2c-modules, drm-core-modules
+Provides_parisc64: i2c-modules
 Provides_powerpc: i2c-modules
 Provides_powerpc64:
 Provides_riscv64: mtd-core-modules

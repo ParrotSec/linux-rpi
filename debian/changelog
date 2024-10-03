@@ -1,4 +1,4 @@
-linux (6.10.12-1parrot1) lory; urgency=medium
+linux (6.10.11-1parrot1) lory; urgency=medium
 
   * Import new Debian Unstable release.
   * Import parrot patches.
@@ -6,68 +6,6 @@ linux (6.10.12-1parrot1) lory; urgency=medium
   * Build using GCC-12.
 
  -- Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>  Thu, 03 Oct 2024 18:01:08 +0200
-
-linux (6.10.12-1) unstable; urgency=medium
-
-  * New upstream stable update:
-    https://www.kernel.org/pub/linux/kernel/v6.x/ChangeLog-6.10.12
-    - [arm64] ASoC: SOF: mediatek: Add missing board compatible
-    - [x86] ASoC: allow module autoloading for table board_ids
-    - ALSA: hda/realtek - Fixed ALC256 headphone no sound
-    - ALSA: hda/realtek - FIxed ALC285 headphone no sound
-    - scsi: lpfc: Fix overflow build issue
-    - [x86] hwmon: (asus-ec-sensors) remove VRM temp X570-E GAMING
-    - [x86] platform/x86: asus-wmi: Fix spurious rfkill on UX8406MA
-    - [x86] platform/x86: x86-android-tablets: Make Lenovo Yoga Tab 3 X90F DMI
-      match less strict
-    - [armhf] net: ftgmac100: Ensure tx descriptor updates are visible
-    - wifi: iwlwifi: lower message level for FW buffer destination
-    - wifi: iwlwifi: mvm: fix iwl_mvm_scan_fits() calculation
-    - wifi: iwlwifi: mvm: fix iwl_mvm_max_scan_ie_fw_cmd_room()
-    - wifi: iwlwifi: mvm: pause TCM when the firmware is stopped
-    - wifi: iwlwifi: mvm: don't wait for tx queues if firmware is dead
-    - wifi: mac80211: free skb on error path in ieee80211_beacon_get_ap()
-    - wifi: iwlwifi: clear trans->state earlier upon error
-    - [arm64] can: m_can: Limit coalescing to peripheral instances
-    - can: mcp251xfd: mcp251xfd_ring_init(): check TX-coalescing configuration
-    - [x86] ASoC: Intel: soc-acpi-cht: Make Lenovo Yoga Tab 3 X90F DMI match
-      less strict
-    - [x86] ASoC: intel: fix module autoloading
-    - spi: spidev: Add an entry for elgin,jg10309-01
-    - [x86] ASoC: amd: yc: Add a quirk for MSI Bravo 17 (D7VEK)
-    - ALSA: hda: add HDMI codec ID for Intel PTL
-    - smb: client: fix hang in wait_for_response() for negproto
-    - [x86] platform/x86/amd: pmf: Make ASUS GA403 quirk generic
-    - ice: check for XDP rings instead of bpf program when unconfiguring
-    - [x86] hyperv: Set X86_FEATURE_TSC_KNOWN_FREQ when Hyper-V provides
-      frequency
-    - tools: hv: rm .*.cmd when make clean
-    - spi: spidev: Add missing spi_device_id for jg10309-01
-    - ocfs2: add bounds checking to ocfs2_xattr_find_entry()
-    - ocfs2: strict bound check before memcmp in ocfs2_xattr_find_entry()
-      (CVE-2024-41016)
-    - drm: Use XArray instead of IDR for minors
-    - accel: Use XArray instead of IDR for minors
-    - drm: Expand max DRM device number to full MINORBITS
-    - [x86] powercap/intel_rapl: Add support for AMD family 1Ah
-    - [x86] powercap/intel_rapl: Fix the energy-pkg event for AMD CPUs
-    - netfilter: nft_socket: make cgroupsv2 matching work with namespaces
-    - netfilter: nft_socket: Fix a NULL vs IS_ERR() bug in
-      nft_socket_cgroup_subtree_level()
-    - Bluetooth: btintel_pcie: Allocate memory for driver private data
-      (CVE-2024-46869)
-    - nvme-pci: qdepth 1 quirk
-    - can: mcp251xfd: properly indent labels
-    - can: mcp251xfd: move mcp251xfd_timestamp_start()/stop() into
-      mcp251xfd_chip_start/stop()
-    - USB: serial: pl2303: add device id for Macrosilicon MS3020
-    - USB: usbtmc: prevent kernel-usb-infoleak
-    - [x86] powercap: intel_rapl: Change an error pointer to NULL
-
-  [ Helge Deller ]
-  * [hppa] Fix kernel build with CONFIG_DRM=y on parisc64.
-
- -- Salvatore Bonaccorso <carnil@debian.org>  Tue, 01 Oct 2024 19:08:55 +0200
 
 linux (6.10.11-1) unstable; urgency=medium
 

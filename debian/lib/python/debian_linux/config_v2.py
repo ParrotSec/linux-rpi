@@ -129,6 +129,15 @@ class ConfigBase:
     packages: ConfigPackages = dataclasses.field(default_factory=ConfigPackages)
     relations: ConfigRelations = dataclasses.field(default_factory=ConfigRelations)
 
+    # With dacite <1.8.1, the above fields are wrongly set to refer to
+    # the same object in multiple ConfigBase instances
+    # (https://github.com/konradhalas/dacite/issues/215).  This
+    # particularly affects the build field which we modify later.
+    # Work around it for now.
+    def __post_init__(self):
+        import copy
+        self.build = copy.copy(self.build)
+
     def __post_init_hierarchy__(self, path: Path) -> None:
         '''
         Setup path and default config in the complete hierarchy

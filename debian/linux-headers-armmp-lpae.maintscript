@@ -1,1 +1,1 @@
-dir_to_symlink /usr/share/doc/linux-headers-armmp-lpae linux-headers-6.10.12-armmp-lpae 5.7~rc5-1~exp1 linux-headers-armmp-lpae
+dir_to_symlink /usr/share/doc/linux-headers-armmp-lpae linux-headers-6.10.11-armmp-lpae 5.7~rc5-1~exp1 linux-headers-armmp-lpae

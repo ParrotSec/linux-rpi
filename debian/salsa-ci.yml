@@ -2,7 +2,7 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
 
 variables:
-  RELEASE: 'unstable'
+  RELEASE: 'bookworm-backports'
   # Make that build quicker
   DEB_BUILD_PROFILES: pkg.linux.quick
   # We have to bump the version in source preparation, not later

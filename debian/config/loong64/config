@@ -198,16 +198,6 @@ CONFIG_USB_OHCI_HCD_PLATFORM=m
 CONFIG_TYPEC_TCPCI=m
 
 ##
-## file: drivers/vfio/Kconfig
-##
-CONFIG_VFIO=m
-
-##
-## file: drivers/vfio/pci/Kconfig
-##
-CONFIG_VFIO_PCI=m
-
-##
 ## file: drivers/video/backlight/Kconfig
 ##
 CONFIG_LCD_CLASS_DEVICE=m

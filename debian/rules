@@ -147,7 +147,7 @@ endif
 debian/control-real: debian/bin/gencontrol.py $(CONTROL_FILES)
 # Hash randomisation makes the pickled config unreproducible
 	PYTHONHASHSEED=0 $<
-	md5sum $^ > debian/control.md5sum
+	md5sum $(sort $^) > debian/control.md5sum
 	@echo
 	@echo This target is made to fail intentionally, to make sure
 	@echo that it is NEVER run during the automated build. Please

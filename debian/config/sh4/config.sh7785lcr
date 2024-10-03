@@ -148,6 +148,7 @@ CONFIG_MTD_PHYSMAP=y
 ## file: drivers/net/Kconfig
 ##
 CONFIG_NETDEVICES=y
+# CONFIG_NETKIT is not set
 
 ##
 ## file: drivers/net/ethernet/realtek/Kconfig

@@ -237,7 +237,7 @@ class TestPackageDescription:
 
     def test_str(self) -> None:
         a = PackageDescription('Short\nLong1\n.\nLong2')
-        assert str(a) == 'Short\n Long1\n .\n Long2'
+        assert str(a) == 'Short\nLong1\n.\nLong2'
 
 
 class TestPackageRelationEntry:

@@ -1,8 +1,8 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Fri, 15 Mar 2024 15:38:22 +0000
-Subject: [PATCH 07/46] printk: nbcon: Use driver synchronization while
+Subject: [PATCH 07/48] printk: nbcon: Use driver synchronization while
  (un)registering
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Console drivers typically have to deal with access to the
 hardware via user input/output (such as an interactive login
@@ -34,22 +34,28 @@ For example, these callbacks lock/unlock the port lock for
 serial port drivers.
 
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
- kernel/printk/printk.c |   29 +++++++++++++++++++++++++++++
- 1 file changed, 29 insertions(+)
+ kernel/printk/printk.c |   33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
 
 --- a/kernel/printk/printk.c
 +++ b/kernel/printk/printk.c
-@@ -3466,6 +3466,7 @@ void register_console(struct console *ne
- 	struct console *con;
+@@ -3475,9 +3475,11 @@ static int unregister_console_locked(str
+  */
+ void register_console(struct console *newcon)
+ {
+-	struct console *con;
++	bool use_device_lock = (newcon->flags & CON_NBCON) && newcon->write_atomic;
  	bool bootcon_registered = false;
  	bool realcon_registered = false;
++	struct console *con;
 +	unsigned long flags;
  	u64 init_seq;
  	int err;
  
-@@ -3553,6 +3554,19 @@ void register_console(struct console *ne
+@@ -3565,6 +3567,19 @@ void register_console(struct console *ne
  	}
  
  	/*
@@ -62,33 +68,34 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 +	 * Use the driver synchronization to ensure that the hardware is not
 +	 * in use while this new console transitions to being registered.
 +	 */
-+	if ((newcon->flags & CON_NBCON) && newcon->write_atomic)
++	if (use_device_lock)
 +		newcon->device_lock(newcon, &flags);
 +
 +	/*
  	 * Put this console in the list - keep the
  	 * preferred driver at the head of the list.
  	 */
-@@ -3576,6 +3590,10 @@ void register_console(struct console *ne
+@@ -3588,6 +3603,10 @@ void register_console(struct console *ne
  	 * register_console() completes.
  	 */
  
 +	/* This new console is now registered. */
-+	if ((newcon->flags & CON_NBCON) && newcon->write_atomic)
++	if (use_device_lock)
 +		newcon->device_unlock(newcon, flags);
 +
  	console_sysfs_notify();
  
  	/*
-@@ -3604,6 +3622,7 @@ EXPORT_SYMBOL(register_console);
+@@ -3616,6 +3635,8 @@ EXPORT_SYMBOL(register_console);
  /* Must be called under console_list_lock(). */
  static int unregister_console_locked(struct console *console)
  {
++	bool use_device_lock = (console->flags & CON_NBCON) && console->write_atomic;
 +	unsigned long flags;
  	int res;
  
  	lockdep_assert_console_list_lock_held();
-@@ -3622,8 +3641,18 @@ static int unregister_console_locked(str
+@@ -3634,8 +3655,18 @@ static int unregister_console_locked(str
  	if (!console_is_registered_locked(console))
  		return -ENODEV;
  
@@ -96,12 +103,12 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 +	 * Use the driver synchronization to ensure that the hardware is not
 +	 * in use while this console transitions to being unregistered.
 +	 */
-+	if ((console->flags & CON_NBCON) && console->write_atomic)
++	if (use_device_lock)
 +		console->device_lock(console, &flags);
 +
  	hlist_del_init_rcu(&console->node);
  
-+	if ((console->flags & CON_NBCON) && console->write_atomic)
++	if (use_device_lock)
 +		console->device_unlock(console, flags);
 +
  	/*

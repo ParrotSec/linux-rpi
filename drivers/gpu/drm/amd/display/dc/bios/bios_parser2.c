@@ -1594,8 +1594,6 @@ static bool bios_parser_is_device_id_supported(
 		return (le16_to_cpu(bp->object_info_tbl.v1_5->supporteddevices) & mask) != 0;
 		break;
 	}
-
-	return false;
 }
 
 static uint32_t bios_parser_get_ss_entry_number(
@@ -2922,8 +2920,11 @@ static enum bp_result construct_integrated_info(
 	struct atom_common_table_header *header;
 	struct atom_data_revision revision;
 
-	uint32_t i;
-	uint32_t j;
+	int32_t i;
+	int32_t j;
+
+	if (!info)
+		return result;
 
 	if (info && DATA_TABLES(integratedsysteminfo)) {
 		header = GET_IMAGE(struct atom_common_table_header,

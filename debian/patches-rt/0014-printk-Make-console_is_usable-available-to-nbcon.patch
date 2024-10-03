@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Tue, 12 Sep 2023 13:25:41 +0000
-Subject: [PATCH 14/46] printk: Make console_is_usable() available to nbcon
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 14/48] printk: Make console_is_usable() available to nbcon
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Move console_is_usable() as-is into internal.h so that it can
 be used by nbcon printing functions as well.

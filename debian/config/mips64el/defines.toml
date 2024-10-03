@@ -25,6 +25,19 @@ hardware_long = 'MIPS Generic platform (mips64r2el)'
 installer = true
 
 [[flavour]]
+name = 'mips64r6el'
+[flavour.build]
+config = [
+  'kernelarch-mips/config.boston',
+  'kernelarch-mips/config.mips64r6',
+]
+[flavour.description]
+hardware = 'MIPS Generic (mips64r6el)'
+hardware_long = 'MIPS Generic platform (mips64r6el)'
+[flavour.packages]
+installer = true
+
+[[flavour]]
 name = 'loongson-3'
 [flavour.build]
 config = [

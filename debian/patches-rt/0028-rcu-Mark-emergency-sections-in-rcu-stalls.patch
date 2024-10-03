@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Mon, 11 Sep 2023 15:53:39 +0000
-Subject: [PATCH 28/46] rcu: Mark emergency sections in rcu stalls
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 28/48] rcu: Mark emergency sections in rcu stalls
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Mark emergency sections wherever multiple lines of
 rcu stall information are generated. In an emergency
@@ -12,6 +12,7 @@ This allows the full message block to be stored as
 quickly as possible in the ringbuffer.
 
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
  kernel/rcu/tree_exp.h   |    9 +++++++++
@@ -38,15 +39,12 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  		j = jiffies;
  		rcu_stall_notifier_call_chain(RCU_STALL_NOTIFY_EXP, (void *)(j - jiffies_start));
  		trace_rcu_stall_warning(rcu_state.name, TPS("ExpeditedStall"));
-@@ -612,6 +616,7 @@ static void synchronize_rcu_expedited_wa
+@@ -620,10 +624,14 @@ static void synchronize_rcu_expedited_wa
+ 				preempt_disable(); // For smp_processor_id() in dump_cpu_task().
+ 				dump_cpu_task(cpu);
+ 				preempt_enable();
++				nbcon_cpu_emergency_flush();
  			}
- 			pr_cont("\n");
- 		}
-+		nbcon_cpu_emergency_flush();
- 		rcu_for_each_leaf_node(rnp) {
- 			for_each_leaf_node_possible_cpu(rnp, cpu) {
- 				mask = leaf_node_cpu_bit(rnp, cpu);
-@@ -624,6 +629,9 @@ static void synchronize_rcu_expedited_wa
  			rcu_exp_print_detail_task_stall_rnp(rnp);
  		}
  		jiffies_stall = 3 * rcu_exp_jiffies_till_stall_check() + 3;
@@ -82,7 +80,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	}
  	raw_spin_unlock_irqrestore_rcu_node(rnp, flags);
  }
-@@ -522,6 +524,7 @@ static void print_cpu_stall_info(int cpu
+@@ -523,6 +525,7 @@ static void print_cpu_stall_info(int cpu
  	       falsepositive ? " (false positive?)" : "");
  
  	print_cpu_stat_info(cpu);
@@ -90,7 +88,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  }
  
  /* Complain about starvation of grace-period kthread.  */
-@@ -604,6 +607,8 @@ static void print_other_cpu_stall(unsign
+@@ -605,6 +608,8 @@ static void print_other_cpu_stall(unsign
  	if (rcu_stall_is_suppressed())
  		return;
  
@@ -99,7 +97,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	/*
  	 * OK, time to rat on our buddy...
  	 * See Documentation/RCU/stallwarn.rst for info on how to debug
-@@ -655,6 +660,8 @@ static void print_other_cpu_stall(unsign
+@@ -657,6 +662,8 @@ static void print_other_cpu_stall(unsign
  	rcu_check_gp_kthread_expired_fqs_timer();
  	rcu_check_gp_kthread_starvation();
  
@@ -108,7 +106,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	panic_on_rcu_stall();
  
  	rcu_force_quiescent_state();  /* Kick them all. */
-@@ -675,6 +682,8 @@ static void print_cpu_stall(unsigned lon
+@@ -677,6 +684,8 @@ static void print_cpu_stall(unsigned lon
  	if (rcu_stall_is_suppressed())
  		return;
  
@@ -117,7 +115,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	/*
  	 * OK, time to rat on ourselves...
  	 * See Documentation/RCU/stallwarn.rst for info on how to debug
-@@ -703,6 +712,8 @@ static void print_cpu_stall(unsigned lon
+@@ -706,6 +715,8 @@ static void print_cpu_stall(unsigned lon
  			   jiffies + 3 * rcu_jiffies_till_stall_check() + 3);
  	raw_spin_unlock_irqrestore_rcu_node(rnp, flags);
  

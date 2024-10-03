@@ -90,22 +90,22 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 static u32 dp_panel_get_supported_bpp(struct dp_panel *dp_panel,
 		u32 mode_edid_bpp, u32 mode_pclk_khz)
 {
-	struct dp_link_info *link_info;
+	const struct dp_link_info *link_info;
 	const u32 max_supported_bpp = 30, min_supported_bpp = 18;
-	u32 bpp = 0, data_rate_khz = 0;
+	u32 bpp, data_rate_khz;
 
-	bpp = min_t(u32, mode_edid_bpp, max_supported_bpp);
+	bpp = min(mode_edid_bpp, max_supported_bpp);
 
 	link_info = &dp_panel->link_info;
 	data_rate_khz = link_info->num_lanes * link_info->rate * 8;
 
-	while (bpp > min_supported_bpp) {
+	do {
 		if (mode_pclk_khz * bpp <= data_rate_khz)
-			break;
+			return bpp;
 		bpp -= 6;
-	}
+	} while (bpp > min_supported_bpp);
 
-	return bpp;
+	return min_supported_bpp;
 }
 
 static int dp_panel_update_modes(struct drm_connector *connector,
@@ -353,6 +353,10 @@ int dp_panel_timing_cfg(struct dp_panel *dp_panel)
 	struct dp_catalog *catalog;
 	struct dp_panel_private *panel;
 	struct drm_display_mode *drm_mode;
+	u32 width_blanking;
+	u32 sync_start;
+	u32 dp_active;
+	u32 total;
 
 	panel = container_of(dp_panel, struct dp_panel_private, dp_panel);
 	catalog = panel->catalog;
@@ -376,13 +380,13 @@ int dp_panel_timing_cfg(struct dp_panel *dp_panel)
 	data <<= 16;
 	data |= total_hor;
 
-	catalog->total = data;
+	total = data;
 
 	data = (drm_mode->vtotal - drm_mode->vsync_start);
 	data <<= 16;
 	data |= (drm_mode->htotal - drm_mode->hsync_start);
 
-	catalog->sync_start = data;
+	sync_start = data;
 
 	data = drm_mode->vsync_end - drm_mode->vsync_start;
 	data <<= 16;
@@ -390,15 +394,15 @@ int dp_panel_timing_cfg(struct dp_panel *dp_panel)
 	data |= drm_mode->hsync_end - drm_mode->hsync_start;
 	data |= (panel->dp_panel.dp_mode.h_active_low << 15);
 
-	catalog->width_blanking = data;
+	width_blanking = data;
 
 	data = drm_mode->vdisplay;
 	data <<= 16;
 	data |= drm_mode->hdisplay;
 
-	catalog->dp_active = data;
+	dp_active = data;
 
-	dp_catalog_panel_timing_cfg(catalog);
+	dp_catalog_panel_timing_cfg(catalog, total, sync_start, width_blanking, dp_active);
 
 	if (dp_panel->dp_mode.out_fmt_is_yuv_420)
 		dp_panel_setup_vsc_sdp_yuv_420(dp_panel);
@@ -438,8 +442,9 @@ int dp_panel_init_panel_info(struct dp_panel *dp_panel)
 				drm_mode->clock);
 	drm_dbg_dp(panel->drm_dev, "bpp = %d\n", dp_panel->dp_mode.bpp);
 
-	dp_panel->dp_mode.bpp = max_t(u32, 18,
-				min_t(u32, dp_panel->dp_mode.bpp, 30));
+	dp_panel->dp_mode.bpp = dp_panel_get_mode_bpp(dp_panel, dp_panel->dp_mode.bpp,
+						      dp_panel->dp_mode.drm_mode.clock);
+
 	drm_dbg_dp(panel->drm_dev, "updated bpp = %d\n",
 				dp_panel->dp_mode.bpp);
 

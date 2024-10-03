@@ -420,6 +420,7 @@ void dmub_dcn35_enable_dmub_boot_options(struct dmub_srv *dmub, const struct dmu
 	boot_options.bits.disable_clk_ds = params->disallow_dispclk_dppclk_ds;
 	boot_options.bits.disable_clk_gate = params->disable_clock_gate;
 	boot_options.bits.ips_disable = params->disable_ips;
+	boot_options.bits.ips_sequential_ono = params->ips_sequential_ono;
 
 	REG_WRITE(DMCUB_SCRATCH14, boot_options.all);
 }
@@ -458,7 +459,7 @@ uint32_t dmub_dcn35_get_current_time(struct dmub_srv *dmub)
 void dmub_dcn35_get_diagnostic_data(struct dmub_srv *dmub, struct dmub_diagnostic_data *diag_data)
 {
 	uint32_t is_dmub_enabled, is_soft_reset, is_sec_reset;
-	uint32_t is_traceport_enabled, is_cw0_enabled, is_cw6_enabled;
+	uint32_t is_traceport_enabled, is_cw6_enabled;
 
 	if (!dmub || !diag_data)
 		return;
@@ -509,13 +510,11 @@ void dmub_dcn35_get_diagnostic_data(struct dmub_srv *dmub, struct dmub_diagnosti
 	REG_GET(DMCUB_CNTL, DMCUB_TRACEPORT_EN, &is_traceport_enabled);
 	diag_data->is_traceport_en  = is_traceport_enabled;
 
-	REG_GET(DMCUB_REGION3_CW0_TOP_ADDRESS, DMCUB_REGION3_CW0_ENABLE, &is_cw0_enabled);
-	diag_data->is_cw0_enabled = is_cw0_enabled;
-
 	REG_GET(DMCUB_REGION3_CW6_TOP_ADDRESS, DMCUB_REGION3_CW6_ENABLE, &is_cw6_enabled);
 	diag_data->is_cw6_enabled = is_cw6_enabled;
 
 	diag_data->gpint_datain0 = REG_READ(DMCUB_GPINT_DATAIN0);
+	diag_data->timeout_info = dmub->debug;
 }
 void dmub_dcn35_configure_dmub_in_system_memory(struct dmub_srv *dmub)
 {

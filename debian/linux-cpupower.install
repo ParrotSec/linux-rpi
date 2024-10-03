@@ -1,4 +1,2 @@
-#!/usr/bin/dh-exec
 usr/bin
-[i386 amd64 x32] usr/sbin
 usr/share/

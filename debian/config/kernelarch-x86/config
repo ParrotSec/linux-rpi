@@ -589,7 +589,7 @@ CONFIG_DRM_AST=m
 ##
 ## file: drivers/gpu/drm/display/Kconfig
 ##
-CONFIG_DRM_DP_CEC=y
+CONFIG_DRM_DISPLAY_DP_AUX_CEC=y
 
 ##
 ## file: drivers/gpu/drm/gma500/Kconfig
@@ -1485,6 +1485,7 @@ CONFIG_THINKPAD_ACPI_ALSA_SUPPORT=y
 CONFIG_THINKPAD_ACPI_VIDEO=y
 CONFIG_THINKPAD_ACPI_HOTKEY_POLL=y
 CONFIG_THINKPAD_LMI=m
+CONFIG_MSI_EC=m
 CONFIG_MSI_LAPTOP=m
 CONFIG_MSI_WMI=m
 CONFIG_PCENGINES_APU2=m
@@ -1721,11 +1722,6 @@ CONFIG_RTS5208=m
 CONFIG_VT6656=m
 
 ##
-## file: drivers/staging/wlan-ng/Kconfig
-##
-CONFIG_PRISM2_USB=m
-
-##
 ## file: drivers/thermal/Kconfig
 ##
 CONFIG_THERMAL=y
@@ -1861,14 +1857,8 @@ CONFIG_TYPEC_FUSB302=m
 CONFIG_TYPEC_TPS6598X=m
 
 ##
-## file: drivers/vfio/Kconfig
-##
-CONFIG_VFIO=m
-
-##
 ## file: drivers/vfio/pci/Kconfig
 ##
-CONFIG_VFIO_PCI=m
 CONFIG_VFIO_PCI_VGA=y
 
 ##
@@ -2186,6 +2176,7 @@ CONFIG_SND_SOC_INTEL_AVS=m
 CONFIG_SND_SOC_INTEL_AVS_MACH_DA7219=m
 CONFIG_SND_SOC_INTEL_AVS_MACH_DMIC=m
 CONFIG_SND_SOC_INTEL_AVS_MACH_HDAUDIO=m
+CONFIG_SND_SOC_INTEL_AVS_MACH_MAX98927=m
 #. Apparently burns speakers on high volumes on some Chromebooks
 # CONFIG_SND_SOC_INTEL_AVS_MACH_MAX98357A is not set
 CONFIG_SND_SOC_INTEL_AVS_MACH_MAX98373=m

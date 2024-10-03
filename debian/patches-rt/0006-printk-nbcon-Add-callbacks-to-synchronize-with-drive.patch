@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Mon, 18 Mar 2024 10:11:56 +0000
-Subject: [PATCH 06/46] printk: nbcon: Add callbacks to synchronize with driver
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 06/48] printk: nbcon: Add callbacks to synchronize with driver
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Console drivers typically must deal with access to the hardware
 via user input/output (such as an interactive login shell) and
@@ -12,19 +12,20 @@ serial consoles).
 
 Until now, usage of this driver-specific locking has been hidden
 from the printk-subsystem and implemented within the various
-console callbacks. However, for nbcon consoles, it is necessary
-that the printk-subsystem uses the driver-specific locking so
-that nbcon console ownership can be acquired _after_ the
-driver-specific locking has succeeded. This allows for lock
-contention to exist on the more context-friendly driver-specific
-locking rather than nbcon console ownership (for non-emergency
-and non-panic cases).
+console callbacks. However, nbcon consoles would need to use it
+even in the generic code.
 
-Require nbcon consoles to implement two new callbacks
-(device_lock(), device_unlock()) that will use whatever
-synchronization mechanism the driver is using for itself.
+Add device_lock() and device_unlock() callback which will need
+to get implemented by nbcon consoles.
+
+The callbacks will use whatever synchronization mechanism the
+driver is using for itself. The minimum requirement is to
+prevent CPU migration. It would allow a context friendly
+acquiring of nbcon console ownership in non-emergency and
+non-panic context.
 
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
  include/linux/console.h |   43 +++++++++++++++++++++++++++++++++++++++++++

@@ -9,7 +9,7 @@ class FirmwareFile(object):
         self.version = version
 
 
-class FirmwareSection(object):
+class FirmwareGroup(object):
     def __init__(self, driver, files, licence) -> None:
         self.driver = driver
         self.files = files
@@ -19,6 +19,12 @@ class FirmwareSection(object):
 class FirmwareWhence(list):
     def __init__(self, file) -> None:
         self.read(file)
+
+    @staticmethod
+    def _unquote(name):
+        if len(name) >= 3 and name[0] == '"' and name[-1] == '"':
+            name = name[1:-1]
+        return name
 
     def read(self, file) -> None:
         in_header = True
@@ -35,9 +41,9 @@ class FirmwareWhence(list):
                 if in_header:
                     in_header = False
                 else:
-                    # Finish old section
-                    if driver:
-                        self.append(FirmwareSection(driver, files, licence))
+                    # Finish old group
+                    if driver and files:
+                        self.append(FirmwareGroup(driver, files, licence))
                     driver = None
                     files = {}
                     licence = None
@@ -61,21 +67,27 @@ class FirmwareWhence(list):
                 continue
 
             match = re.match(
-                r'(Driver|File|Info|Licen[cs]e|Source|Version'
+                r'(Driver|(?:Raw)?File|Info|Licen[cs]e|Source|Version'
                 r'|Original licen[cs]e info(?:rmation)?):\s*(.*)\n',
                 line)
             if match:
+                # If we've seen a license for the previous group,
+                # start a new group
+                if licence:
+                    self.append(FirmwareGroup(driver, files, licence))
+                    files = {}
+                    licence = None
                 keyword, value = match.group(1, 2)
                 if keyword == 'Driver':
                     driver = value.split(' ')[0].lower()
-                elif keyword == 'File':
-                    match = re.match(r'(\S+)(?:\s+--\s+(.*))?', value)
-                    binary.append(match.group(1))
+                elif keyword in ['File', 'RawFile']:
+                    match = re.match(r'("[^"\n]+"|\S+)(?:\s+--\s+(.*))?', value)
+                    binary.append(self._unquote(match.group(1)))
                     desc = match.group(2)
                 elif keyword in ['Info', 'Version']:
                     version = value
                 elif keyword == 'Source':
-                    source.append(value)
+                    source.append(self._unquote(value))
                 else:
                     licence = value
             elif licence is not None:
@@ -83,8 +95,8 @@ class FirmwareWhence(list):
                            + re.sub(r'^(?:[/ ]\*| \*/)?\s*(.*?)\s*$', r'\1',
                                     line))
 
-        # Finish last section if non-empty
+        # Finish last group if non-empty
         for b in binary:
             files[b] = FirmwareFile(b, desc, source, version)
         if driver:
-            self.append(FirmwareSection(driver, files, licence))
+            self.append(FirmwareGroup(driver, files, licence))

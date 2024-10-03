@@ -1,0 +1,1 @@
+linux-image-arm64-16k-dbg: wrong-section-according-to-package-name linux-image-arm64-16k-dbg => debug

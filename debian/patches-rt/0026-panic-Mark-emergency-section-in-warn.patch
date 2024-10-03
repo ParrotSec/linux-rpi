@@ -1,7 +1,7 @@
 From: Thomas Gleixner <tglx@linutronix.de>
 Date: Mon, 11 Sep 2023 15:53:04 +0000
-Subject: [PATCH 26/46] panic: Mark emergency section in warn
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 26/48] panic: Mark emergency section in warn
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Mark the full contents of __warn() as an emergency section. In
 this section, the CPU will not perform console output for the
@@ -19,7 +19,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/kernel/panic.c
 +++ b/kernel/panic.c
-@@ -671,6 +671,8 @@ struct warn_args {
+@@ -670,6 +670,8 @@ struct warn_args {
  void __warn(const char *file, int line, void *caller, unsigned taint,
  	    struct pt_regs *regs, struct warn_args *args)
  {
@@ -28,7 +28,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	disable_trace_on_warning();
  
  	if (file)
-@@ -706,6 +708,8 @@ void __warn(const char *file, int line,
+@@ -705,6 +707,8 @@ void __warn(const char *file, int line,
  
  	/* Just a warning, don't kill lockdep. */
  	add_taint(taint, LOCKDEP_STILL_OK);

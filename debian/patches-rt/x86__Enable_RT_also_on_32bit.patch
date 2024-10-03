@@ -1,7 +1,7 @@
 Subject: x86: Enable RT also on 32bit
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Thu Nov  7 17:49:20 2019 +0100
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
@@ -15,7 +15,7 @@ Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
 ---
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
-@@ -121,6 +121,7 @@ config X86
+@@ -123,6 +123,7 @@ config X86
  	select ARCH_USES_CFI_TRAPS		if X86_64 && CFI_CLANG
  	select ARCH_SUPPORTS_LTO_CLANG
  	select ARCH_SUPPORTS_LTO_CLANG_THIN

@@ -4320,9 +4320,16 @@ brcmf_pmksa_v3_op(struct brcmf_if *ifp, struct cfg80211_pmksa *pmksa,
 		/* Single PMK operation */
 		pmk_op->count = cpu_to_le16(1);
 		length += sizeof(struct brcmf_pmksa_v3);
-		memcpy(pmk_op->pmk[0].bssid, pmksa->bssid, ETH_ALEN);
-		memcpy(pmk_op->pmk[0].pmkid, pmksa->pmkid, WLAN_PMKID_LEN);
-		pmk_op->pmk[0].pmkid_len = WLAN_PMKID_LEN;
+		if (pmksa->bssid)
+			memcpy(pmk_op->pmk[0].bssid, pmksa->bssid, ETH_ALEN);
+		if (pmksa->pmkid) {
+			memcpy(pmk_op->pmk[0].pmkid, pmksa->pmkid, WLAN_PMKID_LEN);
+			pmk_op->pmk[0].pmkid_len = WLAN_PMKID_LEN;
+		}
+		if (pmksa->ssid && pmksa->ssid_len) {
+			memcpy(pmk_op->pmk[0].ssid.SSID, pmksa->ssid, pmksa->ssid_len);
+			pmk_op->pmk[0].ssid.SSID_len = pmksa->ssid_len;
+		}
 		pmk_op->pmk[0].time_left = cpu_to_le32(alive ? BRCMF_PMKSA_NO_EXPIRY : 0);
 	}
 
@@ -4549,7 +4556,7 @@ brcmf_configure_wpaie(struct brcmf_if *ifp,
 
 	if (!brcmf_valid_wpa_oui(&data[offset], is_rsn_ie)) {
 		err = -EINVAL;
-		bphy_err(drvr, "ivalid OUI\n");
+		bphy_err(drvr, "invalid OUI\n");
 		goto exit;
 	}
 	offset += TLV_OUI_LEN;
@@ -4588,7 +4595,7 @@ brcmf_configure_wpaie(struct brcmf_if *ifp,
 	for (i = 0; i < count; i++) {
 		if (!brcmf_valid_wpa_oui(&data[offset], is_rsn_ie)) {
 			err = -EINVAL;
-			bphy_err(drvr, "ivalid OUI\n");
+			bphy_err(drvr, "invalid OUI\n");
 			goto exit;
 		}
 		offset += TLV_OUI_LEN;
@@ -4622,7 +4629,7 @@ brcmf_configure_wpaie(struct brcmf_if *ifp,
 	for (i = 0; i < count; i++) {
 		if (!brcmf_valid_wpa_oui(&data[offset], is_rsn_ie)) {
 			err = -EINVAL;
-			bphy_err(drvr, "ivalid OUI\n");
+			bphy_err(drvr, "invalid OUI\n");
 			goto exit;
 		}
 		offset += TLV_OUI_LEN;

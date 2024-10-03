@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Tue, 19 Sep 2023 17:07:34 +0000
-Subject: [PATCH 27/46] panic: Mark emergency section in oops
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 27/48] panic: Mark emergency section in oops
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Mark an emergency section beginning with oops_enter() until the
 end of oops_exit(). In this section, the CPU will not perform
@@ -22,7 +22,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/kernel/panic.c
 +++ b/kernel/panic.c
-@@ -638,6 +638,7 @@ bool oops_may_print(void)
+@@ -637,6 +637,7 @@ bool oops_may_print(void)
   */
  void oops_enter(void)
  {
@@ -30,7 +30,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	tracing_off();
  	/* can't trust the integrity of the kernel anymore: */
  	debug_locks_off();
-@@ -660,6 +661,7 @@ void oops_exit(void)
+@@ -659,6 +660,7 @@ void oops_exit(void)
  {
  	do_oops_enter_exit();
  	print_oops_end_marker();

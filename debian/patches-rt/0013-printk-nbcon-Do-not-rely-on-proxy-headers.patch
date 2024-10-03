@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Mon, 19 Feb 2024 17:35:49 +0000
-Subject: [PATCH 13/46] printk: nbcon: Do not rely on proxy headers
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 13/48] printk: nbcon: Do not rely on proxy headers
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 The headers kernel.h, serial_core.h, and console.h allow for the
 definitions of many types and functions from other headers.

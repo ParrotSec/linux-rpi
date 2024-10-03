@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Tue, 12 Sep 2023 13:45:33 +0000
-Subject: [PATCH 16/46] printk: Add @flags argument for console_is_usable()
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 16/48] printk: Add @flags argument for console_is_usable()
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 The caller of console_is_usable() usually needs @console->flags
 for its own checks. Rather than having console_is_usable() read
@@ -56,7 +56,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  				continue;
  			any_usable = true;
  
-@@ -3838,7 +3839,7 @@ static bool __pr_flush(struct console *c
+@@ -3852,7 +3853,7 @@ static bool __pr_flush(struct console *c
  			 * that they make forward progress, so only increment
  			 * @diff for usable consoles.
  			 */

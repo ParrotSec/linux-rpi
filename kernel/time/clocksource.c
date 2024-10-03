@@ -246,7 +246,7 @@ static enum wd_read_status cs_watchdog_read(struct clocksource *cs, u64 *csnow, 
 
 		wd_delay = cycles_to_nsec_safe(watchdog, *wdnow, wd_end);
 		if (wd_delay <= WATCHDOG_MAX_SKEW) {
-			if (nretries > 1 || nretries >= max_retries) {
+			if (nretries > 1 && nretries >= max_retries) {
 				pr_warn("timekeeping watchdog on CPU%d: %s retried %d times before success\n",
 					smp_processor_id(), watchdog->name, nretries);
 			}
@@ -1334,7 +1334,7 @@ static ssize_t current_clocksource_show(struct device *dev,
 	ssize_t count = 0;
 
 	mutex_lock(&clocksource_mutex);
-	count = snprintf(buf, PAGE_SIZE, "%s\n", curr_clocksource->name);
+	count = sysfs_emit(buf, "%s\n", curr_clocksource->name);
 	mutex_unlock(&clocksource_mutex);
 
 	return count;

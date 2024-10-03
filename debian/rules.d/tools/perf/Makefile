@@ -10,11 +10,6 @@ MAKE_PERF += feature-jvmti=0
 
 MAKE_PERF += perfexecdir=lib/perf-core plugindir=/usr/lib/traceevent/plugins tipdir=share/doc/linux-perf perf_include_dir=include/perf perf_examples_dir=share/doc/linux-perf/examples
 
-# perf can link against libdebuginfod if available, but the result is
-# undistributable for the same reason.  Override detection of
-# libdebuginfod.
-MAKE_PERF += NO_LIBDEBUGINFOD=1
-
 # perf can link against libcrypto if available, but the result is
 # undistributable as GPL v2 and Apache 2.0 are not compatible without
 # an explicit exception.  Override detection of libcrypto.
@@ -50,7 +45,7 @@ ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
 	+$(MAKE_PERF) -C $(top_srcdir)/tools/perf/Documentation man
 endif
 # Check that perf didn't get linked against incompatibly-licensed libraries
-	@if readelf -d $(CURDIR)/perf | sed -rne 's/.*NEEDED.*\[(.*)\]/\1/p' | grep -E '\blib(bfd|crypto|debuginfod)'; then \
+	@if readelf -d $(CURDIR)/perf | sed -rne 's/.*NEEDED.*\[(.*)\]/\1/p' | grep -E '\blib(bfd|crypto)'; then \
 		echo; \
 		echo 'perf linked against incompatibly-licensed libraries'; \
 		echo; \

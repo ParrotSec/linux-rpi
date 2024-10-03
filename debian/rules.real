@@ -154,6 +154,7 @@ endif
 	echo 'DEBIAN_KERNEL_NO_CC_VERSION_CHECK = y' >> '$(DIR)/.kernelvariables'
 	+$(MAKE_CLEAN) -C '$(SOURCE_DIR)' O='$(CURDIR)/$(DIR)' listnewconfig
 	+yes "" | $(MAKE_CLEAN) -C '$(SOURCE_DIR)' O='$(CURDIR)/$(DIR)' oldconfig >/dev/null
+	debian/bin/buildcheck.py $(DIR) $(ARCH) $(FEATURESET) $(FLAVOUR) setup
 	@$(stamp)
 
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): SOURCE_DIR=$(BUILD_DIR)/source_$(FEATURESET)
@@ -162,17 +163,7 @@ $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): $(STAMPS_DIR)/setup_$(ARCH
 
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR):
 	+$(MAKE_CLEAN) -C '$(DIR)'
-
-	mkdir -p $(DIR)/tools/bpf/bpftool
-	+$(MAKE_CLEAN) -C '$(SOURCE_DIR)/tools/bpf/bpftool' O=$(DIR)/tools/bpf/bpftool CROSS_COMPILE= FEATURE_TESTS= FEATURE_DISPLAY=
-
-	if grep -q CONFIG_DEBUG_INFO_BTF=y $(DIR)/.config; then \
-		$(DIR)/tools/bpf/bpftool/bpftool btf dump file $(DIR)/vmlinux format c > $(DIR)/vmlinux.h; \
-	else \
-		echo '#error "Kernel build without CONFIG_DEBUG_INFO_BTF, no type info available"' > $(DIR)/vmlinux.h; \
-	fi
-
-	debian/bin/buildcheck.py $(DIR) $(ARCH) $(FEATURESET) $(FLAVOUR)
+	debian/bin/buildcheck.py $(DIR) $(ARCH) $(FEATURESET) $(FLAVOUR) build
 	@$(stamp)
 
 $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): REAL_VERSION = $(ABINAME)$(LOCALVERSION)
@@ -189,8 +180,6 @@ endif
 ifneq ($(filter arm64 armel armhf mipsel mips64el mipsr6 mipsr6el mips64r6 mips64r6el riscv64,$(ARCH)),)
 	+$(MAKE_CLEAN) -C $(DIR) dtbs
 	+$(MAKE_CLEAN) -C $(DIR) dtbs_install INSTALL_DTBS_PATH='$(CURDIR)/$(DT_INSTALL_DIR)'
-	# dtbs_install sets the executable bit on dtb[o] files, which they shouldn't have
-	find $(DT_INSTALL_DIR) -type f \( -name '*.dtb' -o -name '*.dtbo' \) -exec chmod 644 {} \;
 endif
 	rm -f $(INSTALL_DIR)/lib/modules/$(REAL_VERSION)/build
 	rm -f $(INSTALL_DIR)/lib/modules/$(REAL_VERSION)/source
@@ -323,7 +312,7 @@ binary_headers: $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 	$(dh_binary_pre)
 
 	mkdir -p $(DIR)/arch/$(KERNEL_ARCH)/kernel
-	cp -a $(SOURCE_DIR)/{.config,.kernel*,Module.symvers,include,vmlinux.h} $(DIR)
+	cp -a $(SOURCE_DIR)/{.config,.kernel*,Module.symvers,include} $(DIR)
 	cp -a $(SOURCE_DIR)/arch/$(KERNEL_ARCH)/include $(DIR)/arch/$(KERNEL_ARCH)
 	find $(DIR) -name '*.cmd' -delete
 
@@ -369,6 +358,23 @@ binary_libc-dev: $(STAMPS_DIR)/build_libc-dev
 		dh_link --all $$(find $(DIR)/usr/lib/linux/uapi/$$KERNELARCH/asm -type f -name '*.h' -printf "usr/lib/linux/uapi/$$KERNELARCH/asm/%P usr/include/$$MULTIARCH/asm/%P\\n");  \
 	done
 
+	$(dh_binary_post)
+
+build_bpf-dev: SOURCE_DIR=$(BUILD_DIR)/source_$(FEATURESET)
+build_bpf-dev: DIR=$(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+build_bpf-dev: $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+	mkdir -p $(DIR)/tools/bpf/bpftool
+	+$(MAKE_CLEAN) -C '$(SOURCE_DIR)/tools/bpf/bpftool' O=$(CURDIR)/$(DIR)/tools/bpf/bpftool CROSS_COMPILE= FEATURE_TESTS= FEATURE_DISPLAY=
+
+	if grep -q CONFIG_DEBUG_INFO_BTF=y $(DIR)/.config; then \
+		$(DIR)/tools/bpf/bpftool/bpftool btf dump file $(DIR)/vmlinux format c > $(DIR)/vmlinux.h; \
+	else \
+		echo '#error "Kernel build without CONFIG_DEBUG_INFO_BTF, no type info available"' > $(DIR)/vmlinux.h; \
+	fi
+
+binary_bpf-dev: DH_INSTALL_ARGS = --sourcedir=$(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+binary_bpf-dev: build_bpf-dev
+	$(dh_binary_pre)
 	$(dh_binary_post)
 
 build_support:
@@ -654,7 +660,7 @@ build_hyperv-daemons: $(STAMPS_DIR)/build-tools-headers
 binary_hyperv-daemons: build_hyperv-daemons
 	$(dh_binary_pre)
 	$(call make-tools,tools/hv) install
-	for service in fcopy kvp vss; do \
+	for service in kvp vss; do \
 		dh_installsystemd --name hv-$$service-daemon --no-enable --no-start \
 			|| break; \
 		dh_installinit --name hv-$$service-daemon \

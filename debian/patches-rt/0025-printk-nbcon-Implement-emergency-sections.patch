@@ -1,7 +1,7 @@
 From: Thomas Gleixner <tglx@linutronix.de>
 Date: Mon, 11 Sep 2023 15:21:57 +0000
-Subject: [PATCH 25/46] printk: nbcon: Implement emergency sections
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 25/48] printk: nbcon: Implement emergency sections
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 In emergency situations (something has gone wrong but the
 system continues to operate), usually important information
@@ -26,8 +26,8 @@ Do not print if the current CPU is in an emergency state.
 
 When exiting all emergency nesting, flush nbcon consoles
 directly using their atomic callback. Legacy consoles are
-triggered for flushing via irq_work because it is not known
-if the context was safe for a trylock on the console lock.
+flushed directly if safe, otherwise they are triggered for
+flushing via irq_work.
 
 Note that the emergency state is not system-wide. While one CPU
 is in an emergency state, another CPU may continue to print
@@ -36,13 +36,15 @@ console messages.
 Co-developed-by: John Ogness <john.ogness@linutronix.de>
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
 Signed-off-by: Thomas Gleixner (Intel) <tglx@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
- include/linux/console.h  |    6 ++
- kernel/printk/internal.h |   11 ++++
- kernel/printk/nbcon.c    |  116 +++++++++++++++++++++++++++++++++++++++++++++++
- kernel/printk/printk.c   |   25 +++++-----
- 4 files changed, 146 insertions(+), 12 deletions(-)
+ include/linux/console.h     |    6 ++
+ kernel/printk/internal.h    |   13 ++++
+ kernel/printk/nbcon.c       |  126 ++++++++++++++++++++++++++++++++++++++++++++
+ kernel/printk/printk.c      |   25 ++++----
+ kernel/printk/printk_safe.c |   11 +++
+ 5 files changed, 168 insertions(+), 13 deletions(-)
 
 --- a/include/linux/console.h
 +++ b/include/linux/console.h
@@ -65,7 +67,16 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  static inline bool nbcon_exit_unsafe(struct nbcon_write_context *wctxt) { return false; }
 --- a/kernel/printk/internal.h
 +++ b/kernel/printk/internal.h
-@@ -153,6 +153,17 @@ static inline bool console_is_usable(str
+@@ -76,6 +76,8 @@ bool printk_percpu_data_ready(void);
+ 
+ void defer_console_output(void);
+ 
++bool is_printk_deferred(void);
++
+ u16 printk_parse_prefix(const char *text, int *level,
+ 			enum printk_info_flags *flags);
+ void console_lock_spinning_enable(void);
+@@ -153,6 +155,17 @@ static inline bool console_is_usable(str
  
  #endif /* CONFIG_PRINTK */
  
@@ -131,7 +142,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	return NBCON_PRIO_NORMAL;
  }
  
-@@ -1200,6 +1229,93 @@ void nbcon_atomic_flush_unsafe(void)
+@@ -1207,6 +1236,103 @@ void nbcon_atomic_flush_unsafe(void)
  }
  
  /**
@@ -182,13 +193,23 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 +	 */
 +	if (*cpu_emergency_nesting == 1) {
 +		nbcon_atomic_flush_pending();
++
++		/*
++		 * Safely attempt to flush the legacy consoles in this
++		 * context. Otherwise an irq_work context is triggered
++		 * to handle it.
++		 */
 +		do_trigger_flush = true;
++		if (printing_via_unlock && !is_printk_deferred()) {
++			if (console_trylock()) {
++				do_trigger_flush = false;
++				console_unlock();
++			}
++		}
 +	}
 +
-+	(*cpu_emergency_nesting)--;
-+
-+	if (WARN_ON_ONCE(*cpu_emergency_nesting < 0))
-+		*cpu_emergency_nesting = 0;
++	if (!WARN_ON_ONCE(*cpu_emergency_nesting == 0))
++		(*cpu_emergency_nesting)--;
 +
 +	preempt_enable();
 +
@@ -215,7 +236,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 +
 +	nbcon_atomic_flush_pending();
 +
-+	if (printing_via_unlock && !in_nmi()) {
++	if (printing_via_unlock && !is_printk_deferred()) {
 +		if (console_trylock())
 +			console_unlock();
 +	}
@@ -281,3 +302,30 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  		preempt_enable();
  	}
  
+--- a/kernel/printk/printk_safe.c
++++ b/kernel/printk/printk_safe.c
+@@ -38,6 +38,15 @@ void __printk_deferred_exit(void)
+ 	__printk_safe_exit();
+ }
+ 
++bool is_printk_deferred(void)
++{
++	/*
++	 * The per-CPU variable @printk_context can be read safely in any
++	 * context. The CPU migration always disabled when set.
++	 */
++	return (this_cpu_read(printk_context) || in_nmi());
++}
++
+ asmlinkage int vprintk(const char *fmt, va_list args)
+ {
+ #ifdef CONFIG_KGDB_KDB
+@@ -50,7 +59,7 @@ asmlinkage int vprintk(const char *fmt,
+ 	 * Use the main logbuf even in NMI. But avoid calling console
+ 	 * drivers that might have their own locks.
+ 	 */
+-	if (this_cpu_read(printk_context) || in_nmi())
++	if (is_printk_deferred())
+ 		return vprintk_deferred(fmt, args);
+ 
+ 	/* No obstacles. */

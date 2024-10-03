@@ -23,6 +23,7 @@
 #include "io_uring.h"
 
 #define WORKER_IDLE_TIMEOUT	(5 * HZ)
+#define WORKER_INIT_LIMIT	3
 
 enum {
 	IO_WORKER_F_UP		= 0,	/* up and active */
@@ -52,13 +53,13 @@ struct io_worker {
 	struct io_wq *wq;
 
 	struct io_wq_work *cur_work;
-	struct io_wq_work *next_work;
 	raw_spinlock_t lock;
 
 	struct completion ref_done;
 
 	unsigned long create_state;
 	struct callback_head create_work;
+	int init_retries;
 
 	union {
 		struct rcu_head rcu;
@@ -539,7 +540,6 @@ static void io_assign_current_work(struct io_worker *worker,
 
 	raw_spin_lock(&worker->lock);
 	worker->cur_work = work;
-	worker->next_work = NULL;
 	raw_spin_unlock(&worker->lock);
 }
 
@@ -573,7 +573,7 @@ static void io_worker_handle_work(struct io_wq_acct *acct,
 			 * current work item for this worker.
 			 */
 			raw_spin_lock(&worker->lock);
-			worker->next_work = work;
+			worker->cur_work = work;
 			raw_spin_unlock(&worker->lock);
 		}
 
@@ -746,13 +746,15 @@ static bool io_wq_work_match_all(struct io_wq_work *work, void *data)
 	return true;
 }
 
-static inline bool io_should_retry_thread(long err)
+static inline bool io_should_retry_thread(struct io_worker *worker, long err)
 {
 	/*
 	 * Prevent perpetual task_work retry, if the task (or its group) is
 	 * exiting.
 	 */
 	if (fatal_signal_pending(current))
+		return false;
+	if (worker->init_retries++ >= WORKER_INIT_LIMIT)
 		return false;
 
 	switch (err) {
@@ -780,7 +782,7 @@ static void create_worker_cont(struct callback_head *cb)
 		io_init_new_worker(wq, worker, tsk);
 		io_worker_release(worker);
 		return;
-	} else if (!io_should_retry_thread(PTR_ERR(tsk))) {
+	} else if (!io_should_retry_thread(worker, PTR_ERR(tsk))) {
 		struct io_wq_acct *acct = io_wq_get_acct(worker);
 
 		atomic_dec(&acct->nr_running);
@@ -847,7 +849,7 @@ fail:
 	tsk = create_io_thread(io_wq_worker, worker, NUMA_NO_NODE);
 	if (!IS_ERR(tsk)) {
 		io_init_new_worker(wq, worker, tsk);
-	} else if (!io_should_retry_thread(PTR_ERR(tsk))) {
+	} else if (!io_should_retry_thread(worker, PTR_ERR(tsk))) {
 		kfree(worker);
 		goto fail;
 	} else {
@@ -1009,8 +1011,7 @@ static bool io_wq_worker_cancel(struct io_worker *worker, void *data)
 	 * may dereference the passed in work.
 	 */
 	raw_spin_lock(&worker->lock);
-	if (__io_wq_worker_cancel(worker, match, worker->cur_work) ||
-	    __io_wq_worker_cancel(worker, match, worker->next_work))
+	if (__io_wq_worker_cancel(worker, match, worker->cur_work))
 		match->nr_running++;
 	raw_spin_unlock(&worker->lock);
 

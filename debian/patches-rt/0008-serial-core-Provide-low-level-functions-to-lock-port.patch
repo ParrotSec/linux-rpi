@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Mon, 11 Dec 2023 09:19:18 +0000
-Subject: [PATCH 08/46] serial: core: Provide low-level functions to lock port
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 08/48] serial: core: Provide low-level functions to lock port
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 It will be necessary at times for the uart nbcon console
 drivers to acquire the port lock directly (without the
@@ -23,7 +23,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/include/linux/serial_core.h
 +++ b/include/linux/serial_core.h
-@@ -591,6 +591,24 @@ struct uart_port {
+@@ -590,6 +590,24 @@ struct uart_port {
  	void			*private_data;		/* generic platform data pointer */
  };
  

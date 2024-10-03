@@ -250,7 +250,7 @@ static void free_srq_wqe_buf(struct hns_roce_dev *hr_dev,
 	hns_roce_mtr_destroy(hr_dev, &srq->buf_mtr);
 }
 
-static int alloc_srq_wrid(struct hns_roce_dev *hr_dev, struct hns_roce_srq *srq)
+static int alloc_srq_wrid(struct hns_roce_srq *srq)
 {
 	srq->wrid = kvmalloc_array(srq->wqe_cnt, sizeof(u64), GFP_KERNEL);
 	if (!srq->wrid)
@@ -297,7 +297,7 @@ static int set_srq_basic_param(struct hns_roce_srq *srq,
 
 	max_sge = proc_srq_sge(hr_dev, srq, !!udata);
 	if (attr->max_wr > hr_dev->caps.max_srq_wrs ||
-	    attr->max_sge > max_sge) {
+	    attr->max_sge > max_sge || !attr->max_sge) {
 		ibdev_err(&hr_dev->ib_dev,
 			  "invalid SRQ attr, depth = %u, sge = %u.\n",
 			  attr->max_wr, attr->max_sge);
@@ -366,7 +366,7 @@ static int alloc_srq_buf(struct hns_roce_dev *hr_dev, struct hns_roce_srq *srq,
 		goto err_idx;
 
 	if (!udata) {
-		ret = alloc_srq_wrid(hr_dev, srq);
+		ret = alloc_srq_wrid(srq);
 		if (ret)
 			goto err_wqe_buf;
 	}
@@ -518,6 +518,7 @@ err_srq_db:
 err_srq_buf:
 	free_srq_buf(hr_dev, srq);
 err_out:
+	mutex_destroy(&srq->mutex);
 	atomic64_inc(&hr_dev->dfx_cnt[HNS_ROCE_DFX_SRQ_CREATE_ERR_CNT]);
 
 	return ret;
@@ -532,6 +533,7 @@ int hns_roce_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
 	free_srqn(hr_dev, srq);
 	free_srq_db(hr_dev, srq, udata);
 	free_srq_buf(hr_dev, srq);
+	mutex_destroy(&srq->mutex);
 	return 0;
 }
 

@@ -9,7 +9,7 @@ CONFIG_SECCOMP=y
 CONFIG_MMU=y
 CONFIG_AEABI=y
 # CONFIG_OABI_COMPAT is not set
-CONFIG_CPU_SW_DOMAIN_PAN=y
+CONFIG_ARM_PAN=y
 
 ##
 ## file: arch/arm/Kconfig.debug

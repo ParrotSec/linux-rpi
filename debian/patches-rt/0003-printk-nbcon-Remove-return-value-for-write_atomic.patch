@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Fri, 20 Oct 2023 09:52:59 +0000
-Subject: [PATCH 03/46] printk: nbcon: Remove return value for write_atomic()
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 03/48] printk: nbcon: Remove return value for write_atomic()
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 The return value of write_atomic() does not provide any useful
 information. On the contrary, it makes things more complicated

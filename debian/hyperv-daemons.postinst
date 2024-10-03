@@ -8,7 +8,7 @@ if [ "$1" = "configure" ]; then
             udevadm trigger || true
         else
             # On upgrade make sure running daemons are restarted
-            systemctl try-restart hv-fcopy-daemon.service hv-kvp-daemon.service hv-vss-daemon.service
+            systemctl try-restart hv-kvp-daemon.service hv-vss-daemon.service
         fi
     fi
 fi

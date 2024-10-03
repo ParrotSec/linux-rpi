@@ -1,7 +1,7 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Wed, 7 Feb 2024 18:38:14 +0000
-Subject: [PATCH 05/46] printk: nbcon: Add detailed doc for write_atomic()
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 05/48] printk: nbcon: Add detailed doc for write_atomic()
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 The write_atomic() callback has special requirements and is
 allowed to use special helper functions. Provide detailed
@@ -9,6 +9,7 @@ documentation of the callback so that a developer has a
 chance of implementing it correctly.
 
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
  include/linux/console.h |   33 +++++++++++++++++++++++++++++----

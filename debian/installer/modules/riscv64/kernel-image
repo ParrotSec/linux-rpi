@@ -15,3 +15,7 @@ drivers/regulator/**
 
 # RTC
 drivers/rtc/**
+
+# Force the inclusion of the mtd module, as anyway it is added through the
+# following dependency: mpfs-rng -> mpfs-sys-controller -> mtd
+mtd

@@ -1,11 +1,10 @@
 Section: kernel
 Priority: optional
 Maintainer: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
-XSBC-Original-Maintainer: Debian Kernel Team <debian-kernel@lists.debian.org>
 Uploaders: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
 Standards-Version: 4.2.0
 Build-Depends:
- debhelper-compat (= 12), dh-exec,
+ debhelper-compat (= 13),
 # used to run debian/bin/*.py
  python3:native,
  python3-dacite:native,

@@ -311,7 +311,7 @@ void btrfs_add_bg_to_space_info(struct btrfs_fs_info *info,
 	found->bytes_used += block_group->used;
 	found->disk_used += block_group->used * factor;
 	found->bytes_readonly += block_group->bytes_super;
-	found->bytes_zone_unusable += block_group->zone_unusable;
+	btrfs_space_info_update_bytes_zone_unusable(info, found, block_group->zone_unusable);
 	if (block_group->length > 0)
 		found->full = 0;
 	btrfs_try_granting_tickets(info, found);
@@ -373,11 +373,18 @@ static u64 calc_available_free_space(struct btrfs_fs_info *fs_info,
 	 * "optimal" chunk size based on the fs size.  However when we actually
 	 * allocate the chunk we will strip this down further, making it no more
 	 * than 10% of the disk or 1G, whichever is smaller.
+	 *
+	 * On the zoned mode, we need to use zone_size (=
+	 * data_sinfo->chunk_size) as it is.
 	 */
 	data_sinfo = btrfs_find_space_info(fs_info, BTRFS_BLOCK_GROUP_DATA);
-	data_chunk_size = min(data_sinfo->chunk_size,
-			      mult_perc(fs_info->fs_devices->total_rw_bytes, 10));
-	data_chunk_size = min_t(u64, data_chunk_size, SZ_1G);
+	if (!btrfs_is_zoned(fs_info)) {
+		data_chunk_size = min(data_sinfo->chunk_size,
+				      mult_perc(fs_info->fs_devices->total_rw_bytes, 10));
+		data_chunk_size = min_t(u64, data_chunk_size, SZ_1G);
+	} else {
+		data_chunk_size = data_sinfo->chunk_size;
+	}
 
 	/*
 	 * Since data allocations immediately use block groups as part of the
@@ -405,6 +412,17 @@ static u64 calc_available_free_space(struct btrfs_fs_info *fs_info,
 		avail >>= 3;
 	else
 		avail >>= 1;
+
+	/*
+	 * On the zoned mode, we always allocate one zone as one chunk.
+	 * Returning non-zone size alingned bytes here will result in
+	 * less pressure for the async metadata reclaim process, and it
+	 * will over-commit too much leading to ENOSPC. Align down to the
+	 * zone size to avoid that.
+	 */
+	if (btrfs_is_zoned(fs_info))
+		avail = ALIGN_DOWN(avail, fs_info->zone_size);
+
 	return avail;
 }
 
@@ -555,8 +573,7 @@ again:
 
 		spin_lock(&cache->lock);
 		avail = cache->length - cache->used - cache->pinned -
-			cache->reserved - cache->delalloc_bytes -
-			cache->bytes_super - cache->zone_unusable;
+			cache->reserved - cache->bytes_super - cache->zone_unusable;
 		btrfs_info(fs_info,
 "block group %llu has %llu bytes, %llu used %llu pinned %llu reserved %llu delalloc %llu super %llu zone_unusable (%llu bytes available) %s",
 			   cache->start, cache->length, cache->used, cache->pinned,

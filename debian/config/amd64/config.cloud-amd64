@@ -51,4 +51,5 @@ CONFIG_GOOGLE_FRAMEBUFFER_COREBOOT=m
 ##
 ## file: drivers/watchdog/Kconfig
 ##
+CONFIG_I6300ESB_WDT=m
 # CONFIG_PCIPCWATCHDOG is not set

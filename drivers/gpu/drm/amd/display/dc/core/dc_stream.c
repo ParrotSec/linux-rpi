@@ -116,12 +116,7 @@ bool dc_stream_construct(struct dc_stream_state *stream,
 
 	update_stream_signal(stream, dc_sink_data);
 
-	stream->out_transfer_func = dc_create_transfer_func();
-	if (stream->out_transfer_func == NULL) {
-		dc_sink_release(dc_sink_data);
-		return false;
-	}
-	stream->out_transfer_func->type = TF_TYPE_BYPASS;
+	stream->out_transfer_func.type = TF_TYPE_BYPASS;
 
 	dc_stream_assign_stream_id(stream);
 
@@ -131,10 +126,6 @@ bool dc_stream_construct(struct dc_stream_state *stream,
 void dc_stream_destruct(struct dc_stream_state *stream)
 {
 	dc_sink_release(stream->sink);
-	if (stream->out_transfer_func != NULL) {
-		dc_transfer_func_release(stream->out_transfer_func);
-		stream->out_transfer_func = NULL;
-	}
 }
 
 void dc_stream_assign_stream_id(struct dc_stream_state *stream)
@@ -200,9 +191,6 @@ struct dc_stream_state *dc_copy_stream(const struct dc_stream_state *stream)
 
 	if (new_stream->sink)
 		dc_sink_retain(new_stream->sink);
-
-	if (new_stream->out_transfer_func)
-		dc_transfer_func_retain(new_stream->out_transfer_func);
 
 	dc_stream_assign_stream_id(new_stream);
 
@@ -278,7 +266,6 @@ bool dc_stream_set_cursor_attributes(
 	const struct dc_cursor_attributes *attributes)
 {
 	struct dc  *dc;
-	bool reset_idle_optimizations = false;
 
 	if (NULL == stream) {
 		dm_error("DC: dc_stream is NULL!\n");
@@ -309,20 +296,36 @@ bool dc_stream_set_cursor_attributes(
 
 	stream->cursor_attributes = *attributes;
 
-	dc_z10_restore(dc);
-	/* disable idle optimizations while updating cursor */
-	if (dc->idle_optimizations_allowed) {
-		dc_allow_idle_optimizations(dc, false);
-		reset_idle_optimizations = true;
+	return true;
+}
+
+bool dc_stream_program_cursor_attributes(
+	struct dc_stream_state *stream,
+	const struct dc_cursor_attributes *attributes)
+{
+	struct dc  *dc;
+	bool reset_idle_optimizations = false;
+
+	dc = stream ? stream->ctx->dc : NULL;
+
+	if (dc_stream_set_cursor_attributes(stream, attributes)) {
+		dc_z10_restore(dc);
+		/* disable idle optimizations while updating cursor */
+		if (dc->idle_optimizations_allowed) {
+			dc_allow_idle_optimizations(dc, false);
+			reset_idle_optimizations = true;
+		}
+
+		program_cursor_attributes(dc, stream, attributes);
+
+		/* re-enable idle optimizations if necessary */
+		if (reset_idle_optimizations && !dc->debug.disable_dmub_reallow_idle)
+			dc_allow_idle_optimizations(dc, true);
+
+		return true;
 	}
 
-	program_cursor_attributes(dc, stream, attributes);
-
-	/* re-enable idle optimizations if necessary */
-	if (reset_idle_optimizations)
-		dc_allow_idle_optimizations(dc, true);
-
-	return true;
+	return false;
 }
 
 static void program_cursor_position(
@@ -367,9 +370,6 @@ bool dc_stream_set_cursor_position(
 	struct dc_stream_state *stream,
 	const struct dc_cursor_position *position)
 {
-	struct dc *dc;
-	bool reset_idle_optimizations = false;
-
 	if (NULL == stream) {
 		dm_error("DC: dc_stream is NULL!\n");
 		return false;
@@ -380,24 +380,46 @@ bool dc_stream_set_cursor_position(
 		return false;
 	}
 
-	dc = stream->ctx->dc;
-	dc_z10_restore(dc);
-
-	/* disable idle optimizations if enabling cursor */
-	if (dc->idle_optimizations_allowed && (!stream->cursor_position.enable || dc->debug.exit_idle_opt_for_cursor_updates)
-			&& position->enable) {
-		dc_allow_idle_optimizations(dc, false);
-		reset_idle_optimizations = true;
-	}
-
 	stream->cursor_position = *position;
 
-	program_cursor_position(dc, stream, position);
-	/* re-enable idle optimizations if necessary */
-	if (reset_idle_optimizations)
-		dc_allow_idle_optimizations(dc, true);
 
 	return true;
+}
+
+bool dc_stream_program_cursor_position(
+	struct dc_stream_state *stream,
+	const struct dc_cursor_position *position)
+{
+	struct dc *dc;
+	bool reset_idle_optimizations = false;
+	const struct dc_cursor_position *old_position;
+
+	if (!stream)
+		return false;
+
+	old_position = &stream->cursor_position;
+	dc = stream->ctx->dc;
+
+	if (dc_stream_set_cursor_position(stream, position)) {
+		dc_z10_restore(dc);
+
+		/* disable idle optimizations if enabling cursor */
+		if (dc->idle_optimizations_allowed &&
+		    (!old_position->enable || dc->debug.exit_idle_opt_for_cursor_updates) &&
+		    position->enable) {
+			dc_allow_idle_optimizations(dc, false);
+			reset_idle_optimizations = true;
+		}
+
+		program_cursor_position(dc, stream, position);
+		/* re-enable idle optimizations if necessary */
+		if (reset_idle_optimizations && !dc->debug.disable_dmub_reallow_idle)
+			dc_allow_idle_optimizations(dc, true);
+
+		return true;
+	}
+
+	return false;
 }
 
 bool dc_stream_add_writeback(struct dc *dc,
@@ -425,7 +447,7 @@ bool dc_stream_add_writeback(struct dc *dc,
 
 	dc_exit_ips_for_hw_access(dc);
 
-	wb_info->dwb_params.out_transfer_func = stream->out_transfer_func;
+	wb_info->dwb_params.out_transfer_func = &stream->out_transfer_func;
 
 	dwb = dc->res_pool->dwbc[wb_info->dwb_pipe_inst];
 	dwb->dwb_is_drc = false;
@@ -507,7 +529,7 @@ bool dc_stream_remove_writeback(struct dc *dc,
 		struct dc_stream_state *stream,
 		uint32_t dwb_pipe_inst)
 {
-	int i = 0, j = 0;
+	unsigned int i, j;
 	if (stream == NULL) {
 		dm_error("DC: dc_stream is NULL!\n");
 		return false;

@@ -1,7 +1,7 @@
 From: Petr Mladek <pmladek@suse.com>
 Date: Wed, 22 Nov 2023 11:23:43 +0000
-Subject: [PATCH 02/46] printk: Properly deal with nbcon consoles on seq init
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 02/48] printk: Properly deal with nbcon consoles on seq init
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 If a non-boot console is registering and boot consoles exist,
 the consoles are flushed before being unregistered. This allows
@@ -93,7 +93,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  
 --- a/kernel/printk/printk.c
 +++ b/kernel/printk/printk.c
-@@ -3363,19 +3363,21 @@ static void try_enable_default_console(s
+@@ -3375,19 +3375,21 @@ static void try_enable_default_console(s
  		newcon->flags |= CON_CONSDEV;
  }
  
@@ -118,7 +118,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  
  		/*
  		 * If any enabled boot consoles are due to be unregistered
-@@ -3396,7 +3398,7 @@ static void console_init_seq(struct cons
+@@ -3408,7 +3410,7 @@ static void console_init_seq(struct cons
  			 * Flush all consoles and set the console to start at
  			 * the next unprinted sequence number.
  			 */
@@ -127,7 +127,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  				/*
  				 * Flushing failed. Just choose the lowest
  				 * sequence of the enabled boot consoles.
-@@ -3409,19 +3411,30 @@ static void console_init_seq(struct cons
+@@ -3421,19 +3423,30 @@ static void console_init_seq(struct cons
  				if (handover)
  					console_lock();
  
@@ -163,7 +163,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  }
  
  #define console_first()				\
-@@ -3453,6 +3466,7 @@ void register_console(struct console *ne
+@@ -3465,6 +3478,7 @@ void register_console(struct console *ne
  	struct console *con;
  	bool bootcon_registered = false;
  	bool realcon_registered = false;
@@ -171,7 +171,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	int err;
  
  	console_list_lock();
-@@ -3530,10 +3544,13 @@ void register_console(struct console *ne
+@@ -3542,10 +3556,13 @@ void register_console(struct console *ne
  	}
  
  	newcon->dropped = 0;

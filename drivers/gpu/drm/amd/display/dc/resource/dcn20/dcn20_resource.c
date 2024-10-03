@@ -62,6 +62,9 @@
 #include "dcn20/dcn20_vmid.h"
 #include "dce/dce_panel_cntl.h"
 
+#include "dcn20/dcn20_dwb.h"
+#include "dcn20/dcn20_mmhubbub.h"
+
 #include "navi10_ip_offset.h"
 
 #include "dcn/dcn_2_0_0_offset.h"
@@ -70,9 +73,6 @@
 #include "dpcs/dpcs_2_0_0_sh_mask.h"
 
 #include "nbio/nbio_2_3_offset.h"
-
-#include "dcn20/dcn20_dwb.h"
-#include "dcn20/dcn20_mmhubbub.h"
 
 #include "mmhub/mmhub_2_0_0_offset.h"
 #include "mmhub/mmhub_2_0_0_sh_mask.h"
@@ -83,11 +83,10 @@
 #include "dce/dce_aux.h"
 #include "dce/dce_i2c.h"
 #include "vm_helper.h"
+
 #include "link_enc_cfg.h"
-
-#include "amdgpu_socbb.h"
-
 #include "link.h"
+
 #define DC_LOGGER_INIT(logger)
 
 #ifndef mmDP0_DP_DPHY_INTERNAL_CTRL
@@ -1282,8 +1281,13 @@ void dcn20_build_pipe_pix_clk_params(struct pipe_ctx *pipe_ctx)
 
 static enum dc_status build_pipe_hw_param(struct pipe_ctx *pipe_ctx)
 {
+	struct resource_pool *pool = pipe_ctx->stream->ctx->dc->res_pool;
 
-	dcn20_build_pipe_pix_clk_params(pipe_ctx);
+	if (pool->funcs->build_pipe_pix_clk_params) {
+		pool->funcs->build_pipe_pix_clk_params(pipe_ctx);
+	} else {
+		dcn20_build_pipe_pix_clk_params(pipe_ctx);
+	}
 
 	pipe_ctx->stream->clamping.pixel_encoding = pipe_ctx->stream->timing.pixel_encoding;
 
@@ -2189,10 +2193,11 @@ bool dcn20_get_dcc_compression_cap(const struct dc *dc,
 		const struct dc_dcc_surface_param *input,
 		struct dc_surface_dcc_cap *output)
 {
-	return dc->res_pool->hubbub->funcs->get_dcc_compression_cap(
-			dc->res_pool->hubbub,
-			input,
-			output);
+	if (dc->res_pool->hubbub->funcs->get_dcc_compression_cap)
+		return dc->res_pool->hubbub->funcs->get_dcc_compression_cap(
+			dc->res_pool->hubbub, input, output);
+
+	return false;
 }
 
 static void dcn20_destroy_resource_pool(struct resource_pool **pool)

@@ -359,10 +359,11 @@
 		#sound-dai-cells = <0>;
 	};
 
-	pwmleds {
+	pwmleds: pwmleds {
 		compatible = "pwm-leds";
+		status = "disabled";
+
 		keyboard_backlight: led-0 {
-			status = "disabled";
 			label = "cros_ec::kbd_backlight";
 			function = LED_FUNCTION_KBD_BACKLIGHT;
 			pwms = <&cros_ec_pwm 0>;
@@ -1167,6 +1168,7 @@ ap_spi_fp: &spi10 {
 };
 
 &pm6150l_gpios {
+	status = "disabled"; /* No GPIOs are consumed or configured */
 	gpio-line-names = "AP_SUSPEND",
 			  "",
 			  "",

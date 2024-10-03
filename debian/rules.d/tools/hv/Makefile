@@ -6,7 +6,6 @@ include $(top_rulesdir)/Makefile.inc
 else
 
 PROGS = \
-	hv_fcopy_daemon \
 	hv_kvp_daemon \
 	hv_vss_daemon
 

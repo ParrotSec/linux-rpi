@@ -1,8 +1,8 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Thu, 14 Dec 2023 14:38:42 +0000
-Subject: [PATCH 17/46] printk: nbcon: Add helper to assign priority based on
+Subject: [PATCH 17/48] printk: nbcon: Add helper to assign priority based on
  CPU state
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Add a helper function to use the current state of the CPU to
 determine which priority to assign to the printing context.
@@ -10,7 +10,7 @@ determine which priority to assign to the printing context.
 The EMERGENCY priority handling is added in a follow-up commit.
 It will use a per-CPU variable.
 
-Note: nbcon_driver_try_acquire(), which is used by console
+Note: nbcon_device_try_acquire(), which is used by console
       drivers to acquire the nbcon console for non-printing
       activities, will always use NORMAL priority.
 

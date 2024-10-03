@@ -129,15 +129,6 @@ class ConfigBase:
     packages: ConfigPackages = dataclasses.field(default_factory=ConfigPackages)
     relations: ConfigRelations = dataclasses.field(default_factory=ConfigRelations)
 
-    # With dacite <1.8.1, the above fields are wrongly set to refer to
-    # the same object in multiple ConfigBase instances
-    # (https://github.com/konradhalas/dacite/issues/215).  This
-    # particularly affects the build field which we modify later.
-    # Work around it for now.
-    def __post_init__(self):
-        import copy
-        self.build = copy.copy(self.build)
-
     def __post_init_hierarchy__(self, path: Path) -> None:
         '''
         Setup path and default config in the complete hierarchy
@@ -312,6 +303,22 @@ class ConfigFeatureset(ConfigBase):
                 ConfigFlavour(name=flavour.name, defs=flavour.defs)
                 for flavour in debianarch.flavour
             ]
+
+        if self.flavour:
+            # XXX: Remove special case of name
+            if self.name == 'none':
+                flavour_default = [i for i in self.flavour if i.defs.is_default]
+                flavour_quick = [i for i in self.flavour if i.defs.is_quick]
+
+                if not flavour_quick:
+                    flavour_quick = flavour_default or self.flavour[0:1]
+                    flavour_quick[0].defs.is_quick = True
+
+            # Flavours in other featuresets can never be default or quick
+            else:
+                for flavour in self.flavour:
+                    flavour.defs.is_default = False
+                    flavour.defs.is_quick = False
 
         self.__post_init_hierarchy__(path)
 

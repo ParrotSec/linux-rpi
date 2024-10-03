@@ -1,7 +1,7 @@
 From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Fri, 22 Sep 2023 14:58:18 +0000
-Subject: [PATCH 04/46] printk: Check printk_deferred_enter()/_exit() usage
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Subject: [PATCH 04/48] printk: Check printk_deferred_enter()/_exit() usage
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Add validation that printk_deferred_enter()/_exit() are called in
 non-migration contexts.

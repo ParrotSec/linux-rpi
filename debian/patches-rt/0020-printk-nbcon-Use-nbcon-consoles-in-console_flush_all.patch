@@ -1,8 +1,8 @@
 From: John Ogness <john.ogness@linutronix.de>
 Date: Tue, 19 Sep 2023 14:33:27 +0000
-Subject: [PATCH 20/46] printk: nbcon: Use nbcon consoles in
+Subject: [PATCH 20/48] printk: nbcon: Use nbcon consoles in
  console_flush_all()
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.9/older/patches-6.9-rt5.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.10/older/patches-6.10.2-rt14.tar.xz
 
 Allow nbcon consoles to print messages in the legacy printk()
 caller context (printing via unlock) by integrating them into
@@ -22,6 +22,7 @@ handovers/takeovers occur on a per-console basis and thus do
 not cause the console_flush_all() loop to abort.
 
 Signed-off-by: John Ogness <john.ogness@linutronix.de>
+Reviewed-by: Petr Mladek <pmladek@suse.com>
 Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 ---
  kernel/printk/internal.h |    6 +++

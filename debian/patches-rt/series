@@ -4,57 +4,19 @@
 # Posted and applied
 ###########################################################################
 
-# signal_x86__Delay_calling_signals_in_atomic.patch
-
 ###########################################################################
 # Posted
 ###########################################################################
 
-# net, RPS, v5
-0001-net-Remove-conditional-threaded-NAPI-wakeup-based-on.patch
-0002-net-Allow-to-use-SMP-threads-for-backlog-NAPI.patch
-0003-net-Use-backlog-NAPI-to-clean-up-the-defer_list.patch
-0004-net-Rename-rps_lock-to-backlog_lock.patch
-
-# perf, sigtrap, v3
+# perf, sigtrap, v5
 0001-perf-Move-irq_work_queue-where-the-event-is-prepared.patch
-0002-perf-Enqueue-SIGTRAP-always-via-task_work.patch
-0003-perf-Remove-perf_swevent_get_recursion_context-from-.patch
-0004-perf-Split-__perf_pending_irq-out-of-perf_pending_ir.patch
-
-# locking.
-drm-ttm-tests-Let-ttm_bo_test-consider-different-ww_.patch
-
-pinctrl-renesas-rzg2l-Use-spin_-lock-unlock-_irq-sav.patch
-
-###########################################################################
-# Post
-###########################################################################
-
-###########################################################################
-# X86:
-###########################################################################
-x86__Allow_to_enable_RT.patch
-x86__Enable_RT_also_on_32bit.patch
-
-###########################################################################
-# For later, not essencial
-###########################################################################
-# Posted
-sched-rt-Don-t-try-push-tasks-if-there-are-none.patch
-
-# Needs discussion first.
-softirq-Use-a-dedicated-thread-for-timer-wakeups.patch
-rcutorture-Also-force-sched-priority-to-timersd-on-b.patch
-tick-Fix-timer-storm-since-introduction-of-timersd.patch
-softirq-Wake-ktimers-thread-also-in-softirq.patch
-zram-Replace-bit-spinlocks-with-spinlock_t-for-PREEM.patch
-# preempt-Put-preempt_enable-within-an-instrumentation.patch
-
-# Sched
-0001-sched-core-Provide-a-method-to-check-if-a-task-is-PI.patch
-0002-softirq-Add-function-to-preempt-serving-softirqs.patch
-0003-time-Allow-to-preempt-after-a-callback.patch
+0002-task_work-Add-TWA_NMI_CURRENT-as-an-additional-notif.patch
+0003-perf-Enqueue-SIGTRAP-always-via-task_work.patch
+0004-perf-Shrink-the-size-of-the-recursion-counter.patch
+0005-perf-Move-swevent_htable-recursion-into-task_struct.patch
+0006-perf-Don-t-disable-preemption-in-perf_pending_task.patch
+0007-perf-Split-__perf_pending_irq-out-of-perf_pending_ir.patch
+task_work-make-TWA_NMI_CURRENT-handling-conditional-.patch
 
 ###########################################################################
 # John's printk queue
@@ -69,7 +31,7 @@ zram-Replace-bit-spinlocks-with-spinlock_t-for-PREEM.patch
 0008-serial-core-Provide-low-level-functions-to-lock-port.patch
 0009-serial-core-Introduce-wrapper-to-set-uart_port-cons.patch
 0010-console-Improve-console_srcu_read_flags-comments.patch
-0011-nbcon-Provide-functions-for-drivers-to-acquire-conso.patch
+0011-nbcon-Add-API-to-acquire-context-for-non-printing-op.patch
 0012-serial-core-Implement-processing-in-port-lock-wrappe.patch
 0013-printk-nbcon-Do-not-rely-on-proxy-headers.patch
 0014-printk-Make-console_is_usable-available-to-nbcon.patch
@@ -88,55 +50,115 @@ zram-Replace-bit-spinlocks-with-spinlock_t-for-PREEM.patch
 0027-panic-Mark-emergency-section-in-oops.patch
 0028-rcu-Mark-emergency-sections-in-rcu-stalls.patch
 0029-lockdep-Mark-emergency-sections-in-lockdep-splats.patch
-0030-printk-nbcon-Introduce-printing-kthreads.patch
-0031-printk-Atomic-print-in-printk-context-on-shutdown.patch
-0032-printk-nbcon-Add-context-to-console_is_usable.patch
-0033-printk-nbcon-Add-printer-thread-wakeups.patch
-0034-printk-nbcon-Stop-threads-on-shutdown-reboot.patch
-0035-printk-nbcon-Start-printing-threads.patch
-0036-printk-Provide-helper-for-message-prepending.patch
-0037-printk-nbcon-Show-replay-message-on-takeover.patch
-0038-proc-consoles-Add-notation-to-c_start-c_stop.patch
-0039-proc-Add-nbcon-support-for-proc-consoles.patch
-0040-tty-sysfs-Add-nbcon-support-for-active.patch
-0041-printk-nbcon-Provide-function-to-reacquire-ownership.patch
-0042-serial-8250-Switch-to-nbcon-console.patch
-0043-serial-8250-Revert-drop-lockdep-annotation-from-seri.patch
-0044-printk-Add-kthread-for-all-legacy-consoles.patch
-0045-printk-Provide-threadprintk-boot-argument.patch
-0046-printk-Avoid-false-positive-lockdep-report-for-legac.patch
+0030-printk-Rename-console_replay_all-and-update-context.patch
+0031-printk-nbcon-Introduce-printing-kthreads.patch
+0032-printk-Atomic-print-in-printk-context-on-shutdown.patch
+0033-printk-nbcon-Fix-nbcon_cpu_emergency_flush-when-pree.patch
+0034-printk-nbcon-Add-context-to-console_is_usable.patch
+0035-printk-nbcon-Add-printer-thread-wakeups.patch
+0036-printk-nbcon-Stop-threads-on-shutdown-reboot.patch
+0037-printk-nbcon-Start-printing-threads.patch
+0038-printk-Provide-helper-for-message-prepending.patch
+0039-printk-nbcon-Show-replay-message-on-takeover.patch
+0040-printk-Add-kthread-for-all-legacy-consoles.patch
+0041-proc-consoles-Add-notation-to-c_start-c_stop.patch
+0042-proc-Add-nbcon-support-for-proc-consoles.patch
+0043-tty-sysfs-Add-nbcon-support-for-active.patch
+0044-printk-Provide-threadprintk-boot-argument.patch
+0045-printk-Avoid-false-positive-lockdep-report-for-legac.patch
+0046-printk-nbcon-Add-function-for-printers-to-reacquire-.patch
+0047-serial-8250-Switch-to-nbcon-console.patch
+0048-serial-8250-Revert-drop-lockdep-annotation-from-seri.patch
+#
+prinkt-nbcon-Add-a-scheduling-point-to-nbcon_kthread.patch
+
+###########################################################################
+# Post
+###########################################################################
+
+###########################################################################
+# Enabling
+###########################################################################
+x86__Allow_to_enable_RT.patch
+x86__Enable_RT_also_on_32bit.patch
+ARM64__Allow_to_enable_RT.patch
+riscv-allow-to-enable-RT.patch
+
+###########################################################################
+# For later, not essencial
+###########################################################################
+# Posted
+sched-rt-Don-t-try-push-tasks-if-there-are-none.patch
+
+# Needs discussion first.
+softirq-Use-a-dedicated-thread-for-timer-wakeups.patch
+rcutorture-Also-force-sched-priority-to-timersd-on-b.patch
+tick-Fix-timer-storm-since-introduction-of-timersd.patch
+softirq-Wake-ktimers-thread-also-in-softirq.patch
+
+# zram
+0001-zram-Replace-bit-spinlocks-with-a-spinlock_t.patch
+0002-zram-Remove-ZRAM_LOCK.patch
+0003-zram-Shrink-zram_table_entry-flags.patch
+
+# Sched
+0001-sched-core-Provide-a-method-to-check-if-a-task-is-PI.patch
+0002-softirq-Add-function-to-preempt-serving-softirqs.patch
+0003-time-Allow-to-preempt-after-a-callback.patch
 
 ###########################################################################
 # DRM:
 ###########################################################################
-# https://lore.kernel.org/all/20240405142737.920626-1-bigeasy@linutronix.de/
-0003-drm-i915-Use-preempt_disable-enable_rt-where-recomme.patch
-0004-drm-i915-Don-t-disable-interrupts-on-PREEMPT_RT-duri.patch
-0005-drm-i915-Don-t-check-for-atomic-context-on-PREEMPT_R.patch
-drm-i915-Disable-tracing-points-on-PREEMPT_RT.patch
-0009-drm-i915-gt-Use-spin_lock_irq-instead-of-local_irq_d.patch
-0010-drm-i915-Drop-the-irqs_disabled-check.patch
-drm-i915-guc-Consider-also-RCU-depth-in-busy-loop.patch
-Revert-drm-i915-Depend-on-PREEMPT_RT.patch
+# https://lore.kernel.org/all/20240613102818.4056866-1-bigeasy@linutronix.de/
+0001-drm-i915-Use-preempt_disable-enable_rt-where-recomme.patch
+0002-drm-i915-Don-t-disable-interrupts-on-PREEMPT_RT-duri.patch
+0003-drm-i915-Don-t-check-for-atomic-context-on-PREEMPT_R.patch
+0004-drm-i915-Disable-tracing-points-on-PREEMPT_RT.patch
+0005-drm-i915-gt-Use-spin_lock_irq-instead-of-local_irq_d.patch
+0006-drm-i915-Drop-the-irqs_disabled-check.patch
+0007-drm-i915-guc-Consider-also-RCU-depth-in-busy-loop.patch
+0008-Revert-drm-i915-Depend-on-PREEMPT_RT.patch
 
-###########################################################################
 # Lazy preemption
-###########################################################################
 PREEMPT_AUTO.patch
 
+# BH series
+0001-locking-local_lock-Introduce-guard-definition-for-lo.patch
+0002-locking-local_lock-Add-local-nested-BH-locking-infra.patch
+0003-net-Use-__napi_alloc_frag_align-instead-of-open-codi.patch
+0004-net-Use-nested-BH-locking-for-napi_alloc_cache.patch
+0005-net-tcp_sigpool-Use-nested-BH-locking-for-sigpool_sc.patch
+0006-net-ipv4-Use-nested-BH-locking-for-ipv4_tcp_sk.patch
+0007-netfilter-br_netfilter-Use-nested-BH-locking-for-brn.patch
+0008-net-softnet_data-Make-xmit-per-task.patch
+0009-dev-Remove-PREEMPT_RT-ifdefs-from-backlog_lock.patch
+0010-dev-Use-nested-BH-locking-for-softnet_data.process_q.patch
+0011-lwt-Don-t-disable-migration-prio-invoking-BPF.patch
+0012-seg6-Use-nested-BH-locking-for-seg6_bpf_srh_states.patch
+0013-net-Use-nested-BH-locking-for-bpf_scratchpad.patch
+0014-net-Reference-bpf_redirect_info-via-task_struct-on-P.patch
+0015-net-Move-per-CPU-flush-lists-to-bpf_net_context-on-P.patch
+# optimisation + fixes
+0001-net-Remove-task_struct-bpf_net_context-init-on-fork.patch
+0002-net-Optimize-xdp_do_flush-with-bpf_net_context-infos.patch
+0003-net-Move-flush-list-retrieval-to-where-it-is-used.patch
+tun-Assign-missing-bpf_net_context.patch
+tun-Add-missing-bpf_net_ctx_clear-in-do_xdp_generic.patch
+# tw_timer
+0002-net-tcp-un-pin-the-tw_timer.patch
+0003-tcp-move-inet_twsk_schedule-helper-out-of-header.patch
+
 ###########################################################################
-# ARM/ARM64
+# ARM
 ###########################################################################
 0001-arm-Disable-jump-label-on-PREEMPT_RT.patch
 ARM__enable_irq_in_translation_section_permission_fault_handlers.patch
 arm-Disable-FAST_GUP-on-PREEMPT_RT-if-HIGHPTE-is-als.patch
-# arm64-signal-Use-ARCH_RT_DELAYS_SIGNAL_SEND.patch
 0001-ARM-vfp-Provide-vfp_lock-for-VFP-locking.patch
 0002-ARM-vfp-Use-vfp_lock-in-vfp_sync_hwstate.patch
 0003-ARM-vfp-Use-vfp_lock-in-vfp_support_entry.patch
 0004-ARM-vfp-Move-sending-signals-outside-of-vfp_lock-ed-.patch
 ARM__Allow_to_enable_RT.patch
-ARM64__Allow_to_enable_RT.patch
 
 ###########################################################################
 # POWERPC
@@ -152,7 +174,6 @@ POWERPC__Allow_to_enable_RT.patch
 # RISC-V
 ###########################################################################
 riscv-add-PREEMPT_AUTO-support.patch
-riscv-allow-to-enable-RT.patch
 
 # Sysfs file vs uname() -v
 sysfs__Add__sys_kernel_realtime_entry.patch

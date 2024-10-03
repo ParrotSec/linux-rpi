@@ -139,7 +139,7 @@ int btrfs_add_inode_defrag(struct btrfs_trans_handle *trans,
 	if (trans)
 		transid = trans->transid;
 	else
-		transid = inode->root->last_trans;
+		transid = btrfs_get_root_last_trans(root);
 
 	defrag = kmem_cache_zalloc(btrfs_inode_defrag_cachep, GFP_NOFS);
 	if (!defrag)
@@ -147,7 +147,7 @@ int btrfs_add_inode_defrag(struct btrfs_trans_handle *trans,
 
 	defrag->ino = btrfs_ino(inode);
 	defrag->transid = transid;
-	defrag->root = root->root_key.objectid;
+	defrag->root = btrfs_root_id(root);
 	defrag->extent_thresh = extent_thresh;
 
 	spin_lock(&fs_info->defrag_inodes_lock);

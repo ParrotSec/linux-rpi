@@ -347,12 +347,10 @@ static const struct of_device_id ti_cpufreq_of_match[] = {
 
 static const struct of_device_id *ti_cpufreq_match_node(void)
 {
-	struct device_node *np;
+	struct device_node *np __free(device_node) = of_find_node_by_path("/");
 	const struct of_device_id *match;
 
-	np = of_find_node_by_path("/");
 	match = of_match_node(ti_cpufreq_of_match, np);
-	of_node_put(np);
 
 	return match;
 }
@@ -419,7 +417,7 @@ static int ti_cpufreq_probe(struct platform_device *pdev)
 
 	ret = dev_pm_opp_set_config(opp_data->cpu_dev, &config);
 	if (ret < 0) {
-		dev_err(opp_data->cpu_dev, "Failed to set OPP config\n");
+		dev_err_probe(opp_data->cpu_dev, ret, "Failed to set OPP config\n");
 		goto fail_put_node;
 	}
 

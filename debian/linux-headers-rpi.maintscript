@@ -1,1 +1,1 @@
-dir_to_symlink /usr/share/doc/linux-headers-rpi linux-headers-6.9.7-rpi 5.7~rc5-1~exp1 linux-headers-rpi
+dir_to_symlink /usr/share/doc/linux-headers-rpi linux-headers-6.10.12-rpi 5.7~rc5-1~exp1 linux-headers-rpi

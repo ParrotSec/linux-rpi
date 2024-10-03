@@ -38,6 +38,9 @@ void xe_lrc_write_ctx_reg(struct xe_lrc *lrc, int reg_nr, u32 val);
 u64 xe_lrc_descriptor(struct xe_lrc *lrc);
 
 u32 xe_lrc_seqno_ggtt_addr(struct xe_lrc *lrc);
+struct dma_fence *xe_lrc_alloc_seqno_fence(void);
+void xe_lrc_free_seqno_fence(struct dma_fence *fence);
+void xe_lrc_init_seqno_fence(struct xe_lrc *lrc, struct dma_fence *fence);
 struct dma_fence *xe_lrc_create_seqno_fence(struct xe_lrc *lrc);
 s32 xe_lrc_seqno(struct xe_lrc *lrc);
 
@@ -54,5 +57,10 @@ void xe_lrc_dump_default(struct drm_printer *p,
 			 enum xe_engine_class);
 
 void xe_lrc_emit_hwe_state_instructions(struct xe_exec_queue *q, struct xe_bb *bb);
+
+struct xe_lrc_snapshot *xe_lrc_snapshot_capture(struct xe_lrc *lrc);
+void xe_lrc_snapshot_capture_delayed(struct xe_lrc_snapshot *snapshot);
+void xe_lrc_snapshot_print(struct xe_lrc_snapshot *snapshot, struct drm_printer *p);
+void xe_lrc_snapshot_free(struct xe_lrc_snapshot *snapshot);
 
 #endif

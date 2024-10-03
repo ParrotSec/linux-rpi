@@ -6,7 +6,7 @@
 CONFIG_IRQ_ALL_CPUS=y
 CONFIG_NUMA=y
 ## choice: Page size
-CONFIG_PPC_64K_PAGES=y
+CONFIG_PPC_4K_PAGES=y
 ## end choice
 CONFIG_SCHED_SMT=y
 CONFIG_KERNEL_START=0xc000000000000000
@@ -168,16 +168,6 @@ CONFIG_HVCS=m
 ## file: drivers/tty/serial/Kconfig
 ##
 # CONFIG_SERIAL_ICOM is not set
-
-##
-## file: drivers/vfio/Kconfig
-##
-CONFIG_VFIO=m
-
-##
-## file: drivers/vfio/pci/Kconfig
-##
-CONFIG_VFIO_PCI=m
 
 ##
 ## file: drivers/video/fbdev/Kconfig

@@ -518,11 +518,6 @@ int btf_ext_visit_str_offs(struct btf_ext *btf_ext, str_off_visit_fn visit, void
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
 				 __u32 kind);
 
-typedef int (*kallsyms_cb_t)(unsigned long long sym_addr, char sym_type,
-			     const char *sym_name, void *ctx);
-
-int libbpf_kallsyms_parse(kallsyms_cb_t cb, void *arg);
-
 /* handle direct returned errors */
 static inline int libbpf_err(int ret)
 {
@@ -602,13 +597,9 @@ static inline int ensure_good_fd(int fd)
 	return fd;
 }
 
-static inline int sys_dup2(int oldfd, int newfd)
+static inline int sys_dup3(int oldfd, int newfd, int flags)
 {
-#ifdef __NR_dup2
-	return syscall(__NR_dup2, oldfd, newfd);
-#else
-	return syscall(__NR_dup3, oldfd, newfd, 0);
-#endif
+	return syscall(__NR_dup3, oldfd, newfd, flags);
 }
 
 /* Point *fixed_fd* to the same file that *tmp_fd* points to.
@@ -619,7 +610,7 @@ static inline int reuse_fd(int fixed_fd, int tmp_fd)
 {
 	int err;
 
-	err = sys_dup2(tmp_fd, fixed_fd);
+	err = sys_dup3(tmp_fd, fixed_fd, O_CLOEXEC);
 	err = err < 0 ? -errno : 0;
 	close(tmp_fd); /* clean up temporary FD */
 	return err;

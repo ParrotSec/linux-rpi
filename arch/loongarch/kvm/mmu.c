@@ -494,38 +494,6 @@ bool kvm_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range)
 			range->end << PAGE_SHIFT, &ctx);
 }
 
-bool kvm_set_spte_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
-{
-	unsigned long prot_bits;
-	kvm_pte_t *ptep;
-	kvm_pfn_t pfn = pte_pfn(range->arg.pte);
-	gpa_t gpa = range->start << PAGE_SHIFT;
-
-	ptep = kvm_populate_gpa(kvm, NULL, gpa, 0);
-	if (!ptep)
-		return false;
-
-	/* Replacing an absent or old page doesn't need flushes */
-	if (!kvm_pte_present(NULL, ptep) || !kvm_pte_young(*ptep)) {
-		kvm_set_pte(ptep, 0);
-		return false;
-	}
-
-	/* Fill new pte if write protected or page migrated */
-	prot_bits = _PAGE_PRESENT | __READABLE;
-	prot_bits |= _CACHE_MASK & pte_val(range->arg.pte);
-
-	/*
-	 * Set _PAGE_WRITE or _PAGE_DIRTY iff old and new pte both support
-	 * _PAGE_WRITE for map_page_fast if next page write fault
-	 * _PAGE_DIRTY since gpa has already recorded as dirty page
-	 */
-	prot_bits |= __WRITEABLE & *ptep & pte_val(range->arg.pte);
-	kvm_set_pte(ptep, kvm_pfn_pte(pfn, __pgprot(prot_bits)));
-
-	return true;
-}
-
 bool kvm_age_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
 {
 	kvm_ptw_ctx ctx;
@@ -727,19 +695,19 @@ static int host_pfn_mapping_level(struct kvm *kvm, gfn_t gfn,
 	 * value) and then p*d_offset() walks into the target huge page instead
 	 * of the old page table (sees the new value).
 	 */
-	pgd = READ_ONCE(*pgd_offset(kvm->mm, hva));
+	pgd = pgdp_get(pgd_offset(kvm->mm, hva));
 	if (pgd_none(pgd))
 		goto out;
 
-	p4d = READ_ONCE(*p4d_offset(&pgd, hva));
+	p4d = p4dp_get(p4d_offset(&pgd, hva));
 	if (p4d_none(p4d) || !p4d_present(p4d))
 		goto out;
 
-	pud = READ_ONCE(*pud_offset(&p4d, hva));
+	pud = pudp_get(pud_offset(&p4d, hva));
 	if (pud_none(pud) || !pud_present(pud))
 		goto out;
 
-	pmd = READ_ONCE(*pmd_offset(&pud, hva));
+	pmd = pmdp_get(pmd_offset(&pud, hva));
 	if (pmd_none(pmd) || !pmd_present(pmd))
 		goto out;
 

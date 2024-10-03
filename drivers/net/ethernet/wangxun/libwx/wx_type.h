@@ -424,9 +424,9 @@ enum WX_MSCA_CMD_value {
 #define WX_MIN_RXD                   128
 #define WX_MIN_TXD                   128
 
-/* Number of Transmit and Receive Descriptors must be a multiple of 8 */
-#define WX_REQ_RX_DESCRIPTOR_MULTIPLE   8
-#define WX_REQ_TX_DESCRIPTOR_MULTIPLE   8
+/* Number of Transmit and Receive Descriptors must be a multiple of 128 */
+#define WX_REQ_RX_DESCRIPTOR_MULTIPLE   128
+#define WX_REQ_TX_DESCRIPTOR_MULTIPLE   128
 
 #define WX_MAX_JUMBO_FRAME_SIZE      9432 /* max payload 9414 */
 #define VMDQ_P(p)                    p
@@ -1058,6 +1058,7 @@ struct wx {
 	dma_addr_t isb_dma;
 	u32 *isb_mem;
 	u32 isb_tag[WX_ISB_MAX];
+	bool misc_irq_domain;
 
 #define WX_MAX_RETA_ENTRIES 128
 #define WX_RSS_INDIR_TBL_MAX 64

@@ -579,6 +579,15 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 			goto drop;
 		}
 
+		if (unlikely(x->dir && x->dir != XFRM_SA_DIR_IN)) {
+			secpath_reset(skb);
+			XFRM_INC_STATS(net, LINUX_MIB_XFRMINSTATEDIRERROR);
+			xfrm_audit_state_notfound(skb, family, spi, seq);
+			xfrm_state_put(x);
+			x = NULL;
+			goto drop;
+		}
+
 		skb->mark = xfrm_smark_get(skb->mark, x);
 
 		sp->xvec[sp->len++] = x;

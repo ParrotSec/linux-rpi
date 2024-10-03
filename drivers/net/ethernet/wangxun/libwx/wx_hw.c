@@ -1408,7 +1408,7 @@ int wx_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct wx *wx = netdev_priv(netdev);
 
-	netdev->mtu = new_mtu;
+	WRITE_ONCE(netdev->mtu, new_mtu);
 	wx_set_rx_buffer_len(wx);
 
 	return 0;
@@ -1959,6 +1959,7 @@ int wx_sw_init(struct wx *wx)
 	}
 
 	bitmap_zero(wx->state, WX_STATE_NBITS);
+	wx->misc_irq_domain = false;
 
 	return 0;
 }

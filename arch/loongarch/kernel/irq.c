@@ -102,6 +102,9 @@ void __init init_IRQ(void)
 	mp_ops.init_ipi();
 #endif
 
+	for (i = 0; i < NR_IRQS; i++)
+		irq_set_noprobe(i);
+
 	for_each_possible_cpu(i) {
 		page = alloc_pages_node(cpu_to_node(i), GFP_KERNEL, order);
 

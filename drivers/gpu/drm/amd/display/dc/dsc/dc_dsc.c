@@ -145,7 +145,6 @@ uint32_t dc_bandwidth_in_kbps_from_timing(
 	return kbps;
 }
 
-
 /* Forward Declerations */
 static bool decide_dsc_bandwidth_range(
 		const uint32_t min_bpp_x16,
@@ -883,7 +882,7 @@ static bool setup_dsc_config(
 
 	memset(dsc_cfg, 0, sizeof(struct dc_dsc_config));
 
-	dc_dsc_get_policy_for_timing(timing, options->max_target_bpp_limit_override_x16, &policy);
+	dc_dsc_get_policy_for_timing(timing, options->max_target_bpp_limit_override_x16, &policy, link_encoding);
 	pic_width = timing->h_addressable + timing->h_border_left + timing->h_border_right;
 	pic_height = timing->v_addressable + timing->v_border_top + timing->v_border_bottom;
 
@@ -1019,14 +1018,30 @@ static bool setup_dsc_config(
 		else
 			is_dsc_possible = false;
 	}
-	// When we force 2:1 ODM, we can't have 1 slice to divide amongst 2 separate DSC instances
-	// need to enforce at minimum 2 horizontal slices
-	if (options->dsc_force_odm_hslice_override) {
-		num_slices_h = fit_num_slices_up(dsc_common_caps.slice_caps, 2);
-		if (num_slices_h == 0)
-			is_dsc_possible = false;
+	// When we force ODM, num dsc h slices must be divisible by num odm h slices
+	switch (options->dsc_force_odm_hslice_override) {
+	case 0:
+	case 1:
+		break;
+	case 2:
+		if (num_slices_h < 2)
+			num_slices_h = fit_num_slices_up(dsc_common_caps.slice_caps, 2);
+		break;
+	case 3:
+		if (dsc_common_caps.slice_caps.bits.NUM_SLICES_12)
+			num_slices_h = 12;
+		else
+			num_slices_h = 0;
+		break;
+	case 4:
+		if (num_slices_h < 4)
+			num_slices_h = fit_num_slices_up(dsc_common_caps.slice_caps, 4);
+		break;
+	default:
+		break;
 	}
-
+	if (num_slices_h == 0)
+		is_dsc_possible = false;
 	if (!is_dsc_possible)
 		goto done;
 
@@ -1156,7 +1171,8 @@ uint32_t dc_dsc_stream_bandwidth_overhead_in_kbps(
 
 void dc_dsc_get_policy_for_timing(const struct dc_crtc_timing *timing,
 		uint32_t max_target_bpp_limit_override_x16,
-		struct dc_dsc_policy *policy)
+		struct dc_dsc_policy *policy,
+		const enum dc_link_encoding_format link_encoding)
 {
 	uint32_t bpc = 0;
 

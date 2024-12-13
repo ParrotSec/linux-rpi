@@ -396,7 +396,7 @@ struct cpufreq_driver {
 
 	int		(*online)(struct cpufreq_policy *policy);
 	int		(*offline)(struct cpufreq_policy *policy);
-	int		(*exit)(struct cpufreq_policy *policy);
+	void		(*exit)(struct cpufreq_policy *policy);
 	int		(*suspend)(struct cpufreq_policy *policy);
 	int		(*resume)(struct cpufreq_policy *policy);
 
@@ -785,7 +785,7 @@ ssize_t cpufreq_show_cpus(const struct cpumask *mask, char *buf);
 
 #ifdef CONFIG_CPU_FREQ
 int cpufreq_boost_trigger_state(int state);
-int cpufreq_boost_enabled(void);
+bool cpufreq_boost_enabled(void);
 int cpufreq_enable_boost_support(void);
 bool policy_has_boost_freq(struct cpufreq_policy *policy);
 
@@ -1113,10 +1113,9 @@ static inline int parse_perf_domain(int cpu, const char *list_name,
 				    const char *cell_name,
 				    struct of_phandle_args *args)
 {
-	struct device_node *cpu_np;
 	int ret;
 
-	cpu_np = of_cpu_device_node_get(cpu);
+	struct device_node *cpu_np __free(device_node) = of_cpu_device_node_get(cpu);
 	if (!cpu_np)
 		return -ENODEV;
 
@@ -1124,9 +1123,6 @@ static inline int parse_perf_domain(int cpu, const char *list_name,
 					 args);
 	if (ret < 0)
 		return ret;
-
-	of_node_put(cpu_np);
-
 	return 0;
 }
 
@@ -1164,9 +1160,9 @@ static inline int cpufreq_boost_trigger_state(int state)
 {
 	return 0;
 }
-static inline int cpufreq_boost_enabled(void)
+static inline bool cpufreq_boost_enabled(void)
 {
-	return 0;
+	return false;
 }
 
 static inline int cpufreq_enable_boost_support(void)

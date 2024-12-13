@@ -811,7 +811,7 @@ static int rtl_download_firmware(struct hci_dev *hdev,
 	struct sk_buff *skb;
 	struct hci_rp_read_local_version *rp;
 
-	dl_cmd = kmalloc(sizeof(struct rtl_download_cmd), GFP_KERNEL);
+	dl_cmd = kmalloc(sizeof(*dl_cmd), GFP_KERNEL);
 	if (!dl_cmd)
 		return -ENOMEM;
 
@@ -1296,6 +1296,7 @@ void btrtl_set_quirks(struct hci_dev *hdev, struct btrtl_device_info *btrtl_dev)
 			btrealtek_set_flag(hdev, REALTEK_ALT6_CONTINUOUS_TX_CHIP);
 
 		if (btrtl_dev->project_id == CHIP_ID_8852A ||
+		    btrtl_dev->project_id == CHIP_ID_8852B ||
 		    btrtl_dev->project_id == CHIP_ID_8852C)
 			set_bit(HCI_QUIRK_USE_MSFT_EXT_ADDRESS_FILTER, &hdev->quirks);
 

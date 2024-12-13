@@ -242,7 +242,8 @@ static void afs_fetch_data_notify(struct afs_operation *op)
 
 	req->error = error;
 	if (subreq) {
-		__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+		if (subreq->rreq->origin != NETFS_DIO_READ)
+			__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
 		netfs_subreq_terminated(subreq, error ?: req->actual_len, false);
 		req->subreq = NULL;
 	} else if (req->done) {
@@ -403,6 +404,7 @@ const struct netfs_request_ops afs_req_ops = {
 	.begin_writeback	= afs_begin_writeback,
 	.prepare_write		= afs_prepare_write,
 	.issue_write		= afs_issue_write,
+	.retry_request		= afs_retry_request,
 };
 
 static void afs_add_open_mmap(struct afs_vnode *vnode)

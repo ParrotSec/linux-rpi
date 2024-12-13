@@ -5536,9 +5536,9 @@ bond_xdp_get_xmit_slave(struct net_device *bond_dev, struct xdp_buff *xdp)
 		break;
 
 	default:
-		/* Should never happen. Mode guarded by bond_xdp_check() */
-		netdev_err(bond_dev, "Unknown bonding mode %d for xdp xmit\n", BOND_MODE(bond));
-		WARN_ON_ONCE(1);
+		if (net_ratelimit())
+			netdev_err(bond_dev, "Unknown bonding mode %d for xdp xmit\n",
+				   BOND_MODE(bond));
 		return NULL;
 	}
 
@@ -5794,10 +5794,10 @@ static void bond_ethtool_get_drvinfo(struct net_device *bond_dev,
 }
 
 static int bond_ethtool_get_ts_info(struct net_device *bond_dev,
-				    struct ethtool_ts_info *info)
+				    struct kernel_ethtool_ts_info *info)
 {
 	struct bonding *bond = netdev_priv(bond_dev);
-	struct ethtool_ts_info ts_info;
+	struct kernel_ethtool_ts_info ts_info;
 	struct net_device *real_dev;
 	bool sw_tx_support = false;
 	struct list_head *iter;

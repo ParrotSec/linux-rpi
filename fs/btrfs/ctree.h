@@ -221,9 +221,11 @@ struct btrfs_root {
 
 	struct list_head root_list;
 
-	spinlock_t inode_lock;
-	/* red-black tree that keeps track of in-memory inodes */
-	struct rb_root inode_tree;
+	/*
+	 * Xarray that keeps track of in-memory inodes, protected by the lock
+	 * @inode_lock.
+	 */
+	struct xarray inodes;
 
 	/*
 	 * Xarray that keeps track of delayed nodes of every inode, protected
@@ -457,6 +459,8 @@ struct btrfs_file_private {
 	void *filldir_buf;
 	u64 last_index;
 	struct extent_state *llseek_cached_state;
+	/* Task that allocated this structure. */
+	struct task_struct *owner_task;
 };
 
 static inline u32 BTRFS_LEAF_DATA_SIZE(const struct btrfs_fs_info *info)

@@ -523,8 +523,10 @@ static int ovl_adaptor_comp_init(struct device *dev, struct component_match **ma
 		}
 
 		comp_pdev = of_find_device_by_node(node);
-		if (!comp_pdev)
+		if (!comp_pdev) {
+			of_node_put(node);
 			return -EPROBE_DEFER;
+		}
 
 		priv->ovl_adaptor_comp[id] = &comp_pdev->dev;
 
@@ -612,10 +614,10 @@ static int mtk_disp_ovl_adaptor_probe(struct platform_device *pdev)
 	ret = component_add(dev, &mtk_disp_ovl_adaptor_comp_ops);
 	if (ret != 0) {
 		pm_runtime_disable(dev);
-		dev_err(dev, "Failed to add component: %d\n", ret);
+		return dev_err_probe(dev, ret, "Failed to add component\n");
 	}
 
-	return ret;
+	return 0;
 }
 
 static void mtk_disp_ovl_adaptor_remove(struct platform_device *pdev)

@@ -565,6 +565,7 @@ static int evlist__tty_browse_hists(struct evlist *evlist, struct report *rep, c
 		struct hists *hists = evsel__hists(pos);
 		const char *evname = evsel__name(pos);
 
+		i++;
 		if (symbol_conf.event_group && !evsel__is_group_leader(pos))
 			continue;
 
@@ -574,7 +575,7 @@ static int evlist__tty_browse_hists(struct evlist *evlist, struct report *rep, c
 		hists__fprintf_nr_sample_events(hists, rep, evname, stdout);
 
 		if (rep->total_cycles_mode) {
-			report__browse_block_hists(&rep->block_reports[i++].hist,
+			report__browse_block_hists(&rep->block_reports[i - 1].hist,
 						   rep->min_percent, pos, NULL);
 			continue;
 		}
@@ -810,8 +811,8 @@ static int stats_print(struct report *rep)
 {
 	struct perf_session *session = rep->session;
 
-	perf_session__fprintf_nr_events(session, stdout, rep->skip_empty);
-	evlist__fprintf_nr_events(session->evlist, stdout, rep->skip_empty);
+	perf_session__fprintf_nr_events(session, stdout);
+	evlist__fprintf_nr_events(session->evlist, stdout);
 	return 0;
 }
 
@@ -1089,10 +1090,7 @@ static int __cmd_report(struct report *rep)
 			perf_session__fprintf_dsos(session, stdout);
 
 		if (dump_trace) {
-			perf_session__fprintf_nr_events(session, stdout,
-							rep->skip_empty);
-			evlist__fprintf_nr_events(session->evlist, stdout,
-						  rep->skip_empty);
+			stats_print(rep);
 			return 0;
 		}
 	}
@@ -1561,6 +1559,8 @@ int cmd_report(int argc, const char **argv)
 
 	data.path  = input_name;
 	data.force = symbol_conf.force;
+
+	symbol_conf.skip_empty = report.skip_empty;
 
 repeat:
 	session = perf_session__new(&data, &report.tool);

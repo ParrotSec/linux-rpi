@@ -211,7 +211,7 @@ static int vcap_test_port_info(struct net_device *ndev,
 	return 0;
 }
 
-static struct vcap_operations test_callbacks = {
+static const struct vcap_operations test_callbacks = {
 	.validate_keyset = test_val_keyset,
 	.add_default_fields = test_add_def_fields,
 	.cache_erase = test_cache_erase,
@@ -1444,6 +1444,8 @@ static void vcap_api_encode_rule_test(struct kunit *test)
 
 	ret = vcap_del_rule(&test_vctrl, &test_netdev, id);
 	KUNIT_EXPECT_EQ(test, 0, ret);
+
+	vcap_free_rule(rule);
 }
 
 static void vcap_api_set_rule_counter_test(struct kunit *test)

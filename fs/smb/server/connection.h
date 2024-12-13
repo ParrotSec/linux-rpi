@@ -106,6 +106,7 @@ struct ksmbd_conn {
 	bool				signing_negotiated;
 	__le16				signing_algorithm;
 	bool				binding;
+	atomic_t			refcnt;
 };
 
 struct ksmbd_conn_ops {
@@ -133,8 +134,8 @@ struct ksmbd_transport_ops {
 };
 
 struct ksmbd_transport {
-	struct ksmbd_conn		*conn;
-	struct ksmbd_transport_ops	*ops;
+	struct ksmbd_conn			*conn;
+	const struct ksmbd_transport_ops	*ops;
 };
 
 #define KSMBD_TCP_RECV_TIMEOUT	(7 * HZ)

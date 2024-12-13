@@ -4687,6 +4687,17 @@ lpfc_sli_flush_io_rings(struct lpfc_hba *phba)
 	/* Look on all the FCP Rings for the iotag */
 	if (phba->sli_rev >= LPFC_SLI_REV4) {
 		for (i = 0; i < phba->cfg_hdw_queue; i++) {
+			if (!phba->sli4_hba.hdwq ||
+			    !phba->sli4_hba.hdwq[i].io_wq) {
+				lpfc_printf_log(phba, KERN_ERR, LOG_SLI,
+						"7777 hdwq's deleted %lx "
+						"%lx %x %x\n",
+						phba->pport->load_flag,
+						phba->hba_flag,
+						phba->link_state,
+						phba->sli.sli_flag);
+				return;
+			}
 			pring = phba->sli4_hba.hdwq[i].io_wq->pring;
 
 			spin_lock_irq(&pring->ring_lock);
@@ -12302,18 +12313,16 @@ lpfc_sli_abort_els_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 				goto release_iocb;
 			}
 		}
-
-		lpfc_printf_log(phba, KERN_WARNING, LOG_ELS | LOG_SLI,
-				"0327 Cannot abort els iocb x%px "
-				"with io cmd xri %x abort tag : x%x, "
-				"abort status %x abort code %x\n",
-				cmdiocb, get_job_abtsiotag(phba, cmdiocb),
-				(phba->sli_rev == LPFC_SLI_REV4) ?
-				get_wqe_reqtag(cmdiocb) :
-				cmdiocb->iocb.un.acxri.abortContextTag,
-				ulp_status, ulp_word4);
-
 	}
+
+	lpfc_printf_log(phba, KERN_INFO, LOG_ELS | LOG_SLI,
+			"0327 Abort els iocb complete x%px with io cmd xri %x "
+			"abort tag x%x abort status %x abort code %x\n",
+			cmdiocb, get_job_abtsiotag(phba, cmdiocb),
+			(phba->sli_rev == LPFC_SLI_REV4) ?
+			get_wqe_reqtag(cmdiocb) :
+			cmdiocb->iocb.ulpIoTag,
+			ulp_status, ulp_word4);
 release_iocb:
 	lpfc_sli_release_iocbq(phba, cmdiocb);
 	return;
@@ -12510,10 +12519,10 @@ abort_iotag_exit:
 	lpfc_printf_vlog(vport, KERN_INFO, LOG_SLI,
 			 "0339 Abort IO XRI x%x, Original iotag x%x, "
 			 "abort tag x%x Cmdjob : x%px Abortjob : x%px "
-			 "retval x%x : IA %d\n",
+			 "retval x%x : IA %d cmd_cmpl %ps\n",
 			 ulp_context, (phba->sli_rev == LPFC_SLI_REV4) ?
 			 cmdiocb->iotag : iotag, iotag, cmdiocb, abtsiocbp,
-			 retval, ia);
+			 retval, ia, abtsiocbp->cmd_cmpl);
 	if (retval) {
 		cmdiocb->cmd_flag &= ~LPFC_DRIVER_ABORTED;
 		__lpfc_sli_release_iocbq(phba, abtsiocbp);

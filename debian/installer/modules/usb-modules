@@ -1,6 +1,7 @@
 # Include USB host and dual-role drivers by default
 drivers/usb/host/**
 drivers/usb/c67x00/* ?
+drivers/usb/cdns3/* ?
 drivers/usb/chipidea/* ?
 drivers/usb/dwc2/* ?
 drivers/usb/dwc3/* ?

@@ -1226,7 +1226,8 @@ static const struct bpf_func_proto bpf_get_func_arg_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_PTR_TO_LONG,
+	.arg3_type	= ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_ALIGNED,
+	.arg3_size	= sizeof(u64),
 };
 
 BPF_CALL_2(get_func_ret, void *, ctx, u64 *, value)
@@ -1242,7 +1243,8 @@ static const struct bpf_func_proto bpf_get_func_ret_proto = {
 	.func		= get_func_ret,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
-	.arg2_type	= ARG_PTR_TO_LONG,
+	.arg2_type	= ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_ALIGNED,
+	.arg2_size	= sizeof(u64),
 };
 
 BPF_CALL_1(get_func_arg_cnt, void *, ctx)
@@ -1369,8 +1371,8 @@ __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 #ifdef CONFIG_SYSTEM_DATA_VERIFICATION
 /**
  * bpf_verify_pkcs7_signature - verify a PKCS#7 signature
- * @data_ptr: data to verify
- * @sig_ptr: signature of the data
+ * @data_p: data to verify
+ * @sig_p: signature of the data
  * @trusted_keyring: keyring with keys trusted for signature verification
  *
  * Verify the PKCS#7 signature *sig_ptr* against the supplied *data_ptr*
@@ -1378,10 +1380,12 @@ __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
  *
  * Return: 0 on success, a negative value on error.
  */
-__bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr_kern *data_ptr,
-			       struct bpf_dynptr_kern *sig_ptr,
+__bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
+			       struct bpf_dynptr *sig_p,
 			       struct bpf_key *trusted_keyring)
 {
+	struct bpf_dynptr_kern *data_ptr = (struct bpf_dynptr_kern *)data_p;
+	struct bpf_dynptr_kern *sig_ptr = (struct bpf_dynptr_kern *)sig_p;
 	const void *data, *sig;
 	u32 data_len, sig_len;
 	int ret;
@@ -1444,7 +1448,7 @@ __bpf_kfunc_start_defs();
  * bpf_get_file_xattr - get xattr of a file
  * @file: file to get xattr from
  * @name__str: name of the xattr
- * @value_ptr: output buffer of the xattr value
+ * @value_p: output buffer of the xattr value
  *
  * Get xattr *name__str* of *file* and store the output in *value_ptr*.
  *
@@ -1453,8 +1457,9 @@ __bpf_kfunc_start_defs();
  * Return: 0 on success, a negative value on error.
  */
 __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
-				   struct bpf_dynptr_kern *value_ptr)
+				   struct bpf_dynptr *value_p)
 {
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
 	struct dentry *dentry;
 	u32 value_len;
 	void *value;
@@ -3482,16 +3487,19 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 					     uprobes[i].ref_ctr_offset,
 					     &uprobes[i].consumer);
 		if (err) {
-			bpf_uprobe_unregister(&path, uprobes, i);
-			goto error_free;
+			link->cnt = i;
+			goto error_unregister;
 		}
 	}
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
-		goto error_free;
+		goto error_unregister;
 
 	return bpf_link_settle(&link_primer);
+
+error_unregister:
+	bpf_uprobe_unregister(&path, uprobes, link->cnt);
 
 error_free:
 	kvfree(uprobes);

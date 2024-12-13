@@ -20,7 +20,6 @@
 #define MAX_FACILITY_BIT (sizeof(stfle_fac_list) * 8)
 
 extern u64 stfle_fac_list[16];
-extern u64 alt_stfle_fac_list[16];
 
 static inline void __set_facility(unsigned long nr, void *facilities)
 {
@@ -60,8 +59,10 @@ static inline int test_facility(unsigned long nr)
 	unsigned long facilities_als[] = { FACILITIES_ALS };
 
 	if (__builtin_constant_p(nr) && nr < sizeof(facilities_als) * 8) {
-		if (__test_facility(nr, &facilities_als))
-			return 1;
+		if (__test_facility(nr, &facilities_als)) {
+			if (!__is_defined(__DECOMPRESSOR))
+				return 1;
+		}
 	}
 	return __test_facility(nr, &stfle_fac_list);
 }
@@ -92,8 +93,8 @@ static inline void __stfle(u64 *stfle_fac_list, int size)
 
 	asm volatile(
 		"	stfl	0(0)\n"
-		: "=m" (S390_lowcore.stfl_fac_list));
-	stfl_fac_list = S390_lowcore.stfl_fac_list;
+		: "=m" (get_lowcore()->stfl_fac_list));
+	stfl_fac_list = get_lowcore()->stfl_fac_list;
 	memcpy(stfle_fac_list, &stfl_fac_list, 4);
 	nr = 4; /* bytes stored by stfl */
 	if (stfl_fac_list & 0x01000000) {

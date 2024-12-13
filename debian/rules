@@ -48,8 +48,7 @@ build-arch: debian/control
 # without -O2, so instruct blhc to ignore those
 	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*tools/perf/tests/workloads/.*'
 
-# Those tools conflict between flags used for host and build, so get none
-	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*/tools/objtool/.*'
+# fixdep is not always built with the right flags but is also not packaged
 	@printf '%s\n' 'blhc: ignore-line-regexp: .* -o .*/tools/.*/fixdep.*'
 
 # We need to use terse builds in CI due to the log size limit.  This
@@ -76,20 +75,15 @@ binary-indep: build-indep
 	$(MAKE) -f debian/rules.gen binary-indep
 
 DIR_ORIG = ../orig/$(DEB_SOURCE)-$(DEB_VERSION_EPOCH_UPSTREAM)
-TAR_ORIG_NAME = $(DEB_SOURCE)_$(DEB_VERSION_EPOCH_UPSTREAM).orig.tar.xz
-TAR_ORIG = $(firstword $(wildcard ../$(TAR_ORIG_NAME)) $(wildcard ../orig/$(TAR_ORIG_NAME)))
+TAR_ORIG = ../$(DEB_SOURCE)_$(DEB_VERSION_EPOCH_UPSTREAM).orig.tar.xz
 
 orig: $(DIR_ORIG)
 	rsync --delete --exclude /debian --exclude .git --link-dest=$(DIR_ORIG)/ -a $(DIR_ORIG)/ .
 	QUILT_PATCHES='$(CURDIR)/debian/patches' QUILT_PC=.pc quilt push --quiltrc - -a -q --fuzz=0
 
-$(DIR_ORIG):
-ifeq ($(TAR_ORIG),)
-	$(error Cannot find orig tarball $(TAR_ORIG_NAME))
-else
+$(DIR_ORIG): $(TAR_ORIG)
 	mkdir -p ../orig
 	tar -C ../orig -xaf $(TAR_ORIG)
-endif
 
 CLEAN_PATTERNS := $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_linux/*.pyc debian/lib/python/debian_linux/__pycache__ $$(find debian -maxdepth 1 -type d -name 'linux-*') debian/*-modules-*-di* debian/kernel-image-*-di* debian/*-tmp debian/*.substvars
 

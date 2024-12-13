@@ -2,7 +2,7 @@
 //
 // ALSA SoC Texas Instruments TAS2563/TAS2781 Audio Smart Amplifier
 //
-// Copyright (C) 2022 - 2023 Texas Instruments Incorporated
+// Copyright (C) 2022 - 2024 Texas Instruments Incorporated
 // https://www.ti.com
 //
 // The TAS2563/TAS2781 driver implements a flexible and configurable
@@ -43,13 +43,14 @@
 					(page * 128)) + reg)
 
 /*Software Reset */
-#define TAS2781_REG_SWRESET		TASDEVICE_REG(0x0, 0X0, 0x01)
-#define TAS2781_REG_SWRESET_RESET	BIT(0)
+#define TASDEVICE_REG_SWRESET		TASDEVICE_REG(0x0, 0X0, 0x01)
+#define TASDEVICE_REG_SWRESET_RESET	BIT(0)
 
 /*I2C Checksum */
 #define TASDEVICE_I2CChecksum		TASDEVICE_REG(0x0, 0x0, 0x7E)
 
 /* Volume control */
+#define TAS2563_DVC_LVL			TASDEVICE_REG(0x00, 0x02, 0x0C)
 #define TAS2781_DVC_LVL			TASDEVICE_REG(0x0, 0x0, 0x1A)
 #define TAS2781_AMP_LEVEL		TASDEVICE_REG(0x0, 0x0, 0x03)
 #define TAS2781_AMP_LEVEL_MASK		GENMASK(5, 1)
@@ -80,11 +81,6 @@ struct tasdevice {
 	bool is_loaderr;
 };
 
-struct tasdevice_irqinfo {
-	int irq_gpio;
-	int irq;
-};
-
 struct calidata {
 	unsigned char *data;
 	unsigned long total_sz;
@@ -92,7 +88,6 @@ struct calidata {
 
 struct tasdevice_priv {
 	struct tasdevice tasdevice[TASDEVICE_MAX_CHANNELS];
-	struct tasdevice_irqinfo irq_info;
 	struct tasdevice_rca rcabin;
 	struct calidata cali_data;
 	struct tasdevice_fw *fmw;
@@ -108,11 +103,13 @@ struct tasdevice_priv {
 	unsigned char coef_binaryname[64];
 	unsigned char rca_binaryname[64];
 	unsigned char dev_name[32];
+	const char *name_prefix;
 	unsigned char ndev;
 	unsigned int magic_num;
 	unsigned int chip_id;
 	unsigned int sysclk;
 
+	int irq;
 	int cur_prog;
 	int cur_conf;
 	int fw_state;
@@ -139,7 +136,7 @@ struct tasdevice_priv {
 	void (*apply_calibration)(struct tasdevice_priv *tas_priv);
 };
 
-void tas2781_reset(struct tasdevice_priv *tas_dev);
+void tasdevice_reset(struct tasdevice_priv *tas_dev);
 int tascodec_init(struct tasdevice_priv *tas_priv, void *codec,
 	struct module *module,
 	void (*cont)(const struct firmware *fw, void *context));

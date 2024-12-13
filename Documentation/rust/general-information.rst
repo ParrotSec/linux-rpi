@@ -7,6 +7,14 @@ This document contains useful information to know when working with
 the Rust support in the kernel.
 
 
+``no_std``
+----------
+
+The Rust support in the kernel can link only `core <https://doc.rust-lang.org/core/>`_,
+but not `std <https://doc.rust-lang.org/std/>`_. Crates for use in the
+kernel must opt into this behavior using the ``#![no_std]`` attribute.
+
+
 Code documentation
 ------------------
 
@@ -67,7 +75,7 @@ should provide as-safe-as-possible abstractions as needed.
 .. code-block::
 
 	                                                rust/bindings/
-	                                               (rust/helpers.c)
+	                                               (rust/helpers/)
 
 	                                                   include/ -----+ <-+
 	                                                                 |   |
@@ -104,7 +112,7 @@ output files in the ``rust/bindings/`` directory.
 
 For parts of the C header that ``bindgen`` does not auto generate, e.g. C
 ``inline`` functions or non-trivial macros, it is acceptable to add a small
-wrapper function to ``rust/helpers.c`` to make it available for the Rust side as
+wrapper function to ``rust/helpers/`` to make it available for the Rust side as
 well.
 
 Abstractions

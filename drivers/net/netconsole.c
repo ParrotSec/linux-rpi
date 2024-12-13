@@ -344,7 +344,7 @@ static ssize_t enabled_store(struct config_item *item,
 		goto out_unlock;
 
 	err = -EINVAL;
-	if ((bool)enabled == nt->enabled) {
+	if (enabled == nt->enabled) {
 		pr_info("network logging has already %s\n",
 			nt->enabled ? "started" : "stopped");
 		goto out_unlock;
@@ -369,6 +369,7 @@ static ssize_t enabled_store(struct config_item *item,
 		if (err)
 			goto out_unlock;
 
+		nt->enabled = true;
 		pr_info("network logging started\n");
 	} else {	/* false */
 		/* We need to disable the netconsole before cleaning it up
@@ -380,8 +381,6 @@ static ssize_t enabled_store(struct config_item *item,
 		spin_unlock_irqrestore(&target_list_lock, flags);
 		netpoll_cleanup(&nt->np);
 	}
-
-	nt->enabled = enabled;
 
 	mutex_unlock(&dynamic_netconsole_mutex);
 	return strnlen(buf, count);
@@ -1119,8 +1118,14 @@ static void send_ext_msg_udp(struct netconsole_target *nt, const char *msg,
 
 			this_chunk = min(userdata_len - sent_userdata,
 					 MAX_PRINT_CHUNK - preceding_bytes);
-			if (WARN_ON_ONCE(this_chunk <= 0))
+			if (WARN_ON_ONCE(this_chunk < 0))
+				/* this_chunk could be zero if all the previous
+				 * message used all the buffer. This is not a
+				 * problem, userdata will be sent in the next
+				 * iteration
+				 */
 				return;
+
 			memcpy(buf + this_header + this_offset,
 			       userdata + sent_userdata,
 			       this_chunk);
@@ -1262,6 +1267,8 @@ static int __init init_netconsole(void)
 		while ((target_config = strsep(&input, ";"))) {
 			nt = alloc_param_target(target_config, count);
 			if (IS_ERR(nt)) {
+				if (IS_ENABLED(CONFIG_NETCONSOLE_DYNAMIC))
+					continue;
 				err = PTR_ERR(nt);
 				goto fail;
 			}

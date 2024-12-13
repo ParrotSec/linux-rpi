@@ -22,8 +22,8 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
 
 --- a/include/linux/perf_event.h
 +++ b/include/linux/perf_event.h
-@@ -1387,6 +1387,11 @@ int perf_cpu_time_max_percent_handler(st
- int perf_event_max_stack_handler(struct ctl_table *table, int write,
+@@ -1589,6 +1589,11 @@ int perf_cpu_time_max_percent_handler(co
+ int perf_event_max_stack_handler(const struct ctl_table *table, int write,
  		void *buffer, size_t *lenp, loff_t *ppos);
  
 +static inline bool perf_paranoid_any(void)
@@ -36,7 +36,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  
 --- a/kernel/events/core.c
 +++ b/kernel/events/core.c
-@@ -415,8 +415,13 @@ static struct kmem_cache *perf_event_cac
+@@ -419,8 +419,13 @@ static struct kmem_cache *perf_event_cac
   *   0 - disallow raw tracepoint access for unpriv
   *   1 - disallow cpu events for unpriv
   *   2 - disallow kernel profiling for unpriv
@@ -50,7 +50,7 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  
  /* Minimum for 512 kiB + 1 user control page */
  int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
-@@ -12325,6 +12330,9 @@ SYSCALL_DEFINE5(perf_event_open,
+@@ -12506,6 +12511,9 @@ SYSCALL_DEFINE5(perf_event_open,
  	if (err)
  		return err;
  
@@ -62,9 +62,9 @@ Signed-off-by: Ben Hutchings <ben@decadent.org.uk>
  	if (err)
 --- a/security/Kconfig
 +++ b/security/Kconfig
-@@ -19,6 +19,15 @@ config SECURITY_DMESG_RESTRICT
+@@ -51,6 +51,15 @@ config PROC_MEM_NO_FORCE
  
- 	  If you are unsure how to answer this question, answer N.
+ endchoice
  
 +config SECURITY_PERF_EVENTS_RESTRICT
 +	bool "Restrict unprivileged use of performance events"

@@ -1,5 +1,5 @@
-1039abb899e94df227cfd4de6f1f6ae0  debian/bin/gencontrol.py
-261aa2d83bcb3ce2077cfd59f12b8106  debian/build/version-info
+c082a1e6700583615deac057b5908751  debian/bin/gencontrol.py
+3c14d7d155e3f2aa223292084a1e1395  debian/build/version-info
 ba2c200f8c43f7ec8d8323561739379a  debian/config/alpha/defines.toml
 7a40edfef0ed7d44bca95972a4160696  debian/config/amd64/defines.toml
 22f6f69a5c8bf0238d090f8e06f1c037  debian/config/arm64/defines.toml
@@ -7,7 +7,6 @@ c90a866f733c09fe7be641341206bcf3  debian/config/armel/defines.toml
 140108e427d4e105d5955982c886a731  debian/config/armhf/defines.toml
 22e080899ba511ec8eafe0d7c43159f0  debian/config/defines.toml
 c840ab923e0857515675530f3f72496b  debian/config/hppa/defines.toml
-ca4d8dc97aead40aa78d7a331234129d  debian/config/i386/defines.toml
 e6bea61846bdd8172d426c492e2a834b  debian/config/loong64/defines.toml
 0ee23490da620ce420b23b2d065ee2d3  debian/config/m68k/defines.toml
 9b8212570b14b5244afd2bce7324f65a  debian/config/mips/defines.toml
@@ -22,9 +21,9 @@ fbff991d47599c6bf2eb39809b430d0c  debian/config/mips64r6el/defines.toml
 bce18e184331a5df2f341c82a68a5412  debian/config/s390x/defines.toml
 b36eadccfa78781ed995270e3ad17a73  debian/config/sh4/defines.toml
 e6aecae3ea3f53f24605e42e76971e3f  debian/config/sparc64/defines.toml
-064fc7b7612ab54e8758144c8d4a322e  debian/installer/package-list
+279db0dd7637074d192194be236b5541  debian/installer/package-list
 c06195eaf3f5d361e55133652fb46a6d  debian/templates/config.control.in
-d010dac283dad435d3bc0ef4e08f4af9  debian/templates/docs.control.in
+f8907b352eda0a9514159e121447fd05  debian/templates/docs.control.in
 a1db96c9e708a9ebb7f8f097f68d79e9  debian/templates/docs.meta.control.in
 2f0364e925c700f09b806dd6bba7d8bf  debian/templates/docs.meta.maintscript.in
 d41d8cd98f00b204e9800998ecf8427e  debian/templates/extra.control.in
@@ -46,7 +45,7 @@ ecec9b1808743ce6dd807a7bbdb293d1  debian/templates/image-dbg.meta.maintscript.in
 afb508873a44a1f196c2a525fec4b415  debian/templates/image-unsigned.prerm.in
 4076af257f2410c3146a1b28e5505d34  debian/templates/image.control.in
 769a43efb579711359e12554e34d0baa  debian/templates/image.meta.bug-presubj.in
-5bb33872db70162f5b85691c13cf8851  debian/templates/image.meta.control.in
+4269fd56c35684b709b68d178ef01d65  debian/templates/image.meta.control.in
 15e98dd33b3bb098bf9f25114c8371c2  debian/templates/image.meta.maintscript.in
 0327750d6696dee915a532aec73a0fd6  debian/templates/image.postinst.in
 03fc85a4557719a9cfcc61eb9d3bdf7b  debian/templates/image.postrm.in
@@ -66,11 +65,11 @@ d0f4305dd51861c31b7d5a7cf9bd0d4f  debian/templates/signed.image.control.in
 03fc85a4557719a9cfcc61eb9d3bdf7b  debian/templates/signed.image.postrm.in
 38004750aa03cea41d5d3aeafff16fcc  debian/templates/signed.image.preinst.in
 afb508873a44a1f196c2a525fec4b415  debian/templates/signed.image.prerm.in
-9f0b04a02a5a99ef779ae2143a167591  debian/templates/signed.source.control.in
+3cae3a79a66a1b6b9c951f96dafd357b  debian/templates/signed.source.control.in
 0ce822e4b4bea2946ed195ba077157f8  debian/templates/signed.source.lintian-overrides.in
-4ddfa42495368685219c00aaed9a6c1d  debian/templates/source.control.in
-a2fcc022c7a3e2b4a35ce00040b6a384  debian/templates/sourcebin.control.in
+cf7a34bd511194511d0e3bf220956271  debian/templates/source.control.in
+a8f967b8b3af11e4ca0b2aae510e7cd4  debian/templates/sourcebin.control.in
 0f283d1deb7af77eba65072e1cd81de3  debian/templates/sourcebin.meta.control.in
 a20d83421667bad21739041d4e743ed1  debian/templates/sourcebin.meta.maintscript.in
-2802c1fd0d84d4efef4a15a0ba0f8f3b  debian/templates/tools-unversioned.control.in
+d0485aec65c1952975f5ff8c54f8f4d0  debian/templates/tools-unversioned.control.in
 09d9076924594816d3f2b958029b2da3  debian/templates/tools-versioned.control.in

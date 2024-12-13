@@ -346,8 +346,10 @@ struct name_cache_entry {
 	u64 parent_gen;
 	int ret;
 	int need_later_update;
+	/* Name length without NUL terminator. */
 	int name_len;
-	char name[];
+	/* Not NUL terminated. */
+	char name[] __counted_by(name_len) __nonstring;
 };
 
 /* See the comment at lru_cache.h about struct btrfs_lru_cache_entry. */
@@ -2388,7 +2390,7 @@ out_cache:
 	/*
 	 * Store the result of the lookup in the name cache.
 	 */
-	nce = kmalloc(sizeof(*nce) + fs_path_len(dest) + 1, GFP_KERNEL);
+	nce = kmalloc(sizeof(*nce) + fs_path_len(dest), GFP_KERNEL);
 	if (!nce) {
 		ret = -ENOMEM;
 		goto out;
@@ -2400,7 +2402,7 @@ out_cache:
 	nce->parent_gen = *parent_gen;
 	nce->name_len = fs_path_len(dest);
 	nce->ret = ret;
-	strcpy(nce->name, dest->start);
+	memcpy(nce->name, dest->start, nce->name_len);
 
 	if (ino < sctx->send_progress)
 		nce->need_later_update = 0;
@@ -5188,11 +5190,10 @@ out:
 static int process_verity(struct send_ctx *sctx)
 {
 	int ret = 0;
-	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
 	struct inode *inode;
 	struct fs_path *p;
 
-	inode = btrfs_iget(fs_info->sb, sctx->cur_ino, sctx->send_root);
+	inode = btrfs_iget(sctx->cur_ino, sctx->send_root);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -5307,7 +5308,7 @@ static int put_file_data(struct send_ctx *sctx, u64 offset, u32 len)
 
 		if (folio_test_readahead(folio))
 			page_cache_async_readahead(mapping, &sctx->ra, NULL, folio,
-						   index, last_index + 1 - index);
+						   last_index + 1 - index);
 
 		if (!folio_test_uptodate(folio)) {
 			btrfs_read_folio(NULL, folio);
@@ -5550,7 +5551,7 @@ static int send_encoded_inline_extent(struct send_ctx *sctx,
 	size_t inline_size;
 	int ret;
 
-	inode = btrfs_iget(fs_info->sb, sctx->cur_ino, root);
+	inode = btrfs_iget(sctx->cur_ino, root);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -5617,7 +5618,7 @@ static int send_encoded_extent(struct send_ctx *sctx, struct btrfs_path *path,
 	u32 crc;
 	int ret;
 
-	inode = btrfs_iget(fs_info->sb, sctx->cur_ino, root);
+	inode = btrfs_iget(sctx->cur_ino, root);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -5746,7 +5747,7 @@ static int send_extent_data(struct send_ctx *sctx, struct btrfs_path *path,
 	if (sctx->cur_inode == NULL) {
 		struct btrfs_root *root = sctx->send_root;
 
-		sctx->cur_inode = btrfs_iget(root->fs_info->sb, sctx->cur_ino, root);
+		sctx->cur_inode = btrfs_iget(sctx->cur_ino, root);
 		if (IS_ERR(sctx->cur_inode)) {
 			int err = PTR_ERR(sctx->cur_inode);
 
@@ -6188,8 +6189,29 @@ static int send_write_or_clone(struct send_ctx *sctx,
 	if (ret < 0)
 		return ret;
 
-	if (clone_root->offset + num_bytes == info.size)
+	if (clone_root->offset + num_bytes == info.size) {
+		/*
+		 * The final size of our file matches the end offset, but it may
+		 * be that its current size is larger, so we have to truncate it
+		 * to any value between the start offset of the range and the
+		 * final i_size, otherwise the clone operation is invalid
+		 * because it's unaligned and it ends before the current EOF.
+		 * We do this truncate to the final i_size when we finish
+		 * processing the inode, but it's too late by then. And here we
+		 * truncate to the start offset of the range because it's always
+		 * sector size aligned while if it were the final i_size it
+		 * would result in dirtying part of a page, filling part of a
+		 * page with zeroes and then having the clone operation at the
+		 * receiver trigger IO and wait for it due to the dirty page.
+		 */
+		if (sctx->parent_root != NULL) {
+			ret = send_truncate(sctx, sctx->cur_ino,
+					    sctx->cur_inode_gen, offset);
+			if (ret < 0)
+				return ret;
+		}
 		goto clone_data;
+	}
 
 write_data:
 	ret = send_extent_data(sctx, path, offset, num_bytes);
@@ -8024,34 +8046,18 @@ out:
  */
 static int ensure_commit_roots_uptodate(struct send_ctx *sctx)
 {
-	int i;
-	struct btrfs_trans_handle *trans = NULL;
+	struct btrfs_root *root = sctx->parent_root;
 
-again:
-	if (sctx->parent_root &&
-	    sctx->parent_root->node != sctx->parent_root->commit_root)
-		goto commit_trans;
+	if (root && root->node != root->commit_root)
+		return btrfs_commit_current_transaction(root);
 
-	for (i = 0; i < sctx->clone_roots_cnt; i++)
-		if (sctx->clone_roots[i].root->node !=
-		    sctx->clone_roots[i].root->commit_root)
-			goto commit_trans;
-
-	if (trans)
-		return btrfs_end_transaction(trans);
-
-	return 0;
-
-commit_trans:
-	/* Use any root, all fs roots will get their commit roots updated. */
-	if (!trans) {
-		trans = btrfs_join_transaction(sctx->send_root);
-		if (IS_ERR(trans))
-			return PTR_ERR(trans);
-		goto again;
+	for (int i = 0; i < sctx->clone_roots_cnt; i++) {
+		root = sctx->clone_roots[i].root;
+		if (root->node != root->commit_root)
+			return btrfs_commit_current_transaction(root);
 	}
 
-	return btrfs_commit_transaction(trans);
+	return 0;
 }
 
 /*
@@ -8072,7 +8078,7 @@ static int flush_delalloc_roots(struct send_ctx *sctx)
 		ret = btrfs_start_delalloc_snapshot(root, false);
 		if (ret)
 			return ret;
-		btrfs_wait_ordered_extents(root, U64_MAX, 0, U64_MAX);
+		btrfs_wait_ordered_extents(root, U64_MAX, NULL);
 	}
 
 	for (i = 0; i < sctx->clone_roots_cnt; i++) {
@@ -8080,7 +8086,7 @@ static int flush_delalloc_roots(struct send_ctx *sctx)
 		ret = btrfs_start_delalloc_snapshot(root, false);
 		if (ret)
 			return ret;
-		btrfs_wait_ordered_extents(root, U64_MAX, 0, U64_MAX);
+		btrfs_wait_ordered_extents(root, U64_MAX, NULL);
 	}
 
 	return 0;
@@ -8108,10 +8114,10 @@ static void dedupe_in_progress_warn(const struct btrfs_root *root)
 		      btrfs_root_id(root), root->dedupe_in_progress);
 }
 
-long btrfs_ioctl_send(struct inode *inode, struct btrfs_ioctl_send_args *arg)
+long btrfs_ioctl_send(struct btrfs_inode *inode, const struct btrfs_ioctl_send_args *arg)
 {
 	int ret = 0;
-	struct btrfs_root *send_root = BTRFS_I(inode)->root;
+	struct btrfs_root *send_root = inode->root;
 	struct btrfs_fs_info *fs_info = send_root->fs_info;
 	struct btrfs_root *clone_root;
 	struct send_ctx *sctx = NULL;

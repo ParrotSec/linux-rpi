@@ -13,6 +13,7 @@
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/bug.h>
+#include <linux/cleanup.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/dmi.h>
@@ -212,7 +213,7 @@ static int ideapad_shared_init(struct ideapad_private *priv)
 {
 	int ret;
 
-	mutex_lock(&ideapad_shared_mutex);
+	guard(mutex)(&ideapad_shared_mutex);
 
 	if (!ideapad_shared) {
 		ideapad_shared = priv;
@@ -222,19 +223,15 @@ static int ideapad_shared_init(struct ideapad_private *priv)
 		ret = -EINVAL;
 	}
 
-	mutex_unlock(&ideapad_shared_mutex);
-
 	return ret;
 }
 
 static void ideapad_shared_exit(struct ideapad_private *priv)
 {
-	mutex_lock(&ideapad_shared_mutex);
+	guard(mutex)(&ideapad_shared_mutex);
 
 	if (ideapad_shared == priv)
 		ideapad_shared = NULL;
-
-	mutex_unlock(&ideapad_shared_mutex);
 }
 
 /*
@@ -422,13 +419,14 @@ static ssize_t camera_power_show(struct device *dev,
 				 char *buf)
 {
 	struct ideapad_private *priv = dev_get_drvdata(dev);
-	unsigned long result;
+	unsigned long result = 0;
 	int err;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = read_ec_data(priv->adev->handle, VPCCMD_R_CAMERA, &result);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	return sysfs_emit(buf, "%d\n", !!result);
 }
@@ -445,10 +443,11 @@ static ssize_t camera_power_store(struct device *dev,
 	if (err)
 		return err;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = write_ec_cmd(priv->adev->handle, VPCCMD_W_CAMERA, state);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	return count;
 }
@@ -496,13 +495,14 @@ static ssize_t fan_mode_show(struct device *dev,
 			     char *buf)
 {
 	struct ideapad_private *priv = dev_get_drvdata(dev);
-	unsigned long result;
+	unsigned long result = 0;
 	int err;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = read_ec_data(priv->adev->handle, VPCCMD_R_FAN, &result);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	return sysfs_emit(buf, "%lu\n", result);
 }
@@ -522,10 +522,11 @@ static ssize_t fan_mode_store(struct device *dev,
 	if (state > 4 || state == 3)
 		return -EINVAL;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = write_ec_cmd(priv->adev->handle, VPCCMD_W_FAN, state);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	return count;
 }
@@ -605,13 +606,14 @@ static ssize_t touchpad_show(struct device *dev,
 			     char *buf)
 {
 	struct ideapad_private *priv = dev_get_drvdata(dev);
-	unsigned long result;
+	unsigned long result = 0;
 	int err;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = read_ec_data(priv->adev->handle, VPCCMD_R_TOUCHPAD, &result);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	priv->r_touchpad_val = result;
 
@@ -630,10 +632,11 @@ static ssize_t touchpad_store(struct device *dev,
 	if (err)
 		return err;
 
-	scoped_guard(mutex, &priv->vpc_mutex)
+	scoped_guard(mutex, &priv->vpc_mutex) {
 		err = write_ec_cmd(priv->adev->handle, VPCCMD_W_TOUCHPAD, state);
-	if (err)
-		return err;
+		if (err)
+			return err;
+	}
 
 	priv->r_touchpad_val = state;
 
@@ -856,36 +859,33 @@ static int dytc_profile_set(struct platform_profile_handler *pprof,
 	unsigned long output;
 	int err;
 
-	err = mutex_lock_interruptible(&dytc->mutex);
-	if (err)
-		return err;
+	scoped_guard(mutex_intr, &dytc->mutex) {
+		if (profile == PLATFORM_PROFILE_BALANCED) {
+			/* To get back to balanced mode we just issue a reset command */
+			err = eval_dytc(priv->adev->handle, DYTC_CMD_RESET, NULL);
+			if (err)
+				return err;
+		} else {
+			int perfmode;
 
-	if (profile == PLATFORM_PROFILE_BALANCED) {
-		/* To get back to balanced mode we just issue a reset command */
-		err = eval_dytc(priv->adev->handle, DYTC_CMD_RESET, NULL);
-		if (err)
-			goto unlock;
-	} else {
-		int perfmode;
+			err = convert_profile_to_dytc(profile, &perfmode);
+			if (err)
+				return err;
 
-		err = convert_profile_to_dytc(profile, &perfmode);
-		if (err)
-			goto unlock;
+			/* Determine if we are in CQL mode. This alters the commands we do */
+			err = dytc_cql_command(priv,
+					       DYTC_SET_COMMAND(DYTC_FUNCTION_MMC, perfmode, 1),
+					       &output);
+			if (err)
+				return err;
+		}
 
-		/* Determine if we are in CQL mode. This alters the commands we do */
-		err = dytc_cql_command(priv, DYTC_SET_COMMAND(DYTC_FUNCTION_MMC, perfmode, 1),
-				       &output);
-		if (err)
-			goto unlock;
+		/* Success - update current profile */
+		dytc->current_profile = profile;
+		return 0;
 	}
 
-	/* Success - update current profile */
-	dytc->current_profile = profile;
-
-unlock:
-	mutex_unlock(&dytc->mutex);
-
-	return err;
+	return -EINTR;
 }
 
 static void dytc_profile_refresh(struct ideapad_private *priv)
@@ -894,9 +894,8 @@ static void dytc_profile_refresh(struct ideapad_private *priv)
 	unsigned long output;
 	int err, perfmode;
 
-	mutex_lock(&priv->dytc->mutex);
-	err = dytc_cql_command(priv, DYTC_CMD_GET, &output);
-	mutex_unlock(&priv->dytc->mutex);
+	scoped_guard(mutex, &priv->dytc->mutex)
+		err = dytc_cql_command(priv, DYTC_CMD_GET, &output);
 	if (err)
 		return;
 
@@ -1917,11 +1916,11 @@ static void ideapad_wmi_notify(struct wmi_device *wdev, union acpi_object *data)
 	struct ideapad_wmi_private *wpriv = dev_get_drvdata(&wdev->dev);
 	struct ideapad_private *priv;
 
-	mutex_lock(&ideapad_shared_mutex);
+	guard(mutex)(&ideapad_shared_mutex);
 
 	priv = ideapad_shared;
 	if (!priv)
-		goto unlock;
+		return;
 
 	switch (wpriv->event) {
 	case IDEAPAD_WMI_EVENT_ESC:
@@ -1955,8 +1954,6 @@ static void ideapad_wmi_notify(struct wmi_device *wdev, union acpi_object *data)
 
 		break;
 	}
-unlock:
-	mutex_unlock(&ideapad_shared_mutex);
 }
 
 static const struct ideapad_wmi_private ideapad_wmi_context_esc = {

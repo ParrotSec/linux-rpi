@@ -892,19 +892,19 @@ tps6598x_register_port(struct tps6598x *tps, struct fwnode_handle *fwnode)
 	return 0;
 }
 
-static int tps_request_firmware(struct tps6598x *tps, const struct firmware **fw)
+static int tps_request_firmware(struct tps6598x *tps, const struct firmware **fw,
+				const char **firmware_name)
 {
-	const char *firmware_name;
 	int ret;
 
 	ret = device_property_read_string(tps->dev, "firmware-name",
-					  &firmware_name);
+					  firmware_name);
 	if (ret)
 		return ret;
 
-	ret = request_firmware(fw, firmware_name, tps->dev);
+	ret = request_firmware(fw, *firmware_name, tps->dev);
 	if (ret) {
-		dev_err(tps->dev, "failed to retrieve \"%s\"\n", firmware_name);
+		dev_err(tps->dev, "failed to retrieve \"%s\"\n", *firmware_name);
 		return ret;
 	}
 
@@ -999,12 +999,7 @@ static int tps25750_start_patch_burst_mode(struct tps6598x *tps)
 	u32 addr;
 	struct device_node *np = tps->dev->of_node;
 
-	ret = device_property_read_string(tps->dev, "firmware-name",
-					  &firmware_name);
-	if (ret)
-		return ret;
-
-	ret = tps_request_firmware(tps, &fw);
+	ret = tps_request_firmware(tps, &fw, &firmware_name);
 	if (ret)
 		return ret;
 
@@ -1155,12 +1150,7 @@ static int tps6598x_apply_patch(struct tps6598x *tps)
 	const char *firmware_name;
 	int ret;
 
-	ret = device_property_read_string(tps->dev, "firmware-name",
-					  &firmware_name);
-	if (ret)
-		return ret;
-
-	ret = tps_request_firmware(tps, &fw);
+	ret = tps_request_firmware(tps, &fw, &firmware_name);
 	if (ret)
 		return ret;
 
@@ -1175,10 +1165,7 @@ static int tps6598x_apply_patch(struct tps6598x *tps)
 
 	bytes_left = fw->size;
 	while (bytes_left) {
-		if (bytes_left < TPS_MAX_LEN)
-			in_len = bytes_left;
-		else
-			in_len = TPS_MAX_LEN;
+		in_len = min(bytes_left, TPS_MAX_LEN);
 		ret = tps6598x_exec_cmd(tps, "PTCd", in_len,
 					fw->data + copied_bytes,
 					TPS_PTCD_OUT_BYTES, out);
@@ -1204,10 +1191,14 @@ static int tps6598x_apply_patch(struct tps6598x *tps)
 	dev_info(tps->dev, "Firmware update succeeded\n");
 
 release_fw:
+	if (ret) {
+		dev_err(tps->dev, "Failed to write patch %s of %zu bytes\n",
+			firmware_name, fw->size);
+	}
 	release_firmware(fw);
 
 	return ret;
-};
+}
 
 static int cd321x_init(struct tps6598x *tps)
 {
@@ -1474,8 +1465,9 @@ static void tps6598x_remove(struct i2c_client *client)
 
 	if (!client->irq)
 		cancel_delayed_work_sync(&tps->wq_poll);
+	else
+		devm_free_irq(tps->dev, client->irq, tps);
 
-	devm_free_irq(tps->dev, client->irq, tps);
 	tps6598x_disconnect(tps, 0);
 	typec_unregister_port(tps->port);
 	usb_role_switch_put(tps->role_sw);

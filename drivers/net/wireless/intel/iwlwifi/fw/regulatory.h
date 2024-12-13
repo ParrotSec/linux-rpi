@@ -45,6 +45,8 @@
 #define IWL_WTAS_ENABLE_IEC_MSK	0x4
 #define IWL_WTAS_USA_UHB_MSK		BIT(16)
 
+#define BIOS_MCC_CHINA 0x434e
+
 /*
  * The profile for revision 2 is a superset of revision 1, which is in
  * turn a superset of revision 0.  So we can store all revisions
@@ -115,7 +117,8 @@ enum iwl_dsm_funcs {
 	DSM_FUNC_FORCE_DISABLE_CHANNELS = 9,
 	DSM_FUNC_ENERGY_DETECTION_THRESHOLD = 10,
 	DSM_FUNC_RFI_CONFIG = 11,
-	DSM_FUNC_NUM_FUNCS = 12,
+	DSM_FUNC_ENABLE_11BE = 12,
+	DSM_FUNC_NUM_FUNCS = 13,
 };
 
 enum iwl_dsm_values_srd {

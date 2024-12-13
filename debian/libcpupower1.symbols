@@ -51,6 +51,7 @@ libcpupower.so.1 libcpupower1 #MINVER#
  powercap_get_power_uw@Base 6.2~rc1-1~exp1
  powercap_init_zones@Base 6.2~rc1-1~exp1
  powercap_read_zone@Base 6.2~rc1-1~exp1
+ powercap_set_enabled@Base 6.11.2-1~exp1
  powercap_walk_zones@Base 6.2~rc1-1~exp1
  powercap_zone_get_enabled@Base 6.2~rc1-1~exp1
  powercap_zone_set_enabled@Base 6.2~rc1-1~exp1

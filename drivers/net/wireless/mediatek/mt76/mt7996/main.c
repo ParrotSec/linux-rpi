@@ -93,7 +93,7 @@ static int mt7996_start(struct ieee80211_hw *hw)
 	return ret;
 }
 
-static void mt7996_stop(struct ieee80211_hw *hw)
+static void mt7996_stop(struct ieee80211_hw *hw, bool suspend)
 {
 	struct mt7996_dev *dev = mt7996_hw_dev(hw);
 	struct mt7996_phy *phy = mt7996_hw_phy(hw);
@@ -206,7 +206,7 @@ static int mt7996_add_interface(struct ieee80211_hw *hw,
 	mvif->mt76.omac_idx = idx;
 	mvif->phy = phy;
 	mvif->mt76.band_idx = band_idx;
-	mvif->mt76.wmm_idx = vif->type != NL80211_IFTYPE_AP;
+	mvif->mt76.wmm_idx = vif->type == NL80211_IFTYPE_AP ? 0 : 3;
 
 	ret = mt7996_mcu_add_dev_info(phy, vif, true);
 	if (ret)
@@ -304,6 +304,10 @@ int mt7996_set_channel(struct mt7996_phy *phy)
 	mt76_set_channel(phy->mt76);
 
 	ret = mt7996_mcu_set_chan_info(phy, UNI_CHANNEL_SWITCH);
+	if (ret)
+		goto out;
+
+	ret = mt7996_mcu_set_chan_info(phy, UNI_CHANNEL_RX_PATH);
 	if (ret)
 		goto out;
 

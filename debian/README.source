@@ -10,19 +10,11 @@ Updating the upstream source
 In addition to the build-dependencies, you will need the rsync package
 installed.
 
-1) Run: ./debian/bin/genorig.py <repository>
+1) Run: uscan --download-current-version --vcs-export-uncompressed
 
-   where <repository> is a local or remote git repository with the
-   upstream release tag in it.
-
-   If you do not have a local repository, use the appropriate one of:
-
-   * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
-   * https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
-   * git://kernel.ubuntu.com/ubuntu/linux.git
-
-   This will produce ../orig/linux_<version>.orig.tar.xz
-   (e.g. linux_3.5~rc1.orig.tar.xz).
+   This will produce ../linux-<version>.tar (e.g. linux-6.11.tar) and
+   ../linux_<version>.orig.tar.xz (e.g. linux_6.11.orig.tar.xz).  You
+   can delete the first of these.
 
    It involves deleting files for DFSG compliance, as listed in the
    Files-Excluded field in debian/copyright.
@@ -178,8 +170,8 @@ maintainerclean What clean-generated does and additionally also cleans up all
 The following variables are substituted into the templates:
 
 @version@      Upstream kernel version, for example 2.6.11.
-@arch@         The Debian arch name, such as powerpc or i386.
-@flavour@      The build flavour, such as 686 or k7-smp.
+@arch@         The Debian arch name, such as powerpc or amd64.
+@flavour@      The build flavour, such as cloud-amd64.
 @class@        The CPU/architecture class; displayed in synopsis.  It should
                be fairly short, as the synopsis is supposed to be <80 chars.
                It should be in the form "foo class", and will show up in the

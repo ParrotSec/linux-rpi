@@ -1218,16 +1218,6 @@ void amd_check_microcode(void)
 	if (boot_cpu_data.x86_vendor != X86_VENDOR_AMD)
 		return;
 
-	on_each_cpu(zenbleed_check_cpu, NULL, 1);
+	if (cpu_feature_enabled(X86_FEATURE_ZEN2))
+		on_each_cpu(zenbleed_check_cpu, NULL, 1);
 }
-
-/*
- * Issue a DIV 0/1 insn to clear any division data from previous DIV
- * operations.
- */
-void noinstr amd_clear_divider(void)
-{
-	asm volatile(ALTERNATIVE("", "div %2\n\t", X86_BUG_DIV0)
-		     :: "a" (0), "d" (0), "r" (1));
-}
-EXPORT_SYMBOL_GPL(amd_clear_divider);

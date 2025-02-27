@@ -2356,7 +2356,7 @@ int ext4_mb_find_by_goal(struct ext4_allocation_context *ac,
 	ex.fe_logical = 0xDEADFA11; /* debug value */
 
 	if (max >= ac->ac_g_ex.fe_len &&
-	    ac->ac_g_ex.fe_len == EXT4_B2C(sbi, sbi->s_stripe)) {
+	    ac->ac_g_ex.fe_len == EXT4_NUM_B2C(sbi, sbi->s_stripe)) {
 		ext4_fsblk_t start;
 
 		start = ext4_grp_offs_to_block(ac->ac_sb, &ex);
@@ -2553,7 +2553,7 @@ void ext4_mb_scan_aligned(struct ext4_allocation_context *ac,
 	do_div(a, sbi->s_stripe);
 	i = (a * sbi->s_stripe) - first_group_block;
 
-	stripe = EXT4_B2C(sbi, sbi->s_stripe);
+	stripe = EXT4_NUM_B2C(sbi, sbi->s_stripe);
 	i = EXT4_B2C(sbi, i);
 	while (i < EXT4_CLUSTERS_PER_GROUP(sb)) {
 		if (!mb_test_bit(i, bitmap)) {
@@ -2928,9 +2928,11 @@ repeat:
 			if (cr == CR_POWER2_ALIGNED)
 				ext4_mb_simple_scan_group(ac, &e4b);
 			else {
-				bool is_stripe_aligned = sbi->s_stripe &&
+				bool is_stripe_aligned =
+					(sbi->s_stripe >=
+					 sbi->s_cluster_ratio) &&
 					!(ac->ac_g_ex.fe_len %
-					  EXT4_B2C(sbi, sbi->s_stripe));
+					  EXT4_NUM_B2C(sbi, sbi->s_stripe));
 
 				if ((cr == CR_GOAL_LEN_FAST ||
 				     cr == CR_BEST_AVAIL_LEN) &&
@@ -3075,8 +3077,7 @@ static int ext4_mb_seq_groups_show(struct seq_file *seq, void *v)
 	seq_puts(seq, " ]");
 	if (EXT4_MB_GRP_BBITMAP_CORRUPT(&sg.info))
 		seq_puts(seq, " Block bitmap corrupted!");
-	seq_puts(seq, "\n");
-
+	seq_putc(seq, '\n');
 	return 0;
 }
 
@@ -3707,7 +3708,7 @@ int ext4_mb_init(struct super_block *sb)
 	 */
 	if (sbi->s_stripe > 1) {
 		sbi->s_mb_group_prealloc = roundup(
-			sbi->s_mb_group_prealloc, EXT4_B2C(sbi, sbi->s_stripe));
+			sbi->s_mb_group_prealloc, EXT4_NUM_B2C(sbi, sbi->s_stripe));
 	}
 
 	sbi->s_locality_groups = alloc_percpu(struct ext4_locality_group);
@@ -6998,13 +6999,14 @@ int
 ext4_mballoc_query_range(
 	struct super_block		*sb,
 	ext4_group_t			group,
-	ext4_grpblk_t			start,
+	ext4_grpblk_t			first,
 	ext4_grpblk_t			end,
+	ext4_mballoc_query_range_fn	meta_formatter,
 	ext4_mballoc_query_range_fn	formatter,
 	void				*priv)
 {
 	void				*bitmap;
-	ext4_grpblk_t			next;
+	ext4_grpblk_t			start, next;
 	struct ext4_buddy		e4b;
 	int				error;
 
@@ -7015,10 +7017,19 @@ ext4_mballoc_query_range(
 
 	ext4_lock_group(sb, group);
 
-	start = max(e4b.bd_info->bb_first_free, start);
+	start = max(e4b.bd_info->bb_first_free, first);
 	if (end >= EXT4_CLUSTERS_PER_GROUP(sb))
 		end = EXT4_CLUSTERS_PER_GROUP(sb) - 1;
-
+	if (meta_formatter && start != first) {
+		if (start > end)
+			start = end;
+		ext4_unlock_group(sb, group);
+		error = meta_formatter(sb, group, first, start - first,
+				       priv);
+		if (error)
+			goto out_unload;
+		ext4_lock_group(sb, group);
+	}
 	while (start <= end) {
 		start = mb_find_next_zero_bit(bitmap, end + 1, start);
 		if (start > end)

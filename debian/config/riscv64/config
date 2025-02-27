@@ -97,6 +97,7 @@ CONFIG_POLARFIRE_SOC_AUTO_UPDATE=m
 ## file: drivers/gpio/Kconfig
 ##
 CONFIG_GPIOLIB=y
+CONFIG_GPIO_DWAPB=m
 CONFIG_GPIO_SIFIVE=y
 
 ##
@@ -124,6 +125,7 @@ CONFIG_DRM_SUN4I=m
 ##
 CONFIG_SENSORS_LM90=m
 CONFIG_SENSORS_SFCTEMP=m
+CONFIG_SENSORS_SG2042_MCU=m
 
 ##
 ## file: drivers/i2c/Kconfig
@@ -133,6 +135,7 @@ CONFIG_I2C=y
 ##
 ## file: drivers/i2c/busses/Kconfig
 ##
+CONFIG_I2C_DESIGNWARE_CORE=y
 CONFIG_I2C_DESIGNWARE_PLATFORM=m
 CONFIG_I2C_MV64XXX=m
 
@@ -163,6 +166,11 @@ CONFIG_LEDS_PWM_MULTICOLOR=m
 ##
 CONFIG_MAILBOX=y
 CONFIG_POLARFIRE_SOC_MAILBOX=m
+
+##
+## file: drivers/media/platform/cadence/Kconfig
+##
+CONFIG_VIDEO_CADENCE_CSI2RX=m
 
 ##
 ## file: drivers/mfd/Kconfig
@@ -249,6 +257,14 @@ CONFIG_PHY_STARFIVE_JH7110_PCIE=m
 CONFIG_PHY_STARFIVE_JH7110_USB=m
 
 ##
+## file: drivers/pinctrl/sophgo/Kconfig
+##
+CONFIG_PINCTRL_SOPHGO_CV1800B=y
+CONFIG_PINCTRL_SOPHGO_CV1812H=y
+CONFIG_PINCTRL_SOPHGO_SG2000=y
+CONFIG_PINCTRL_SOPHGO_SG2002=y
+
+##
 ## file: drivers/power/reset/Kconfig
 ##
 CONFIG_POWER_RESET=y
@@ -294,8 +310,20 @@ CONFIG_POLARFIRE_SOC_SYS_CTRL=m
 ##
 ## file: drivers/spi/Kconfig
 ##
+CONFIG_SPI_DESIGNWARE=y
+CONFIG_SPI_DW_MMIO=m
 CONFIG_SPI_SIFIVE=m
 CONFIG_SPI_SUN6I=m
+
+##
+## file: drivers/staging/media/Kconfig
+##
+CONFIG_STAGING_MEDIA=y
+
+##
+## file: drivers/staging/media/starfive/camss/Kconfig
+##
+CONFIG_VIDEO_STARFIVE_CAMSS=m
 
 ##
 ## file: drivers/tty/hvc/Kconfig
@@ -355,6 +383,11 @@ CONFIG_USB_MUSB_POLARFIRE_SOC=m
 ## file: drivers/usb/phy/Kconfig
 ##
 CONFIG_NOP_USB_XCEIV=m
+
+##
+## file: drivers/video/fbdev/Kconfig
+##
+CONFIG_FB_EFI=y
 
 ##
 ## file: drivers/watchdog/Kconfig

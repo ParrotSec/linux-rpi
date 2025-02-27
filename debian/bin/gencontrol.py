@@ -443,13 +443,15 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
             for package in packages_own:
                 package.build_profiles[0].neg.add('pkg.linux.quick')
 
-        tests_control_image = self.templates.get_tests_control('image.tests-control', vars)
+        tests_control_image = list(
+            self.templates.get_tests_control('image.tests-control', vars))
         for c in tests_control_image:
             c.depends.extend(
                 [i.name for i in packages_image_unsigned]
             )
 
-        tests_control_headers = self.templates.get_tests_control('headers.tests-control', vars)
+        tests_control_headers = list(
+            self.templates.get_tests_control('headers.tests-control', vars))
         for c in tests_control_headers:
             c.depends.extend(
                 [i.name for i in packages_headers] +
@@ -560,10 +562,6 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
             self.abiname = f'{version.linux_upstream}'
         elif version.linux_revision_backports:
             self.abiname = f'{version.linux_upstream_full}+bpo'
-        elif self.changelog[0].distribution == 'lory':
-            self.abiname = f'{version.linux_upstream}+parrot'
-        elif self.changelog[0].distribution == 'lory-updates':
-            self.abiname = f'{version.linux_upstream}+parrot'
         else:
             self.abiname = f'{version.linux_upstream_full}'
 

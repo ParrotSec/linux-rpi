@@ -8,6 +8,7 @@ DATA = \
 	Kbuild.include \
 	Makefile.* \
 	mkversion \
+	module-common.c \
 	module-common.lds \
 	subarch.include
 

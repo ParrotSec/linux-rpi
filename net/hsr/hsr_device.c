@@ -231,7 +231,9 @@ static netdev_tx_t hsr_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 		skb->dev = master->dev;
 		skb_reset_mac_header(skb);
 		skb_reset_mac_len(skb);
+		spin_lock_bh(&hsr->seqnr_lock);
 		hsr_forward_skb(skb, master);
+		spin_unlock_bh(&hsr->seqnr_lock);
 	} else {
 		dev_core_stats_tx_dropped_inc(dev);
 		dev_kfree_skb_any(skb);
@@ -244,20 +246,22 @@ static const struct header_ops hsr_header_ops = {
 	.parse	 = eth_header_parse,
 };
 
-static struct sk_buff *hsr_init_skb(struct hsr_port *master)
+static struct sk_buff *hsr_init_skb(struct hsr_port *master, int extra)
 {
 	struct hsr_priv *hsr = master->hsr;
 	struct sk_buff *skb;
 	int hlen, tlen;
+	int len;
 
 	hlen = LL_RESERVED_SPACE(master->dev);
 	tlen = master->dev->needed_tailroom;
+	len = sizeof(struct hsr_sup_tag) + sizeof(struct hsr_sup_payload);
 	/* skb size is same for PRP/HSR frames, only difference
 	 * being, for PRP it is a trailer and for HSR it is a
-	 * header
+	 * header.
+	 * RedBox might use @extra more bytes.
 	 */
-	skb = dev_alloc_skb(sizeof(struct hsr_sup_tag) +
-			    sizeof(struct hsr_sup_payload) + hlen + tlen);
+	skb = dev_alloc_skb(len + extra + hlen + tlen);
 
 	if (!skb)
 		return skb;
@@ -266,6 +270,8 @@ static struct sk_buff *hsr_init_skb(struct hsr_port *master)
 	skb->dev = master->dev;
 	skb->priority = TC_PRIO_CONTROL;
 
+	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
 	if (dev_hard_header(skb, skb->dev, ETH_P_PRP,
 			    hsr->sup_multicast_addr,
 			    skb->dev->dev_addr, skb->len) <= 0)
@@ -273,8 +279,6 @@ static struct sk_buff *hsr_init_skb(struct hsr_port *master)
 
 	skb_reset_mac_header(skb);
 	skb_reset_mac_len(skb);
-	skb_reset_network_header(skb);
-	skb_reset_transport_header(skb);
 
 	return skb;
 out:
@@ -293,6 +297,7 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 	struct hsr_sup_tlv *hsr_stlv;
 	struct hsr_sup_tag *hsr_stag;
 	struct sk_buff *skb;
+	int extra = 0;
 
 	*interval = msecs_to_jiffies(HSR_LIFE_CHECK_INTERVAL);
 	if (hsr->announce_count < 3 && hsr->prot_version == 0) {
@@ -301,7 +306,11 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 		hsr->announce_count++;
 	}
 
-	skb = hsr_init_skb(port);
+	if (hsr->redbox)
+		extra = sizeof(struct hsr_sup_tlv) +
+			sizeof(struct hsr_sup_payload);
+
+	skb = hsr_init_skb(port, extra);
 	if (!skb) {
 		netdev_warn_once(port->dev, "HSR: Could not send supervision frame\n");
 		return;
@@ -312,10 +321,14 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 	set_hsr_stag_HSR_ver(hsr_stag, hsr->prot_version);
 
 	/* From HSRv1 on we have separate supervision sequence numbers. */
-	if (hsr->prot_version > 0)
-		hsr_stag->sequence_nr = htons(atomic_inc_return(&hsr->sup_sequence_nr));
-	else
-		hsr_stag->sequence_nr = htons(atomic_inc_return(&hsr->sequence_nr));
+	spin_lock_bh(&hsr->seqnr_lock);
+	if (hsr->prot_version > 0) {
+		hsr_stag->sequence_nr = htons(hsr->sup_sequence_nr);
+		hsr->sup_sequence_nr++;
+	} else {
+		hsr_stag->sequence_nr = htons(hsr->sequence_nr);
+		hsr->sequence_nr++;
+	}
 
 	hsr_stag->tlv.HSR_TLV_type = type;
 	/* TODO: Why 12 in HSRv0? */
@@ -337,11 +350,13 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 		ether_addr_copy(hsr_sp->macaddress_A, hsr->macaddress_redbox);
 	}
 
-	if (skb_put_padto(skb, ETH_ZLEN))
+	if (skb_put_padto(skb, ETH_ZLEN)) {
+		spin_unlock_bh(&hsr->seqnr_lock);
 		return;
+	}
 
 	hsr_forward_skb(skb, port);
-
+	spin_unlock_bh(&hsr->seqnr_lock);
 	return;
 }
 
@@ -354,7 +369,7 @@ static void send_prp_supervision_frame(struct hsr_port *master,
 	struct hsr_sup_tag *hsr_stag;
 	struct sk_buff *skb;
 
-	skb = hsr_init_skb(master);
+	skb = hsr_init_skb(master, 0);
 	if (!skb) {
 		netdev_warn_once(master->dev, "PRP: Could not send supervision frame\n");
 		return;
@@ -366,7 +381,9 @@ static void send_prp_supervision_frame(struct hsr_port *master,
 	set_hsr_stag_HSR_ver(hsr_stag, (hsr->prot_version ? 1 : 0));
 
 	/* From HSRv1 on we have separate supervision sequence numbers. */
-	hsr_stag->sequence_nr = htons(atomic_inc_return(&hsr->sup_sequence_nr));
+	spin_lock_bh(&hsr->seqnr_lock);
+	hsr_stag->sequence_nr = htons(hsr->sup_sequence_nr);
+	hsr->sup_sequence_nr++;
 	hsr_stag->tlv.HSR_TLV_type = PRP_TLV_LIFE_CHECK_DD;
 	hsr_stag->tlv.HSR_TLV_length = sizeof(struct hsr_sup_payload);
 
@@ -374,10 +391,13 @@ static void send_prp_supervision_frame(struct hsr_port *master,
 	hsr_sp = skb_put(skb, sizeof(struct hsr_sup_payload));
 	ether_addr_copy(hsr_sp->macaddress_A, master->dev->dev_addr);
 
-	if (skb_put_padto(skb, ETH_ZLEN))
+	if (skb_put_padto(skb, ETH_ZLEN)) {
+		spin_unlock_bh(&hsr->seqnr_lock);
 		return;
+	}
 
 	hsr_forward_skb(skb, master);
+	spin_unlock_bh(&hsr->seqnr_lock);
 }
 
 /* Announce (supervision frame) timer function
@@ -545,6 +565,12 @@ void hsr_dev_setup(struct net_device *dev)
 	dev->netdev_ops = &hsr_device_ops;
 	SET_NETDEV_DEVTYPE(dev, &hsr_type);
 	dev->priv_flags |= IFF_NO_QUEUE | IFF_DISABLE_NETPOLL;
+	/* Prevent recursive tx locking */
+	dev->lltx = true;
+	/* Not sure about this. Taken from bridge code. netdevice.h says
+	 * it means "Does not change network namespaces".
+	 */
+	dev->netns_local = true;
 
 	dev->needs_free_netdev = true;
 
@@ -554,16 +580,10 @@ void hsr_dev_setup(struct net_device *dev)
 
 	dev->features = dev->hw_features;
 
-	/* Prevent recursive tx locking */
-	dev->features |= NETIF_F_LLTX;
 	/* VLAN on top of HSR needs testing and probably some work on
 	 * hsr_header_create() etc.
 	 */
 	dev->features |= NETIF_F_VLAN_CHALLENGED;
-	/* Not sure about this. Taken from bridge code. netdev_features.h says
-	 * it means "Does not change network namespaces".
-	 */
-	dev->features |= NETIF_F_NETNS_LOCAL;
 }
 
 /* Return true if dev is a HSR master; return false otherwise.
@@ -612,9 +632,10 @@ int hsr_dev_finalize(struct net_device *hsr_dev, struct net_device *slave[2],
 	if (res < 0)
 		return res;
 
+	spin_lock_init(&hsr->seqnr_lock);
 	/* Overflow soon to find bugs easier: */
-	atomic_set(&hsr->sequence_nr, HSR_SEQNR_START);
-	atomic_set(&hsr->sup_sequence_nr, HSR_SUP_SEQNR_START);
+	hsr->sequence_nr = HSR_SEQNR_START;
+	hsr->sup_sequence_nr = HSR_SUP_SEQNR_START;
 
 	timer_setup(&hsr->announce_timer, hsr_announce, 0);
 	timer_setup(&hsr->prune_timer, hsr_prune_nodes, 0);

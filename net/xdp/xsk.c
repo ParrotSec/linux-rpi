@@ -675,6 +675,8 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 		len = desc->len;
 
 		if (!skb) {
+			first_frag = true;
+
 			hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(dev->needed_headroom));
 			tr = dev->needed_tailroom;
 			skb = sock_alloc_send_skb(&xs->sk, hr + len + tr, 1, &err);
@@ -685,12 +687,8 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			skb_put(skb, len);
 
 			err = skb_store_bits(skb, 0, buffer, len);
-			if (unlikely(err)) {
-				kfree_skb(skb);
+			if (unlikely(err))
 				goto free_err;
-			}
-
-			first_frag = true;
 		} else {
 			int nr_frags = skb_shinfo(skb)->nr_frags;
 			struct page *page;
@@ -758,6 +756,9 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 	return skb;
 
 free_err:
+	if (first_frag && skb)
+		kfree_skb(skb);
+
 	if (err == -EOVERFLOW) {
 		/* Drop the packet */
 		xsk_set_destructor_arg(xs->skb);
@@ -1320,14 +1321,6 @@ struct xdp_umem_reg_v1 {
 	__u32 headroom;
 };
 
-struct xdp_umem_reg_v2 {
-	__u64 addr; /* Start of packet data area */
-	__u64 len; /* Length of packet data area */
-	__u32 chunk_size;
-	__u32 headroom;
-	__u32 flags;
-};
-
 static int xsk_setsockopt(struct socket *sock, int level, int optname,
 			  sockptr_t optval, unsigned int optlen)
 {
@@ -1371,10 +1364,19 @@ static int xsk_setsockopt(struct socket *sock, int level, int optname,
 
 		if (optlen < sizeof(struct xdp_umem_reg_v1))
 			return -EINVAL;
-		else if (optlen < sizeof(struct xdp_umem_reg_v2))
-			mr_size = sizeof(struct xdp_umem_reg_v1);
 		else if (optlen < sizeof(mr))
-			mr_size = sizeof(struct xdp_umem_reg_v2);
+			mr_size = sizeof(struct xdp_umem_reg_v1);
+
+		BUILD_BUG_ON(sizeof(struct xdp_umem_reg_v1) >= sizeof(struct xdp_umem_reg));
+
+		/* Make sure the last field of the struct doesn't have
+		 * uninitialized padding. All padding has to be explicit
+		 * and has to be set to zero by the userspace to make
+		 * struct xdp_umem_reg extensible in the future.
+		 */
+		BUILD_BUG_ON(offsetof(struct xdp_umem_reg, tx_metadata_len) +
+			     sizeof_field(struct xdp_umem_reg, tx_metadata_len) !=
+			     sizeof(struct xdp_umem_reg));
 
 		if (copy_from_sockptr(&mr, optval, mr_size))
 			return -EFAULT;

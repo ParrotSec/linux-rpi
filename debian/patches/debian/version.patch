@@ -16,7 +16,7 @@ are set.
 
 --- a/Makefile
 +++ b/Makefile
-@@ -1186,7 +1186,8 @@ PHONY += prepare archprepare
+@@ -1196,7 +1196,8 @@ PHONY += prepare archprepare
  
  archprepare: outputmakefile archheaders archscripts scripts include/config/kernel.release \
  	asm-generic $(version_h) include/generated/utsrelease.h \
@@ -26,7 +26,7 @@ are set.
  
  prepare0: archprepare
  	$(Q)$(MAKE) $(build)=scripts/mod
-@@ -1244,6 +1245,16 @@ define filechk_version.h
+@@ -1254,6 +1255,16 @@ define filechk_version.h
  	echo \#define LINUX_VERSION_SUBLEVEL $(SUBLEVEL)
  endef
  
@@ -43,7 +43,7 @@ are set.
  $(version_h): private PATCHLEVEL := $(or $(PATCHLEVEL), 0)
  $(version_h): private SUBLEVEL := $(or $(SUBLEVEL), 0)
  $(version_h): FORCE
-@@ -1258,6 +1269,9 @@ filechk_compile.h = $(srctree)/scripts/m
+@@ -1268,6 +1279,9 @@ filechk_compile.h = $(srctree)/scripts/m
  include/generated/compile.h: FORCE
  	$(call filechk,compile.h)
  
@@ -63,7 +63,7 @@ are set.
  
  #include <asm/interrupt.h>
  #include <asm/io.h>
-@@ -1562,8 +1563,9 @@ static void __show_regs(struct pt_regs *
+@@ -1560,8 +1561,9 @@ static void __show_regs(struct pt_regs *
  
  	printk("NIP:  "REG" LR: "REG" CTR: "REG"\n",
  	       regs->nip, regs->link, regs->ctr);
@@ -84,8 +84,8 @@ are set.
 +#include <generated/package.h>
  #include <asm/current.h>
  #include <asm/ptrace.h>
- #include <asm/sysrq.h>
-@@ -18,8 +19,9 @@ void show_regs(struct pt_regs *regs)
+ 
+@@ -17,8 +18,9 @@ void show_regs(struct pt_regs *regs)
  {
  	printk("\n");
  	print_modules();

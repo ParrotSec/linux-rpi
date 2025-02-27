@@ -61,6 +61,12 @@ struct thermal_governor {
 	struct list_head	governor_list;
 };
 
+#define	TZ_STATE_FLAG_SUSPENDED	BIT(0)
+#define	TZ_STATE_FLAG_RESUMING	BIT(1)
+#define	TZ_STATE_FLAG_INIT	BIT(2)
+
+#define TZ_STATE_READY		0
+
 /**
  * struct thermal_zone_device - structure for a thermal zone
  * @id:		unique id number for each thermal zone
@@ -100,8 +106,7 @@ struct thermal_governor {
  * @node:	node in thermal_tz_list (in thermal_core.c)
  * @poll_queue:	delayed work for polling
  * @notify_event: Last notification event
- * @suspended: thermal zone suspend indicator
- * @resuming:	indicates whether or not thermal zone resume is in progress
+ * @state: 	current state of the thermal zone
  * @trips:	array of struct thermal_trip objects
  */
 struct thermal_zone_device {
@@ -134,8 +139,7 @@ struct thermal_zone_device {
 	struct list_head node;
 	struct delayed_work poll_queue;
 	enum thermal_notify_event notify_event;
-	bool suspended;
-	bool resuming;
+	u8 state;
 #ifdef CONFIG_THERMAL_DEBUGFS
 	struct thermal_debugfs *debugfs;
 #endif
@@ -208,11 +212,6 @@ void __thermal_cdev_update(struct thermal_cooling_device *cdev);
 
 int get_tz_trend(struct thermal_zone_device *tz, const struct thermal_trip *trip);
 
-struct thermal_instance *
-get_thermal_instance(struct thermal_zone_device *tz,
-		     struct thermal_cooling_device *cdev,
-		     int trip);
-
 /*
  * This structure is used to describe the behavior of
  * a certain cooling device on a certain trip point
@@ -221,7 +220,6 @@ get_thermal_instance(struct thermal_zone_device *tz,
 struct thermal_instance {
 	int id;
 	char name[THERMAL_NAME_LENGTH];
-	struct thermal_zone_device *tz;
 	struct thermal_cooling_device *cdev;
 	const struct thermal_trip *trip;
 	bool initialized;
@@ -263,7 +261,7 @@ void thermal_governor_update_tz(struct thermal_zone_device *tz,
 
 const char *thermal_trip_type_name(enum thermal_trip_type trip_type);
 
-void thermal_zone_set_trips(struct thermal_zone_device *tz);
+void thermal_zone_set_trips(struct thermal_zone_device *tz, int low, int high);
 int thermal_zone_trip_id(const struct thermal_zone_device *tz,
 			 const struct thermal_trip *trip);
 int __thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp);
@@ -292,8 +290,5 @@ static inline void
 thermal_cooling_device_stats_update(struct thermal_cooling_device *cdev,
 				    unsigned long new_state) {}
 #endif /* CONFIG_THERMAL_STATISTICS */
-
-/* device tree support */
-int thermal_zone_device_is_enabled(struct thermal_zone_device *tz);
 
 #endif /* __THERMAL_CORE_H__ */

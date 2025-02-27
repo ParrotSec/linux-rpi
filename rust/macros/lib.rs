@@ -2,6 +2,10 @@
 
 //! Crate for all kernel procedural macros.
 
+// When fixdep scans this, it will find this string `CONFIG_RUSTC_VERSION_TEXT`
+// and thus add a dependency on `include/config/RUSTC_VERSION_TEXT`, which is
+// touched by Kconfig when the version string from the compiler changes.
+
 #[macro_use]
 mod quote;
 mod concat_idents;
@@ -355,7 +359,7 @@ pub fn pinned_drop(args: TokenStream, input: TokenStream) -> TokenStream {
 /// macro_rules! pub_no_prefix {
 ///     ($prefix:ident, $($newname:ident),+) => {
 ///         kernel::macros::paste! {
-///             $(pub(crate) const fn [<$newname:lower:span>]: u32 = [<$prefix $newname:span>];)+
+///             $(pub(crate) const fn [<$newname:lower:span>]() -> u32 { [<$prefix $newname:span>] })+
 ///         }
 ///     };
 /// }

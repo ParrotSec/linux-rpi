@@ -31,7 +31,7 @@ debian/linux-perf-remove-remaining-source-filenames-from-executable.patch
 # Fixes/improvements to firmware loading
 features/all/drivers-media-dvb-usb-af9005-request_firmware.patch
 debian/iwlwifi-do-not-request-unreleased-firmware.patch
-debian/firmware_loader-log-direct-loading-failures-as-info-for-d-i.path
+debian/firmware_loader-log-direct-loading-failures-as-info-for-d-i.patch
 bugfix/all/radeon-amdgpu-firmware-is-required-for-drm-and-kms-on-r600-onward.patch
 
 # Parrot patches
@@ -54,7 +54,6 @@ features/x86/intel-iommu-add-option-to-exclude-integrated-gpu-only.patch
 features/x86/intel-iommu-add-kconfig-option-to-exclude-igpu-by-default.patch
 
 # Disable autoloading/probing of various drivers by default
-debian/cdc_ncm-cdc_mbim-use-ncm-by-default.patch
 debian/snd-pcsp-disable-autoload.patch
 bugfix/x86/viafb-autoload-on-olpc-xo1.5-only.patch
 debian/fjes-disable-autoload.patch
@@ -79,8 +78,8 @@ features/x86/x86-make-x32-syscall-support-conditional.patch
 bugfix/all/disable-some-marvell-phys.patch
 bugfix/all/fs-add-module_softdep-declarations-for-hard-coded-cr.patch
 bugfix/all/documentation-use-relative-source-paths-in-abi-documentation.patch
-bugfix/all/Revert-mmc-dw_mmc-Fix-IDMAC-operation-with-pages-big.patch
-bugfix/all/netfilter-xtables-fix-typo-causing-some-targets-not-.patch
+bugfix/all/nfsd-fix-legacy-client-tracking-initialization.patch
+bugfix/all/kbuild-switch-from-lz4c-to-lz4-for-compression.patch
 
 # Miscellaneous features
 

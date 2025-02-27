@@ -109,8 +109,8 @@ void new_thread_handler(void)
 		schedule_tail(current->thread.prev_sched);
 	current->thread.prev_sched = NULL;
 
-	fn = current->thread.request.u.thread.proc;
-	arg = current->thread.request.u.thread.arg;
+	fn = current->thread.request.thread.proc;
+	arg = current->thread.request.thread.arg;
 
 	/*
 	 * callback returns only if the kernel thread execs a process
@@ -158,8 +158,8 @@ int copy_thread(struct task_struct * p, const struct kernel_clone_args *args)
 		arch_copy_thread(&current->thread.arch, &p->thread.arch);
 	} else {
 		get_safe_registers(p->thread.regs.regs.gp, p->thread.regs.regs.fp);
-		p->thread.request.u.thread.proc = args->fn;
-		p->thread.request.u.thread.arg = args->fn_arg;
+		p->thread.request.thread.proc = args->fn;
+		p->thread.request.thread.arg = args->fn_arg;
 		handler = new_thread_handler;
 	}
 
@@ -292,6 +292,6 @@ int elf_core_copy_task_fpregs(struct task_struct *t, elf_fpregset_t *fpu)
 {
 	int cpu = current_thread_info()->cpu;
 
-	return save_i387_registers(userspace_pid[cpu], (unsigned long *) fpu);
+	return save_i387_registers(userspace_pid[cpu], (unsigned long *) fpu) == 0;
 }
 

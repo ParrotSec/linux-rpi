@@ -133,6 +133,7 @@ struct bnxt_ptp_cfg {
 					 BNXT_PTP_MSG_PDELAY_REQ |	\
 					 BNXT_PTP_MSG_PDELAY_RESP)
 	u8			tx_tstamp_en:1;
+	u8			rtc_configured:1;
 	int			rx_filter;
 	u32			tstamp_filters;
 
@@ -146,11 +147,13 @@ struct bnxt_ptp_cfg {
 };
 
 #if BITS_PER_LONG == 32
-#define BNXT_READ_TIME64(ptp, dst, src)		\
-do {						\
-	spin_lock_bh(&(ptp)->ptp_lock);		\
-	(dst) = (src);				\
-	spin_unlock_bh(&(ptp)->ptp_lock);	\
+#define BNXT_READ_TIME64(ptp, dst, src)				\
+do {								\
+	unsigned long flags;					\
+								\
+	spin_lock_irqsave(&(ptp)->ptp_lock, flags);		\
+	(dst) = (src);						\
+	spin_unlock_irqrestore(&(ptp)->ptp_lock, flags);	\
 } while (0)
 #else
 #define BNXT_READ_TIME64(ptp, dst, src)		\
@@ -178,6 +181,6 @@ void bnxt_tx_ts_cmp(struct bnxt *bp, struct bnxt_napi *bnapi,
 		    struct tx_ts_cmp *tscmp);
 void bnxt_ptp_rtc_timecounter_init(struct bnxt_ptp_cfg *ptp, u64 ns);
 int bnxt_ptp_init_rtc(struct bnxt *bp, bool phc_cfg);
-int bnxt_ptp_init(struct bnxt *bp, bool phc_cfg);
+int bnxt_ptp_init(struct bnxt *bp);
 void bnxt_ptp_clear(struct bnxt *bp);
 #endif

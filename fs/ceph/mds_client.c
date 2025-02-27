@@ -2266,7 +2266,7 @@ int ceph_trim_caps(struct ceph_mds_client *mdsc,
 		      trim_caps - remaining);
 	}
 
-	ceph_flush_cap_releases(mdsc, session);
+	ceph_flush_session_cap_releases(mdsc, session);
 	return 0;
 }
 
@@ -2420,7 +2420,7 @@ static void ceph_cap_release_work(struct work_struct *work)
 	ceph_put_mds_session(session);
 }
 
-void ceph_flush_cap_releases(struct ceph_mds_client *mdsc,
+void ceph_flush_session_cap_releases(struct ceph_mds_client *mdsc,
 		             struct ceph_mds_session *session)
 {
 	struct ceph_client *cl = mdsc->fsc->client;
@@ -2447,7 +2447,7 @@ void __ceph_queue_cap_release(struct ceph_mds_session *session,
 	session->s_num_cap_releases++;
 
 	if (!(session->s_num_cap_releases % CEPH_CAPS_PER_RELEASE))
-		ceph_flush_cap_releases(session->s_mdsc, session);
+		ceph_flush_session_cap_releases(session->s_mdsc, session);
 }
 
 static void ceph_cap_reclaim_work(struct work_struct *work)
@@ -2808,12 +2808,11 @@ retry:
 
 	if (pos < 0) {
 		/*
-		 * A rename didn't occur, but somehow we didn't end up where
-		 * we thought we would. Throw a warning and try again.
+		 * The path is longer than PATH_MAX and this function
+		 * cannot ever succeed.  Creating paths that long is
+		 * possible with Ceph, but Linux cannot use them.
 		 */
-		pr_warn_client(cl, "did not end path lookup where expected (pos = %d)\n",
-			       pos);
-		goto retry;
+		return ERR_PTR(-ENAMETOOLONG);
 	}
 
 	*pbase = base;
@@ -4340,7 +4339,7 @@ skip_cap_auths:
 		/* flush cap releases */
 		spin_lock(&session->s_cap_lock);
 		if (session->s_num_cap_releases)
-			ceph_flush_cap_releases(mdsc, session);
+			ceph_flush_session_cap_releases(mdsc, session);
 		spin_unlock(&session->s_cap_lock);
 
 		send_flushmsg_ack(mdsc, session, seq);
@@ -4910,7 +4909,7 @@ static void send_mds_reconnect(struct ceph_mds_client *mdsc,
 	} else {
 		recon_state.msg_version = 2;
 	}
-	/* trsaverse this session's caps */
+	/* traverse this session's caps */
 	err = ceph_iterate_session_caps(session, reconnect_caps_cb, &recon_state);
 
 	spin_lock(&session->s_cap_lock);
@@ -5446,7 +5445,7 @@ static void delayed_work(struct work_struct *work)
 		}
 		mutex_unlock(&mdsc->mutex);
 
-		ceph_flush_cap_releases(mdsc, s);
+		ceph_flush_session_cap_releases(mdsc, s);
 
 		mutex_lock(&s->s_mutex);
 		if (renew_caps)
@@ -5609,9 +5608,9 @@ void send_flush_mdlog(struct ceph_mds_session *s)
 
 static int ceph_mds_auth_match(struct ceph_mds_client *mdsc,
 			       struct ceph_mds_cap_auth *auth,
+			       const struct cred *cred,
 			       char *tpath)
 {
-	const struct cred *cred = get_current_cred();
 	u32 caller_uid = from_kuid(&init_user_ns, cred->fsuid);
 	u32 caller_gid = from_kgid(&init_user_ns, cred->fsgid);
 	struct ceph_client *cl = mdsc->fsc->client;
@@ -5734,8 +5733,9 @@ int ceph_mds_check_access(struct ceph_mds_client *mdsc, char *tpath, int mask)
 	for (i = 0; i < mdsc->s_cap_auths_num; i++) {
 		struct ceph_mds_cap_auth *s = &mdsc->s_cap_auths[i];
 
-		err = ceph_mds_auth_match(mdsc, s, tpath);
+		err = ceph_mds_auth_match(mdsc, s, cred, tpath);
 		if (err < 0) {
+			put_cred(cred);
 			return err;
 		} else if (err > 0) {
 			/* always follow the last auth caps' permision */
@@ -5750,6 +5750,8 @@ int ceph_mds_check_access(struct ceph_mds_client *mdsc, char *tpath, int mask)
 				rw_perms_s = s;
 		}
 	}
+
+	put_cred(cred);
 
 	doutc(cl, "root_squash_perms %d, rw_perms_s %p\n", root_squash_perms,
 	      rw_perms_s);
@@ -5877,6 +5879,7 @@ void ceph_mdsc_sync(struct ceph_mds_client *mdsc)
 	mutex_unlock(&mdsc->mutex);
 
 	ceph_flush_dirty_caps(mdsc);
+	ceph_flush_cap_releases(mdsc);
 	spin_lock(&mdsc->cap_dirty_lock);
 	want_flush = mdsc->last_cap_flush_tid;
 	if (!list_empty(&mdsc->cap_flush_list)) {

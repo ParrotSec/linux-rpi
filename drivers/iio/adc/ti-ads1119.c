@@ -435,7 +435,7 @@ static int ads1119_triggered_buffer_preenable(struct iio_dev *indio_dev)
 	int ret;
 
 	index = find_first_bit(indio_dev->active_scan_mask,
-			       indio_dev->masklength);
+			       iio_get_masklength(indio_dev));
 
 	ret = ads1119_set_conv_mode(st, true);
 	if (ret)
@@ -500,15 +500,17 @@ static irqreturn_t ads1119_trigger_handler(int irq, void *private)
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct ads1119_state *st = iio_priv(indio_dev);
 	struct {
-		unsigned int sample;
+		s16 sample;
 		s64 timestamp __aligned(8);
 	} scan;
 	unsigned int index;
 	int ret;
 
+	memset(&scan, 0, sizeof(scan));
+
 	if (!iio_trigger_using_own(indio_dev)) {
 		index = find_first_bit(indio_dev->active_scan_mask,
-				       indio_dev->masklength);
+				       iio_get_masklength(indio_dev));
 
 		ret = ads1119_poll_data_ready(st, &indio_dev->channels[index]);
 		if (ret) {

@@ -2,7 +2,7 @@ From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 Date: Mon, 12 Aug 2024 12:39:03 +0200
 Subject: [PATCH 2/4] locking/rt: Remove one __cond_lock() in RT's
  spin_trylock_irqsave()
-Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.11/older/patches-6.11-rt7.tar.xz
+Origin: https://www.kernel.org/pub/linux/kernel/projects/rt/6.12/older/patches-6.12.8-rt8.tar.xz
 
 spin_trylock_irqsave() has a __cond_lock() wrapper which points to
 __spin_trylock_irqsave(). The function then invokes spin_trylock() which
@@ -23,7 +23,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
 
 --- a/include/linux/spinlock_rt.h
 +++ b/include/linux/spinlock_rt.h
-@@ -132,7 +132,7 @@ static __always_inline void spin_unlock_
+@@ -131,7 +131,7 @@ static __always_inline void spin_unlock_
  #define spin_trylock_irq(lock)				\
  	__cond_lock(lock, rt_spin_trylock(lock))
  
@@ -32,7 +32,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  ({							\
  	int __locked;					\
  							\
-@@ -142,9 +142,6 @@ static __always_inline void spin_unlock_
+@@ -141,9 +141,6 @@ static __always_inline void spin_unlock_
  	__locked;					\
  })
  

@@ -40,7 +40,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
 
 --- a/drivers/firmware/efi/efi-init.c
 +++ b/drivers/firmware/efi/efi-init.c
-@@ -210,9 +210,10 @@ void __init efi_init(void)
+@@ -213,9 +213,10 @@ void __init efi_init(void)
  {
  	struct efi_memory_map_data data;
  	u64 efi_system_table;
@@ -52,7 +52,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  	if (!efi_system_table)
  		return;
  
-@@ -234,6 +235,8 @@ void __init efi_init(void)
+@@ -237,6 +238,8 @@ void __init efi_init(void)
  		return;
  	}
  
@@ -79,7 +79,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  };
  
  static __initconst const struct {
-@@ -41,6 +43,7 @@ static __initconst const struct {
+@@ -43,6 +45,7 @@ static __initconst const struct {
  			[MMSIZE] = "xen,uefi-mmap-size",
  			[DCSIZE] = "xen,uefi-mmap-desc-size",
  			[DCVERS] = "xen,uefi-mmap-desc-ver",
@@ -87,7 +87,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  		}
  	}, {
  #endif
-@@ -51,6 +54,7 @@ static __initconst const struct {
+@@ -53,6 +56,7 @@ static __initconst const struct {
  			[MMSIZE] = "linux,uefi-mmap-size",
  			[DCSIZE] = "linux,uefi-mmap-desc-size",
  			[DCVERS] = "linux,uefi-mmap-desc-ver",
@@ -95,7 +95,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  		}
  	}
  };
-@@ -62,6 +66,11 @@ static int __init efi_get_fdt_prop(const
+@@ -64,6 +68,11 @@ static int __init efi_get_fdt_prop(const
  	int len;
  	u64 val;
  
@@ -107,7 +107,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  	prop = fdt_getprop(fdt, node, pname, &len);
  	if (!prop)
  		return 1;
-@@ -79,7 +88,7 @@ static int __init efi_get_fdt_prop(const
+@@ -81,7 +90,7 @@ static int __init efi_get_fdt_prop(const
  	return 0;
  }
  
@@ -116,7 +116,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  {
  	const void *fdt = initial_boot_params;
  	unsigned long systab;
-@@ -93,6 +102,7 @@ u64 __init efi_get_fdt_params(struct efi
+@@ -95,6 +104,7 @@ u64 __init efi_get_fdt_params(struct efi
  		[MMSIZE] = { &mm->size,		sizeof(mm->size) },
  		[DCSIZE] = { &mm->desc_size,	sizeof(mm->desc_size) },
  		[DCVERS] = { &mm->desc_version,	sizeof(mm->desc_version) },
@@ -126,7 +126,7 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  	BUILD_BUG_ON(ARRAY_SIZE(target) != ARRAY_SIZE(name));
 --- a/drivers/firmware/efi/libstub/fdt.c
 +++ b/drivers/firmware/efi/libstub/fdt.c
-@@ -148,6 +148,12 @@ static efi_status_t update_fdt(void *ori
+@@ -132,6 +132,12 @@ static efi_status_t update_fdt(void *ori
  		}
  	}
  
@@ -141,10 +141,10 @@ arm-init to efi-init common for all arch") renamed arm-init.c to efi-init.c]
  
 --- a/include/linux/efi.h
 +++ b/include/linux/efi.h
-@@ -662,7 +662,8 @@ extern void efi_mem_reserve(phys_addr_t
+@@ -764,7 +764,8 @@ extern int efi_mem_desc_lookup(u64 phys_
+ extern int __efi_mem_desc_lookup(u64 phys_addr, efi_memory_desc_t *out_md);
+ extern void efi_mem_reserve(phys_addr_t addr, u64 size);
  extern int efi_mem_reserve_persistent(phys_addr_t addr, u64 size);
- extern void efi_initialize_iomem_resources(struct resource *code_resource,
- 		struct resource *data_resource, struct resource *bss_resource);
 -extern u64 efi_get_fdt_params(struct efi_memory_map_data *data);
 +extern u64 efi_get_fdt_params(struct efi_memory_map_data *data,
 +			      u32 *secure_boot);

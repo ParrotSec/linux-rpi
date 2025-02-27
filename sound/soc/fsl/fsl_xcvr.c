@@ -169,7 +169,7 @@ static int fsl_xcvr_capds_put(struct snd_kcontrol *kcontrol,
 }
 
 static struct snd_kcontrol_new fsl_xcvr_earc_capds_kctl = {
-	.iface = SNDRV_CTL_ELEM_IFACE_PCM,
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Capabilities Data Structure",
 	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,
 	.info = fsl_xcvr_type_capds_bytes_info,
@@ -186,7 +186,7 @@ static int fsl_xcvr_activate_ctl(struct snd_soc_dai *dai, const char *name,
 
 	lockdep_assert_held(&card->snd_card->controls_rwsem);
 
-	kctl = snd_soc_card_get_kcontrol_locked(card, name);
+	kctl = snd_soc_card_get_kcontrol(card, name);
 	if (kctl == NULL)
 		return -ENOENT;
 
@@ -1540,7 +1540,7 @@ static struct platform_driver fsl_xcvr_driver = {
 		.pm = pm_ptr(&fsl_xcvr_pm_ops),
 		.of_match_table = fsl_xcvr_dt_ids,
 	},
-	.remove_new = fsl_xcvr_remove,
+	.remove = fsl_xcvr_remove,
 };
 module_platform_driver(fsl_xcvr_driver);
 

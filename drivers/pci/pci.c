@@ -1067,7 +1067,14 @@ static void pci_std_enable_acs(struct pci_dev *dev, struct pci_acs *caps)
 static void pci_enable_acs(struct pci_dev *dev)
 {
 	struct pci_acs caps;
+	bool enable_acs = false;
 	int pos;
+
+	/* If an iommu is present we start with kernel default caps */
+	if (pci_acs_enable) {
+		if (pci_dev_specific_enable_acs(dev))
+			enable_acs = true;
+	}
 
 	pos = dev->acs_cap;
 	if (!pos)
@@ -1077,11 +1084,8 @@ static void pci_enable_acs(struct pci_dev *dev)
 	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &caps.ctrl);
 	caps.fw_ctrl = caps.ctrl;
 
-	/* If an iommu is present we start with kernel default caps */
-	if (pci_acs_enable) {
-		if (pci_dev_specific_enable_acs(dev))
-			pci_std_enable_acs(dev, &caps);
-	}
+	if (enable_acs)
+		pci_std_enable_acs(dev, &caps);
 
 	/*
 	 * Always apply caps from the command line, even if there is no iommu.
@@ -1283,7 +1287,9 @@ static int pci_dev_wait(struct pci_dev *dev, char *reset_type, int timeout)
 {
 	int delay = 1;
 	bool retrain = false;
-	struct pci_dev *bridge;
+	struct pci_dev *root, *bridge;
+
+	root = pcie_find_root_port(dev);
 
 	if (pci_is_pcie(dev)) {
 		bridge = pci_upstream_bridge(dev);
@@ -1292,16 +1298,23 @@ static int pci_dev_wait(struct pci_dev *dev, char *reset_type, int timeout)
 	}
 
 	/*
-	 * After reset, the device should not silently discard config
-	 * requests, but it may still indicate that it needs more time by
-	 * responding to them with CRS completions.  The Root Port will
-	 * generally synthesize ~0 (PCI_ERROR_RESPONSE) data to complete
-	 * the read (except when CRS SV is enabled and the read was for the
-	 * Vendor ID; in that case it synthesizes 0x0001 data).
+	 * The caller has already waited long enough after a reset that the
+	 * device should respond to config requests, but it may respond
+	 * with Request Retry Status (RRS) if it needs more time to
+	 * initialize.
 	 *
-	 * Wait for the device to return a non-CRS completion.  Read the
-	 * Command register instead of Vendor ID so we don't have to
-	 * contend with the CRS SV value.
+	 * If the device is below a Root Port with Configuration RRS
+	 * Software Visibility enabled, reading the Vendor ID returns a
+	 * special data value if the device responded with RRS.  Read the
+	 * Vendor ID until we get non-RRS status.
+	 *
+	 * If there's no Root Port or Configuration RRS Software Visibility
+	 * is not enabled, the device may still respond with RRS, but
+	 * hardware may retry the config request.  If no retries receive
+	 * Successful Completion, hardware generally synthesizes ~0
+	 * (PCI_ERROR_RESPONSE) data to complete the read.  Reading Vendor
+	 * ID for VFs and non-existent devices also returns ~0, so read the
+	 * Command register until it returns something other than ~0.
 	 */
 	for (;;) {
 		u32 id;
@@ -1311,9 +1324,15 @@ static int pci_dev_wait(struct pci_dev *dev, char *reset_type, int timeout)
 			return -ENOTTY;
 		}
 
-		pci_read_config_dword(dev, PCI_COMMAND, &id);
-		if (!PCI_POSSIBLE_ERROR(id))
-			break;
+		if (root && root->config_rrs_sv) {
+			pci_read_config_dword(dev, PCI_VENDOR_ID, &id);
+			if (!pci_bus_rrs_vendor_id(id))
+				break;
+		} else {
+			pci_read_config_dword(dev, PCI_COMMAND, &id);
+			if (!PCI_POSSIBLE_ERROR(id))
+				break;
+		}
 
 		if (delay > timeout) {
 			pci_warn(dev, "not ready %dms after %s; giving up\n",
@@ -5229,7 +5248,7 @@ static ssize_t reset_method_store(struct device *dev,
 				  const char *buf, size_t count)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
-	char *options, *name;
+	char *options, *tmp_options, *name;
 	int m, n;
 	u8 reset_methods[PCI_NUM_RESET_METHODS] = { 0 };
 
@@ -5249,7 +5268,8 @@ static ssize_t reset_method_store(struct device *dev,
 		return -ENOMEM;
 
 	n = 0;
-	while ((name = strsep(&options, " ")) != NULL) {
+	tmp_options = options;
+	while ((name = strsep(&tmp_options, " ")) != NULL) {
 		if (sysfs_streq(name, ""))
 			continue;
 
@@ -5865,7 +5885,7 @@ EXPORT_SYMBOL_GPL(pci_probe_reset_bus);
  *
  * Same as above except return -EAGAIN if the bus cannot be locked
  */
-static int __pci_reset_bus(struct pci_bus *bus)
+int __pci_reset_bus(struct pci_bus *bus)
 {
 	int rc;
 

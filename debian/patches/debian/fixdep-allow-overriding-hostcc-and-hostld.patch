@@ -12,13 +12,13 @@ override HOSTCC and HOSTLD for fixdep only.
 ---
 --- a/tools/build/Makefile.include
 +++ b/tools/build/Makefile.include
-@@ -2,7 +2,10 @@
- build := -f $(srctree)/tools/build/Makefile.build dir=. obj
+@@ -12,7 +12,10 @@ else
+ endif
  
  fixdep:
--	$(Q)$(MAKE) -C $(srctree)/tools/build $(OUTPUT)fixdep
-+	$(Q)$(MAKE) -C $(srctree)/tools/build \
-+		$(if $(REALHOSTCC),HOSTCC=$(REALHOSTCC) HOSTCFLAGS=) \
+-	$(SILENT_MAKE) -C $(srctree)/tools/build $(OUTPUT)fixdep
++	$(SILENT_MAKE) -C $(srctree)/tools/build \
++		$(if $(REALHOSTCC),HOSTCC=$(REALHOSTCC) KBUILD_HOSTCFLAGS=) \
 +		$(if $(REALHOSTLD),HOSTLD=$(REALHOSTLD) KBUILD_HOSTLDFLAGS=) \
 +		$(OUTPUT)fixdep
  

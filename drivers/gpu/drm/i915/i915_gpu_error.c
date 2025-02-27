@@ -660,9 +660,10 @@ static void err_print_params(struct drm_i915_error_state_buf *m,
 			     const struct i915_params *params)
 {
 	struct drm_printer p = i915_error_printer(m);
+	struct intel_display *display = &m->i915->display;
 
 	i915_params_dump(params, &p);
-	intel_display_params_dump(m->i915, &p);
+	intel_display_params_dump(display, &p);
 }
 
 static void err_print_pciid(struct drm_i915_error_state_buf *m,
@@ -1651,9 +1652,21 @@ capture_engine(struct intel_engine_cs *engine,
 		return NULL;
 
 	intel_engine_get_hung_entity(engine, &ce, &rq);
-	if (rq && !i915_request_started(rq))
-		drm_info(&engine->gt->i915->drm, "Got hung context on %s with active request %lld:%lld [0x%04X] not yet started\n",
-			 engine->name, rq->fence.context, rq->fence.seqno, ce->guc_id.id);
+	if (rq && !i915_request_started(rq)) {
+		/*
+		 * We want to know also what is the guc_id of the context,
+		 * but if we don't have the context reference, then skip
+		 * printing it.
+		 */
+		if (ce)
+			drm_info(&engine->gt->i915->drm,
+				 "Got hung context on %s with active request %lld:%lld [0x%04X] not yet started\n",
+				 engine->name, rq->fence.context, rq->fence.seqno, ce->guc_id.id);
+		else
+			drm_info(&engine->gt->i915->drm,
+				 "Got hung context on %s with active request %lld:%lld not yet started\n",
+				 engine->name, rq->fence.context, rq->fence.seqno);
+	}
 
 	if (rq) {
 		capture = intel_engine_coredump_add_request(ee, rq, ATOMIC_MAYFAIL);

@@ -11,7 +11,6 @@
 # CONFIG_X86_MCE is not set
 # CONFIG_X86_16BIT is not set
 # CONFIG_AMD_NUMA is not set
-# CONFIG_NUMA_EMU is not set
 # CONFIG_ISA_DMA_API is not set
 # CONFIG_ISA is not set
 # CONFIG_X86_X32_ABI is not set
@@ -31,6 +30,11 @@ CONFIG_GOOGLE_FRAMEBUFFER_COREBOOT=m
 ## file: drivers/hwmon/Kconfig
 ##
 # CONFIG_I8K is not set
+
+##
+## file: drivers/idle/Kconfig
+##
+CONFIG_INTEL_IDLE=y
 
 ##
 ## file: drivers/infiniband/hw/usnic/Kconfig
@@ -53,3 +57,8 @@ CONFIG_GOOGLE_FRAMEBUFFER_COREBOOT=m
 ##
 CONFIG_I6300ESB_WDT=m
 # CONFIG_PCIPCWATCHDOG is not set
+
+##
+## file: mm/Kconfig
+##
+# CONFIG_NUMA_EMU is not set

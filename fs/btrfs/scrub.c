@@ -838,7 +838,7 @@ static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 			     bbio->bio.bi_iter.bi_size >= blocksize)) {
 			ASSERT(bbio->bio.bi_iter.bi_size);
 			atomic_inc(&stripe->pending_io);
-			btrfs_submit_bio(bbio, mirror);
+			btrfs_submit_bbio(bbio, mirror);
 			if (wait)
 				wait_scrub_stripe_io(stripe);
 			bbio = NULL;
@@ -857,7 +857,7 @@ static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 	if (bbio) {
 		ASSERT(bbio->bio.bi_iter.bi_size);
 		atomic_inc(&stripe->pending_io);
-		btrfs_submit_bio(bbio, mirror);
+		btrfs_submit_bbio(bbio, mirror);
 		if (wait)
 			wait_scrub_stripe_io(stripe);
 	}
@@ -1541,6 +1541,10 @@ static int scrub_find_fill_first_stripe(struct btrfs_block_group *bg,
 	u64 extent_gen;
 	int ret;
 
+	if (unlikely(!extent_root)) {
+		btrfs_err(fs_info, "no valid extent root for scrub");
+		return -EUCLEAN;
+	}
 	memset(stripe->sectors, 0, sizeof(struct scrub_sector_verification) *
 				   stripe->nr_sectors);
 	scrub_stripe_reset_bitmaps(stripe);
@@ -1683,7 +1687,7 @@ static void scrub_submit_extent_sector_read(struct scrub_ctx *sctx,
 		     bbio->bio.bi_iter.bi_size >= stripe_len)) {
 			ASSERT(bbio->bio.bi_iter.bi_size);
 			atomic_inc(&stripe->pending_io);
-			btrfs_submit_bio(bbio, mirror);
+			btrfs_submit_bbio(bbio, mirror);
 			bbio = NULL;
 		}
 
@@ -1694,7 +1698,7 @@ static void scrub_submit_extent_sector_read(struct scrub_ctx *sctx,
 					    (i << fs_info->sectorsize_bits);
 			int err;
 
-			io_stripe.is_scrub = true;
+			io_stripe.rst_search_commit_root = true;
 			stripe_len = (nr_sectors - i) << fs_info->sectorsize_bits;
 			/*
 			 * For RST cases, we need to manually split the bbio to
@@ -1720,7 +1724,7 @@ static void scrub_submit_extent_sector_read(struct scrub_ctx *sctx,
 	if (bbio) {
 		ASSERT(bbio->bio.bi_iter.bi_size);
 		atomic_inc(&stripe->pending_io);
-		btrfs_submit_bio(bbio, mirror);
+		btrfs_submit_bbio(bbio, mirror);
 	}
 
 	if (atomic_dec_and_test(&stripe->pending_io)) {
@@ -1776,7 +1780,7 @@ static void scrub_submit_initial_read(struct scrub_ctx *sctx,
 
 		mirror = calc_next_mirror(mirror, num_copies);
 	}
-	btrfs_submit_bio(bbio, mirror);
+	btrfs_submit_bbio(bbio, mirror);
 }
 
 static bool stripe_has_metadata_error(struct scrub_stripe *stripe)

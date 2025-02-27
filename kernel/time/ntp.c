@@ -660,8 +660,16 @@ rearm:
 	sched_sync_hw_clock(offset_nsec, res != 0);
 }
 
-void ntp_notify_cmos_timer(void)
+void ntp_notify_cmos_timer(bool offset_set)
 {
+	/*
+	 * If the time jumped (using ADJ_SETOFFSET) cancels sync timer,
+	 * which may have been running if the time was synchronized
+	 * prior to the ADJ_SETOFFSET call.
+	 */
+	if (offset_set)
+		hrtimer_cancel(&sync_hrtimer);
+
 	/*
 	 * When the work is currently executed but has not yet the timer
 	 * rearmed this queues the work immediately again. No big issue,
@@ -796,7 +804,7 @@ int __do_adjtimex(struct __kernel_timex *txc, const struct timespec64 *ts,
 		txc->offset = shift_right(time_offset * NTP_INTERVAL_FREQ,
 				  NTP_SCALE_SHIFT);
 		if (!(time_status & STA_NANO))
-			txc->offset = (u32)txc->offset / NSEC_PER_USEC;
+			txc->offset = div_s64(txc->offset, NSEC_PER_USEC);
 	}
 
 	result = time_state;	/* mostly `TIME_OK' */

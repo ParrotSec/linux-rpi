@@ -49,7 +49,7 @@
 #define regMP1_SMN_IH_SW_INT_CTRL_mp1_14_0_0_BASE_IDX   0
 
 const int decoded_link_speed[5] = {1, 2, 3, 4, 5};
-const int decoded_link_width[7] = {0, 1, 2, 4, 8, 12, 16};
+const int decoded_link_width[8] = {0, 1, 2, 4, 8, 12, 16, 32};
 /*
  * DO NOT use these for err/warn/info/debug messages.
  * Use dev_err, dev_warn, dev_info and dev_dbg instead.
@@ -452,17 +452,26 @@ int smu_v14_0_init_smc_tables(struct smu_context *smu)
 			ret = -ENOMEM;
 			goto err3_out;
 		}
+
+		smu_table->user_overdrive_table =
+			kzalloc(tables[SMU_TABLE_OVERDRIVE].size, GFP_KERNEL);
+		if (!smu_table->user_overdrive_table) {
+			ret = -ENOMEM;
+			goto err4_out;
+		}
 	}
 
 	smu_table->combo_pptable =
 		kzalloc(tables[SMU_TABLE_COMBO_PPTABLE].size, GFP_KERNEL);
 	if (!smu_table->combo_pptable) {
 		ret = -ENOMEM;
-		goto err4_out;
+		goto err5_out;
 	}
 
 	return 0;
 
+err5_out:
+	kfree(smu_table->user_overdrive_table);
 err4_out:
 	kfree(smu_table->boot_overdrive_table);
 err3_out:

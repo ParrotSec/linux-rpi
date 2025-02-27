@@ -750,6 +750,7 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 	struct vmw_plane_state *old_vps = vmw_plane_state_to_vps(old_state);
 	struct vmw_bo *old_bo = NULL;
 	struct vmw_bo *new_bo = NULL;
+	struct ww_acquire_ctx ctx;
 	s32 hotspot_x, hotspot_y;
 	int ret;
 
@@ -769,9 +770,11 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 	if (du->cursor_surface)
 		du->cursor_age = du->cursor_surface->snooper.age;
 
+	ww_acquire_init(&ctx, &reservation_ww_class);
+
 	if (!vmw_user_object_is_null(&old_vps->uo)) {
 		old_bo = vmw_user_object_buffer(&old_vps->uo);
-		ret = ttm_bo_reserve(&old_bo->tbo, false, false, NULL);
+		ret = ttm_bo_reserve(&old_bo->tbo, false, false, &ctx);
 		if (ret != 0)
 			return;
 	}
@@ -779,9 +782,14 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 	if (!vmw_user_object_is_null(&vps->uo)) {
 		new_bo = vmw_user_object_buffer(&vps->uo);
 		if (old_bo != new_bo) {
-			ret = ttm_bo_reserve(&new_bo->tbo, false, false, NULL);
-			if (ret != 0)
+			ret = ttm_bo_reserve(&new_bo->tbo, false, false, &ctx);
+			if (ret != 0) {
+				if (old_bo) {
+					ttm_bo_unreserve(&old_bo->tbo);
+					ww_acquire_fini(&ctx);
+				}
 				return;
+			}
 		} else {
 			new_bo = NULL;
 		}
@@ -803,10 +811,12 @@ vmw_du_cursor_plane_atomic_update(struct drm_plane *plane,
 						hotspot_x, hotspot_y);
 	}
 
-	if (old_bo)
-		ttm_bo_unreserve(&old_bo->tbo);
 	if (new_bo)
 		ttm_bo_unreserve(&new_bo->tbo);
+	if (old_bo)
+		ttm_bo_unreserve(&old_bo->tbo);
+
+	ww_acquire_fini(&ctx);
 
 	du->cursor_x = new_state->crtc_x + du->set_gui_x;
 	du->cursor_y = new_state->crtc_y + du->set_gui_y;
@@ -1265,6 +1275,8 @@ static int vmw_framebuffer_surface_create_handle(struct drm_framebuffer *fb,
 	struct vmw_framebuffer_surface *vfbs = vmw_framebuffer_to_vfbs(fb);
 	struct vmw_bo *bo = vmw_user_object_buffer(&vfbs->uo);
 
+	if (WARN_ON(!bo))
+		return -EINVAL;
 	return drm_gem_handle_create(file_priv, &bo->tbo.base, handle);
 }
 
@@ -2197,7 +2209,7 @@ int vmw_kms_update_layout_ioctl(struct drm_device *dev, void *data,
 	struct drm_mode_config *mode_config = &dev->mode_config;
 	struct drm_vmw_update_layout_arg *arg =
 		(struct drm_vmw_update_layout_arg *)data;
-	void __user *user_rects;
+	const void __user *user_rects;
 	struct drm_vmw_rect *rects;
 	struct drm_rect *drm_rects;
 	unsigned rects_size;
@@ -2209,6 +2221,8 @@ int vmw_kms_update_layout_ioctl(struct drm_device *dev, void *data,
 					    VMWGFX_MIN_INITIAL_HEIGHT};
 		vmw_du_update_layout(dev_priv, 1, &def_rect);
 		return 0;
+	} else if (arg->num_outputs > VMWGFX_NUM_DISPLAY_UNITS) {
+		return -E2BIG;
 	}
 
 	rects_size = arg->num_outputs * sizeof(struct drm_vmw_rect);

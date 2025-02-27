@@ -37,6 +37,4 @@ Build-Depends-Arch:
  flex <!pkg.linux.nokernel>,
  flex <!pkg.linux.notools>,
 Rules-Requires-Root: no
-Vcs-Git: https://gitlab.com/parrotsec/packages/linux
-Vcs-Browser: https://gitlab.com/parrotsec/packages/linux
 Homepage: https://www.kernel.org/

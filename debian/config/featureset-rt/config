@@ -8,8 +8,8 @@
 ##
 ## choice: Preemption Model
 # CONFIG_PREEMPT_VOLUNTARY is not set
-CONFIG_PREEMPT_RT=y
 ## end choice
+CONFIG_PREEMPT_RT=y
 
 ##
 ## file: kernel/rcu/Kconfig

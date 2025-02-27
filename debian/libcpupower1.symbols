@@ -36,6 +36,7 @@ libcpupower.so.1 libcpupower1 #MINVER#
  cpuidle_state_disable@Base 4.7~rc2-1~exp1
  cpuidle_state_latency@Base 4.7~rc2-1~exp1
  cpuidle_state_name@Base 4.7~rc2-1~exp1
+ cpuidle_state_residency@Base 6.12~rc2-1~exp1
  cpuidle_state_time@Base 4.7~rc2-1~exp1
  cpuidle_state_usage@Base 4.7~rc2-1~exp1
  cpupower_is_cpu_online@Base 4.7~rc2-1~exp1

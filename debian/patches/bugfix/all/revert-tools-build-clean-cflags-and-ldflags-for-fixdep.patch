@@ -10,12 +10,12 @@ Signed-off-by: Ben Hutchings <benh@debian.org>
 ---
 --- a/tools/build/Makefile.include
 +++ b/tools/build/Makefile.include
-@@ -2,7 +2,7 @@
- build := -f $(srctree)/tools/build/Makefile.build dir=. obj
+@@ -12,7 +12,7 @@ else
+ endif
  
  fixdep:
--	$(Q)$(MAKE) -C $(srctree)/tools/build CFLAGS= LDFLAGS= $(OUTPUT)fixdep
-+	$(Q)$(MAKE) -C $(srctree)/tools/build $(OUTPUT)fixdep
+-	$(SILENT_MAKE) -C $(srctree)/tools/build CFLAGS= LDFLAGS= $(OUTPUT)fixdep
++	$(SILENT_MAKE) -C $(srctree)/tools/build $(OUTPUT)fixdep
  
  fixdep-clean:
  	$(Q)$(MAKE) -C $(srctree)/tools/build clean

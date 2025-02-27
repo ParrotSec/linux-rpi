@@ -599,7 +599,9 @@ static void handle_std_frame(struct sk_buff *skb,
 	if (port->type == HSR_PT_MASTER ||
 	    port->type == HSR_PT_INTERLINK) {
 		/* Sequence nr for the master/interlink node */
-		frame->sequence_nr = atomic_inc_return(&hsr->sequence_nr);
+		lockdep_assert_held(&hsr->seqnr_lock);
+		frame->sequence_nr = hsr->sequence_nr;
+		hsr->sequence_nr++;
 	}
 }
 
@@ -686,6 +688,8 @@ static int fill_frame_info(struct hsr_frame_info *frame,
 		frame->is_vlan = true;
 
 	if (frame->is_vlan) {
+		if (skb->mac_len < offsetofend(struct hsr_vlan_ethhdr, vlanhdr))
+			return -EINVAL;
 		vlan_hdr = (struct hsr_vlan_ethhdr *)ethhdr;
 		proto = vlan_hdr->vlanhdr.h_vlan_encapsulated_proto;
 		/* FIXME: */

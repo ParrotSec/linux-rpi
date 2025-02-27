@@ -25,18 +25,16 @@ rules.real and change Makefile.modfinal to look for it in both places.
  scripts/Makefile.modfinal | 6 ++++--
  1 file changed, 4 insertions(+), 2 deletions(-)
 
-diff --git a/scripts/Makefile.modfinal b/scripts/Makefile.modfinal
-index 8568d256d6fb..415cff66539b 100644
 --- a/scripts/Makefile.modfinal
 +++ b/scripts/Makefile.modfinal
-@@ -28,11 +28,13 @@ quiet_cmd_cc_o_c = CC [M]  $@
- %.mod.o: %.mod.c FORCE
+@@ -33,11 +33,13 @@ quiet_cmd_cc_o_c = CC [M]  $@
+ $(extmod_prefix).module-common.o: $(srctree)/scripts/module-common.c FORCE
  	$(call if_changed_dep,cc_o_c)
  
 +ARCH_MODULE_LDS := $(word 1,$(wildcard scripts/module.lds arch/$(SRCARCH)/module.lds))
 +
  quiet_cmd_ld_ko_o = LD [M]  $@
-       cmd_ld_ko_o +=							\
+       cmd_ld_ko_o =							\
  	$(LD) -r $(KBUILD_LDFLAGS)					\
  		$(KBUILD_LDFLAGS_MODULE) $(LDFLAGS_MODULE)		\
 -		-T scripts/module.lds -o $@ $(filter %.o, $^)
@@ -44,14 +42,12 @@ index 8568d256d6fb..415cff66539b 100644
  
  quiet_cmd_btf_ko = BTF [M] $@
        cmd_btf_ko = 							\
-@@ -52,7 +54,7 @@ if_changed_except = $(if $(call newer_prereqs_except,$(2))$(cmd-check),      \
+@@ -57,7 +59,7 @@ if_changed_except = $(if $(call newer_pr
  	printf '%s\n' 'savedcmd_$@ := $(make-cmd)' > $(dot-target).cmd, @:)
  
  # Re-generate module BTFs if either module's .ko or vmlinux changed
--%.ko: %.o %.mod.o scripts/module.lds $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
-+%.ko: %.o %.mod.o $(ARCH_MODULE_LDS) $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
+-%.ko: %.o %.mod.o $(extmod_prefix).module-common.o scripts/module.lds $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
++%.ko: %.o %.mod.o $(extmod_prefix).module-common.o $(ARCH_MODULE_LDS) $(and $(CONFIG_DEBUG_INFO_BTF_MODULES),$(KBUILD_BUILTIN),vmlinux) FORCE
  	+$(call if_changed_except,ld_ko_o,vmlinux)
  ifdef CONFIG_DEBUG_INFO_BTF_MODULES
  	+$(if $(newer-prereqs),$(call cmd,btf_ko))
--- 
-2.42.0

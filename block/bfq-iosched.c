@@ -582,23 +582,31 @@ static struct request *bfq_choose_req(struct bfq_data *bfqd,
 #define BFQ_LIMIT_INLINE_DEPTH 16
 
 #ifdef CONFIG_BFQ_GROUP_IOSCHED
-static bool bfqq_request_over_limit(struct bfq_queue *bfqq, int limit)
+static bool bfqq_request_over_limit(struct bfq_data *bfqd,
+				    struct bfq_io_cq *bic, blk_opf_t opf,
+				    unsigned int act_idx, int limit)
 {
-	struct bfq_data *bfqd = bfqq->bfqd;
-	struct bfq_entity *entity = &bfqq->entity;
 	struct bfq_entity *inline_entities[BFQ_LIMIT_INLINE_DEPTH];
 	struct bfq_entity **entities = inline_entities;
-	int depth, level, alloc_depth = BFQ_LIMIT_INLINE_DEPTH;
-	int class_idx = bfqq->ioprio_class - 1;
+	int alloc_depth = BFQ_LIMIT_INLINE_DEPTH;
 	struct bfq_sched_data *sched_data;
+	struct bfq_entity *entity;
+	struct bfq_queue *bfqq;
 	unsigned long wsum;
 	bool ret = false;
-
-	if (!entity->on_st_or_in_serv)
-		return false;
+	int depth;
+	int level;
 
 retry:
 	spin_lock_irq(&bfqd->lock);
+	bfqq = bic_to_bfqq(bic, op_is_sync(opf), act_idx);
+	if (!bfqq)
+		goto out;
+
+	entity = &bfqq->entity;
+	if (!entity->on_st_or_in_serv)
+		goto out;
+
 	/* +1 for bfqq entity, root cgroup not included */
 	depth = bfqg_to_blkg(bfqq_group(bfqq))->blkcg->css.cgroup->level + 1;
 	if (depth > alloc_depth) {
@@ -643,7 +651,7 @@ retry:
 			 * class.
 			 */
 			wsum = 0;
-			for (i = 0; i <= class_idx; i++) {
+			for (i = 0; i <= bfqq->ioprio_class - 1; i++) {
 				wsum = wsum * IOPRIO_BE_NR +
 					sched_data->service_tree[i].wsum;
 			}
@@ -666,7 +674,9 @@ out:
 	return ret;
 }
 #else
-static bool bfqq_request_over_limit(struct bfq_queue *bfqq, int limit)
+static bool bfqq_request_over_limit(struct bfq_data *bfqd,
+				    struct bfq_io_cq *bic, blk_opf_t opf,
+				    unsigned int act_idx, int limit)
 {
 	return false;
 }
@@ -704,8 +714,9 @@ static void bfq_limit_depth(blk_opf_t opf, struct blk_mq_alloc_data *data)
 	}
 
 	for (act_idx = 0; bic && act_idx < bfqd->num_actuators; act_idx++) {
-		struct bfq_queue *bfqq =
-			bic_to_bfqq(bic, op_is_sync(opf), act_idx);
+		/* Fast path to check if bfqq is already allocated. */
+		if (!bic_to_bfqq(bic, op_is_sync(opf), act_idx))
+			continue;
 
 		/*
 		 * Does queue (or any parent entity) exceed number of
@@ -713,7 +724,7 @@ static void bfq_limit_depth(blk_opf_t opf, struct blk_mq_alloc_data *data)
 		 * limit depth so that it cannot consume more
 		 * available requests and thus starve other entities.
 		 */
-		if (bfqq && bfqq_request_over_limit(bfqq, limit)) {
+		if (bfqq_request_over_limit(bfqd, bic, opf, act_idx, limit)) {
 			depth = 1;
 			break;
 		}
@@ -3097,8 +3108,8 @@ static void bfq_bfqq_save_state(struct bfq_queue *bfqq)
 }
 
 
-static void
-bfq_reassign_last_bfqq(struct bfq_queue *cur_bfqq, struct bfq_queue *new_bfqq)
+void bfq_reassign_last_bfqq(struct bfq_queue *cur_bfqq,
+			    struct bfq_queue *new_bfqq)
 {
 	if (cur_bfqq->entity.parent &&
 	    cur_bfqq->entity.parent->last_bfqq_created == cur_bfqq)
@@ -6739,11 +6750,10 @@ bfq_split_bfqq(struct bfq_io_cq *bic, struct bfq_queue *bfqq)
 	return NULL;
 }
 
-static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
-						   struct bfq_io_cq *bic,
-						   struct bio *bio,
-						   bool split, bool is_sync,
-						   bool *new_queue)
+static struct bfq_queue *
+__bfq_get_bfqq_handle_split(struct bfq_data *bfqd, struct bfq_io_cq *bic,
+			    struct bio *bio, bool split, bool is_sync,
+			    bool *new_queue)
 {
 	unsigned int act_idx = bfq_actuator_index(bfqd, bio);
 	struct bfq_queue *bfqq = bic_to_bfqq(bic, is_sync, act_idx);
@@ -6834,17 +6844,78 @@ static struct bfq_queue *bfq_waker_bfqq(struct bfq_queue *bfqq)
 		if (new_bfqq == waker_bfqq) {
 			/*
 			 * If waker_bfqq is in the merge chain, and current
-			 * is the only procress.
+			 * is the only process, waker_bfqq can be freed.
 			 */
 			if (bfqq_process_refs(waker_bfqq) == 1)
 				return NULL;
-			break;
+
+			return waker_bfqq;
 		}
 
 		new_bfqq = new_bfqq->new_bfqq;
 	}
 
+	/*
+	 * If waker_bfqq is not in the merge chain, and it's procress reference
+	 * is 0, waker_bfqq can be freed.
+	 */
+	if (bfqq_process_refs(waker_bfqq) == 0)
+		return NULL;
+
 	return waker_bfqq;
+}
+
+static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
+						   struct bfq_io_cq *bic,
+						   struct bio *bio,
+						   unsigned int idx,
+						   bool is_sync)
+{
+	struct bfq_queue *waker_bfqq;
+	struct bfq_queue *bfqq;
+	bool new_queue = false;
+
+	bfqq = __bfq_get_bfqq_handle_split(bfqd, bic, bio, false, is_sync,
+					   &new_queue);
+	if (unlikely(new_queue))
+		return bfqq;
+
+	/* If the queue was seeky for too long, break it apart. */
+	if (!bfq_bfqq_coop(bfqq) || !bfq_bfqq_split_coop(bfqq) ||
+	    bic->bfqq_data[idx].stably_merged)
+		return bfqq;
+
+	waker_bfqq = bfq_waker_bfqq(bfqq);
+
+	/* Update bic before losing reference to bfqq */
+	if (bfq_bfqq_in_large_burst(bfqq))
+		bic->bfqq_data[idx].saved_in_large_burst = true;
+
+	bfqq = bfq_split_bfqq(bic, bfqq);
+	if (bfqq) {
+		bfq_bfqq_resume_state(bfqq, bfqd, bic, true);
+		return bfqq;
+	}
+
+	bfqq = __bfq_get_bfqq_handle_split(bfqd, bic, bio, true, is_sync, NULL);
+	if (unlikely(bfqq == &bfqd->oom_bfqq))
+		return bfqq;
+
+	bfq_bfqq_resume_state(bfqq, bfqd, bic, false);
+	bfqq->waker_bfqq = waker_bfqq;
+	bfqq->tentative_waker_bfqq = NULL;
+
+	/*
+	 * If the waker queue disappears, then new_bfqq->waker_bfqq must be
+	 * reset. So insert new_bfqq into the
+	 * woken_list of the waker. See
+	 * bfq_check_waker for details.
+	 */
+	if (waker_bfqq)
+		hlist_add_head(&bfqq->woken_list_node,
+			       &bfqq->waker_bfqq->woken_list);
+
+	return bfqq;
 }
 
 /*
@@ -6878,8 +6949,6 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	struct bfq_io_cq *bic;
 	const int is_sync = rq_is_sync(rq);
 	struct bfq_queue *bfqq;
-	bool new_queue = false;
-	bool bfqq_already_existing = false, split = false;
 	unsigned int a_idx = bfq_actuator_index(bfqd, bio);
 
 	if (unlikely(!rq->elv.icq))
@@ -6896,54 +6965,9 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 		return RQ_BFQQ(rq);
 
 	bic = icq_to_bic(rq->elv.icq);
-
 	bfq_check_ioprio_change(bic, bio);
-
 	bfq_bic_update_cgroup(bic, bio);
-
-	bfqq = bfq_get_bfqq_handle_split(bfqd, bic, bio, false, is_sync,
-					 &new_queue);
-
-	if (likely(!new_queue)) {
-		/* If the queue was seeky for too long, break it apart. */
-		if (bfq_bfqq_coop(bfqq) && bfq_bfqq_split_coop(bfqq) &&
-			!bic->bfqq_data[a_idx].stably_merged) {
-			struct bfq_queue *waker_bfqq = bfq_waker_bfqq(bfqq);
-
-			/* Update bic before losing reference to bfqq */
-			if (bfq_bfqq_in_large_burst(bfqq))
-				bic->bfqq_data[a_idx].saved_in_large_burst =
-					true;
-
-			bfqq = bfq_split_bfqq(bic, bfqq);
-			split = true;
-
-			if (!bfqq) {
-				bfqq = bfq_get_bfqq_handle_split(bfqd, bic, bio,
-								 true, is_sync,
-								 NULL);
-				if (unlikely(bfqq == &bfqd->oom_bfqq))
-					bfqq_already_existing = true;
-			} else
-				bfqq_already_existing = true;
-
-			if (!bfqq_already_existing) {
-				bfqq->waker_bfqq = waker_bfqq;
-				bfqq->tentative_waker_bfqq = NULL;
-
-				/*
-				 * If the waker queue disappears, then
-				 * new_bfqq->waker_bfqq must be
-				 * reset. So insert new_bfqq into the
-				 * woken_list of the waker. See
-				 * bfq_check_waker for details.
-				 */
-				if (waker_bfqq)
-					hlist_add_head(&bfqq->woken_list_node,
-						       &bfqq->waker_bfqq->woken_list);
-			}
-		}
-	}
+	bfqq = bfq_get_bfqq_handle_split(bfqd, bic, bio, a_idx, is_sync);
 
 	bfqq_request_allocated(bfqq);
 	bfqq->ref++;
@@ -6961,18 +6985,8 @@ static struct bfq_queue *bfq_init_rq(struct request *rq)
 	 * resume its state.
 	 */
 	if (likely(bfqq != &bfqd->oom_bfqq) && !bfqq->new_bfqq &&
-	    bfqq_process_refs(bfqq) == 1) {
+	    bfqq_process_refs(bfqq) == 1)
 		bfqq->bic = bic;
-		if (split) {
-			/*
-			 * The queue has just been split from a shared
-			 * queue: restore the idle window and the
-			 * possible weight raising period.
-			 */
-			bfq_bfqq_resume_state(bfqq, bfqd, bic,
-					      bfqq_already_existing);
-		}
-	}
 
 	/*
 	 * Consider bfqq as possibly belonging to a burst of newly

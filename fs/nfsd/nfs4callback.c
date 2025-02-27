@@ -287,17 +287,17 @@ static int decode_cb_compound4res(struct xdr_stream *xdr,
 	u32 length;
 	__be32 *p;
 
-	p = xdr_inline_decode(xdr, 4 + 4);
+	p = xdr_inline_decode(xdr, XDR_UNIT);
 	if (unlikely(p == NULL))
 		goto out_overflow;
-	hdr->status = be32_to_cpup(p++);
+	hdr->status = be32_to_cpup(p);
 	/* Ignore the tag */
-	length = be32_to_cpup(p++);
-	p = xdr_inline_decode(xdr, length + 4);
-	if (unlikely(p == NULL))
+	if (xdr_stream_decode_u32(xdr, &length) < 0)
 		goto out_overflow;
-	p += XDR_QUADLEN(length);
-	hdr->nops = be32_to_cpup(p);
+	if (xdr_inline_decode(xdr, length) == NULL)
+		goto out_overflow;
+	if (xdr_stream_decode_u32(xdr, &hdr->nops) < 0)
+		goto out_overflow;
 	return 0;
 out_overflow:
 	return -EIO;
@@ -1058,7 +1058,7 @@ static int setup_callback_client(struct nfs4_client *clp, struct nfs4_cb_conn *c
 		args.authflavor = clp->cl_cred.cr_flavor;
 		clp->cl_cb_ident = conn->cb_ident;
 	} else {
-		if (!conn->cb_xprt)
+		if (!conn->cb_xprt || !ses)
 			return -EINVAL;
 		clp->cl_cb_session = ses;
 		args.bc_xprt = conn->cb_xprt;
@@ -1223,6 +1223,7 @@ static void nfsd4_cb_prepare(struct rpc_task *task, void *calldata)
 	 * cb_seq_status is only set in decode_cb_sequence4res,
 	 * and so will remain 1 if an rpc level failure occurs.
 	 */
+	trace_nfsd_cb_rpc_prepare(clp);
 	cb->cb_seq_status = 1;
 	cb->cb_status = 0;
 	if (minorversion && !nfsd41_cb_get_slot(cb, task))
@@ -1329,11 +1330,14 @@ static void nfsd4_cb_done(struct rpc_task *task, void *calldata)
 	struct nfsd4_callback *cb = calldata;
 	struct nfs4_client *clp = cb->cb_clp;
 
+	trace_nfsd_cb_rpc_done(clp);
+
 	if (!nfsd4_cb_sequence_done(task, cb))
 		return;
 
 	if (cb->cb_status) {
-		WARN_ON_ONCE(task->tk_status);
+		WARN_ONCE(task->tk_status, "cb_status=%d tk_status=%d",
+			  cb->cb_status, task->tk_status);
 		task->tk_status = cb->cb_status;
 	}
 
@@ -1358,6 +1362,8 @@ static void nfsd4_cb_done(struct rpc_task *task, void *calldata)
 static void nfsd4_cb_release(void *calldata)
 {
 	struct nfsd4_callback *cb = calldata;
+
+	trace_nfsd_cb_rpc_release(cb->cb_clp);
 
 	if (cb->cb_need_restart)
 		nfsd4_queue_cb(cb);

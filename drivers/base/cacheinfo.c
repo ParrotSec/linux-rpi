@@ -58,7 +58,7 @@ bool last_level_cache_is_valid(unsigned int cpu)
 {
 	struct cacheinfo *llc;
 
-	if (!cache_leaves(cpu))
+	if (!cache_leaves(cpu) || !per_cpu_cacheinfo(cpu))
 		return false;
 
 	llc = per_cpu_cacheinfo_idx(cpu, cache_leaves(cpu) - 1);
@@ -202,29 +202,24 @@ static void cache_of_set_props(struct cacheinfo *this_leaf,
 
 static int cache_setup_of_node(unsigned int cpu)
 {
-	struct device_node *np, *prev;
 	struct cacheinfo *this_leaf;
 	unsigned int index = 0;
 
-	np = of_cpu_device_node_get(cpu);
+	struct device_node *np __free(device_node) = of_cpu_device_node_get(cpu);
 	if (!np) {
 		pr_err("Failed to find cpu%d device node\n", cpu);
 		return -ENOENT;
 	}
 
 	if (!of_check_cache_nodes(np)) {
-		of_node_put(np);
 		return -ENOENT;
 	}
-
-	prev = np;
 
 	while (index < cache_leaves(cpu)) {
 		this_leaf = per_cpu_cacheinfo_idx(cpu, index);
 		if (this_leaf->level != 1) {
+			struct device_node *prev __free(device_node) = np;
 			np = of_find_next_cache_node(np);
-			of_node_put(prev);
-			prev = np;
 			if (!np)
 				break;
 		}
@@ -232,8 +227,6 @@ static int cache_setup_of_node(unsigned int cpu)
 		this_leaf->fw_token = np;
 		index++;
 	}
-
-	of_node_put(np);
 
 	if (index != cache_leaves(cpu)) /* not all OF nodes populated */
 		return -ENOENT;
@@ -243,17 +236,14 @@ static int cache_setup_of_node(unsigned int cpu)
 
 static bool of_check_cache_nodes(struct device_node *np)
 {
-	struct device_node *next;
-
 	if (of_property_present(np, "cache-size")   ||
 	    of_property_present(np, "i-cache-size") ||
 	    of_property_present(np, "d-cache-size") ||
 	    of_property_present(np, "cache-unified"))
 		return true;
 
-	next = of_find_next_cache_node(np);
+	struct device_node *next __free(device_node) = of_find_next_cache_node(np);
 	if (next) {
-		of_node_put(next);
 		return true;
 	}
 
@@ -287,12 +277,10 @@ static int of_count_cache_leaves(struct device_node *np)
 int init_of_cache_level(unsigned int cpu)
 {
 	struct cpu_cacheinfo *this_cpu_ci = get_cpu_cacheinfo(cpu);
-	struct device_node *np = of_cpu_device_node_get(cpu);
-	struct device_node *prev = NULL;
+	struct device_node *np __free(device_node) = of_cpu_device_node_get(cpu);
 	unsigned int levels = 0, leaves, level;
 
 	if (!of_check_cache_nodes(np)) {
-		of_node_put(np);
 		return -ENOENT;
 	}
 
@@ -300,30 +288,27 @@ int init_of_cache_level(unsigned int cpu)
 	if (leaves > 0)
 		levels = 1;
 
-	prev = np;
-	while ((np = of_find_next_cache_node(np))) {
-		of_node_put(prev);
-		prev = np;
+	while (1) {
+		struct device_node *prev __free(device_node) = np;
+		np = of_find_next_cache_node(np);
+		if (!np)
+			break;
+
 		if (!of_device_is_compatible(np, "cache"))
-			goto err_out;
+			return -EINVAL;
 		if (of_property_read_u32(np, "cache-level", &level))
-			goto err_out;
+			return -EINVAL;
 		if (level <= levels)
-			goto err_out;
+			return -EINVAL;
 
 		leaves += of_count_cache_leaves(np);
 		levels = level;
 	}
 
-	of_node_put(np);
 	this_cpu_ci->num_levels = levels;
 	this_cpu_ci->num_leaves = leaves;
 
 	return 0;
-
-err_out:
-	of_node_put(np);
-	return -EINVAL;
 }
 
 #else
@@ -478,11 +463,9 @@ int __weak populate_cache_leaves(unsigned int cpu)
 	return -ENOENT;
 }
 
-static inline
-int allocate_cache_info(int cpu)
+static inline int allocate_cache_info(int cpu)
 {
-	per_cpu_cacheinfo(cpu) = kcalloc(cache_leaves(cpu),
-					 sizeof(struct cacheinfo), GFP_ATOMIC);
+	per_cpu_cacheinfo(cpu) = kcalloc(cache_leaves(cpu), sizeof(struct cacheinfo), GFP_ATOMIC);
 	if (!per_cpu_cacheinfo(cpu)) {
 		cache_leaves(cpu) = 0;
 		return -ENOMEM;
@@ -554,7 +537,11 @@ static inline int init_level_allocate_ci(unsigned int cpu)
 	 */
 	ci_cacheinfo(cpu)->early_ci_levels = false;
 
-	if (cache_leaves(cpu) <= early_leaves)
+	/*
+	 * Some architectures (e.g., x86) do not use early initialization.
+	 * Allocate memory now in such case.
+	 */
+	if (cache_leaves(cpu) <= early_leaves && per_cpu_cacheinfo(cpu))
 		return 0;
 
 	kfree(per_cpu_cacheinfo(cpu));

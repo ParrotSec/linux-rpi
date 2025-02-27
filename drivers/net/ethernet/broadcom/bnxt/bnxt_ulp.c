@@ -176,11 +176,17 @@ EXPORT_SYMBOL(bnxt_unregister_dev);
 
 static int bnxt_set_dflt_ulp_msix(struct bnxt *bp)
 {
-	u32 roce_msix = BNXT_VF(bp) ?
-			BNXT_MAX_VF_ROCE_MSIX : BNXT_MAX_ROCE_MSIX;
+	int roce_msix = BNXT_MAX_ROCE_MSIX;
 
-	return ((bp->flags & BNXT_FLAG_ROCE_CAP) ?
-		min_t(u32, roce_msix, num_online_cpus()) : 0);
+	if (BNXT_VF(bp))
+		roce_msix = BNXT_MAX_ROCE_MSIX_VF;
+	else if (bp->port_partition_type)
+		roce_msix = BNXT_MAX_ROCE_MSIX_NPAR_PF;
+
+	/* NQ MSIX vectors should match the number of CPUs plus 1 more for
+	 * the CREQ MSIX, up to the default.
+	 */
+	return min_t(int, roce_msix, num_online_cpus() + 1);
 }
 
 int bnxt_send_msg(struct bnxt_en_dev *edev,
@@ -202,7 +208,7 @@ int bnxt_send_msg(struct bnxt_en_dev *edev,
 
 	rc = hwrm_req_replace(bp, req, fw_msg->msg, fw_msg->msg_len);
 	if (rc)
-		return rc;
+		goto drop_req;
 
 	hwrm_req_timeout(bp, req, fw_msg->timeout);
 	resp = hwrm_req_hold(bp, req);
@@ -214,6 +220,7 @@ int bnxt_send_msg(struct bnxt_en_dev *edev,
 
 		memcpy(fw_msg->resp, resp, resp_len);
 	}
+drop_req:
 	hwrm_req_drop(bp, req);
 	return rc;
 }

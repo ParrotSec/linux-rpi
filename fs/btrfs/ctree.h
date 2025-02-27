@@ -6,6 +6,7 @@
 #ifndef BTRFS_CTREE_H
 #define BTRFS_CTREE_H
 
+#include "linux/cleanup.h"
 #include <linux/pagemap.h>
 #include <linux/spinlock.h>
 #include <linux/rbtree.h>
@@ -83,6 +84,9 @@ struct btrfs_path {
 	/* Stop search if any locks need to be taken (for read) */
 	unsigned int nowait:1;
 };
+
+#define BTRFS_PATH_AUTO_FREE(path_name)					\
+	struct btrfs_path *path_name __free(btrfs_free_path) = NULL
 
 /*
  * The state of btrfs root
@@ -367,6 +371,25 @@ static inline void btrfs_set_root_last_trans(struct btrfs_root *root, u64 transi
 }
 
 /*
+ * Return the generation this root started with.
+ *
+ * Every normal root that is created with root->root_key.offset set to it's
+ * originating generation.  If it is a snapshot it is the generation when the
+ * snapshot was created.
+ *
+ * However for TREE_RELOC roots root_key.offset is the objectid of the owning
+ * tree root.  Thankfully we copy the root item of the owning tree root, which
+ * has it's last_snapshot set to what we would have root_key.offset set to, so
+ * return that if this is a TREE_RELOC root.
+ */
+static inline u64 btrfs_root_origin_generation(const struct btrfs_root *root)
+{
+	if (btrfs_root_id(root) == BTRFS_TREE_RELOC_OBJECTID)
+		return btrfs_root_last_snapshot(&root->root_item);
+	return root->root_key.offset;
+}
+
+/*
  * Structure that conveys information about an extent that is going to replace
  * all the extents in a file range.
  */
@@ -540,7 +563,7 @@ int btrfs_previous_item(struct btrfs_root *root,
 int btrfs_previous_extent_item(struct btrfs_root *root,
 			struct btrfs_path *path, u64 min_objectid);
 void btrfs_set_item_key_safe(struct btrfs_trans_handle *trans,
-			     struct btrfs_path *path,
+			     const struct btrfs_path *path,
 			     const struct btrfs_key *new_key);
 struct extent_buffer *btrfs_root_node(struct btrfs_root *root);
 int btrfs_find_next_key(struct btrfs_root *root, struct btrfs_path *path,
@@ -574,9 +597,9 @@ bool btrfs_block_can_be_shared(struct btrfs_trans_handle *trans,
 int btrfs_del_ptr(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		  struct btrfs_path *path, int level, int slot);
 void btrfs_extend_item(struct btrfs_trans_handle *trans,
-		       struct btrfs_path *path, u32 data_size);
+		       const struct btrfs_path *path, u32 data_size);
 void btrfs_truncate_item(struct btrfs_trans_handle *trans,
-			 struct btrfs_path *path, u32 new_size, int from_end);
+			 const struct btrfs_path *path, u32 new_size, int from_end);
 int btrfs_split_item(struct btrfs_trans_handle *trans,
 		     struct btrfs_root *root,
 		     struct btrfs_path *path,
@@ -600,6 +623,7 @@ int btrfs_search_slot_for_read(struct btrfs_root *root,
 void btrfs_release_path(struct btrfs_path *p);
 struct btrfs_path *btrfs_alloc_path(void);
 void btrfs_free_path(struct btrfs_path *p);
+DEFINE_FREE(btrfs_free_path, struct btrfs_path *, btrfs_free_path(_T))
 
 int btrfs_del_items(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		   struct btrfs_path *path, int slot, int nr);

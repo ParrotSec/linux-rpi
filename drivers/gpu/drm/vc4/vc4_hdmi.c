@@ -147,6 +147,8 @@ static int vc4_hdmi_debugfs_regs(struct seq_file *m, void *unused)
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
 
+	WARN_ON(pm_runtime_resume_and_get(&vc4_hdmi->pdev->dev));
+
 	drm_print_regset32(&p, &vc4_hdmi->hdmi_regset);
 	drm_print_regset32(&p, &vc4_hdmi->hd_regset);
 	drm_print_regset32(&p, &vc4_hdmi->cec_regset);
@@ -155,6 +157,8 @@ static int vc4_hdmi_debugfs_regs(struct seq_file *m, void *unused)
 	drm_print_regset32(&p, &vc4_hdmi->phy_regset);
 	drm_print_regset32(&p, &vc4_hdmi->ram_regset);
 	drm_print_regset32(&p, &vc4_hdmi->rm_regset);
+
+	pm_runtime_put(&vc4_hdmi->pdev->dev);
 
 	drm_dev_exit(idx);
 
@@ -704,7 +708,7 @@ static int vc4_hdmi_write_infoframe(struct drm_connector *connector,
 
 	ret = vc4_hdmi_stop_packet(vc4_hdmi, type, true);
 	if (ret) {
-		DRM_ERROR("Failed to wait for infoframe to go idle: %d\n", ret);
+		drm_err(drm, "Failed to wait for infoframe to go idle: %d\n", ret);
 		goto out;
 	}
 
@@ -740,7 +744,7 @@ static int vc4_hdmi_write_infoframe(struct drm_connector *connector,
 	ret = wait_for((HDMI_READ(HDMI_RAM_PACKET_STATUS) &
 			BIT(packet_id)), 100);
 	if (ret)
-		DRM_ERROR("Failed to wait for infoframe to start: %d\n", ret);
+		drm_err(drm, "Failed to wait for infoframe to start: %d\n", ret);
 
 out:
 	drm_dev_exit(idx);
@@ -901,7 +905,7 @@ static void vc4_hdmi_encoder_post_crtc_powerdown(struct drm_encoder *encoder,
 
 	ret = pm_runtime_put(&vc4_hdmi->pdev->dev);
 	if (ret < 0)
-		DRM_ERROR("Failed to release power domain: %d\n", ret);
+		drm_err(drm, "Failed to release power domain: %d\n", ret);
 
 	drm_dev_exit(idx);
 
@@ -1443,7 +1447,7 @@ static void vc4_hdmi_encoder_pre_crtc_configure(struct drm_encoder *encoder,
 
 	ret = pm_runtime_resume_and_get(&vc4_hdmi->pdev->dev);
 	if (ret < 0) {
-		DRM_ERROR("Failed to retain power domain: %d\n", ret);
+		drm_err(drm, "Failed to retain power domain: %d\n", ret);
 		goto err_dev_exit;
 	}
 
@@ -1468,19 +1472,19 @@ static void vc4_hdmi_encoder_pre_crtc_configure(struct drm_encoder *encoder,
 			 div_u64(tmds_char_rate, 100) * 101);
 	ret = clk_set_min_rate(vc4_hdmi->hsm_clock, hsm_rate);
 	if (ret) {
-		DRM_ERROR("Failed to set HSM clock rate: %d\n", ret);
+		drm_err(drm, "Failed to set HSM clock rate: %d\n", ret);
 		goto err_put_runtime_pm;
 	}
 
 	ret = clk_set_rate(vc4_hdmi->pixel_clock, tmds_char_rate);
 	if (ret) {
-		DRM_ERROR("Failed to set pixel clock rate: %d\n", ret);
+		drm_err(drm, "Failed to set pixel clock rate: %d\n", ret);
 		goto err_put_runtime_pm;
 	}
 
 	ret = clk_prepare_enable(vc4_hdmi->pixel_clock);
 	if (ret) {
-		DRM_ERROR("Failed to turn on pixel clock: %d\n", ret);
+		drm_err(drm, "Failed to turn on pixel clock: %d\n", ret);
 		goto err_put_runtime_pm;
 	}
 
@@ -1496,13 +1500,13 @@ static void vc4_hdmi_encoder_pre_crtc_configure(struct drm_encoder *encoder,
 
 	ret = clk_set_min_rate(vc4_hdmi->pixel_bvb_clock, bvb_rate);
 	if (ret) {
-		DRM_ERROR("Failed to set pixel bvb clock rate: %d\n", ret);
+		drm_err(drm, "Failed to set pixel bvb clock rate: %d\n", ret);
 		goto err_disable_pixel_clock;
 	}
 
 	ret = clk_prepare_enable(vc4_hdmi->pixel_bvb_clock);
 	if (ret) {
-		DRM_ERROR("Failed to turn on pixel bvb clock: %d\n", ret);
+		drm_err(drm, "Failed to turn on pixel bvb clock: %d\n", ret);
 		goto err_disable_pixel_clock;
 	}
 
@@ -1920,7 +1924,7 @@ static int vc4_hdmi_audio_startup(struct device *dev, void *data)
 	}
 
 	if (!vc4_hdmi_audio_can_stream(vc4_hdmi)) {
-		ret = -ENODEV;
+		ret = -ENOTSUPP;
 		goto out_dev_exit;
 	}
 
@@ -2047,6 +2051,7 @@ static int vc4_hdmi_audio_prepare(struct device *dev, void *data,
 	struct vc4_hdmi *vc4_hdmi = dev_get_drvdata(dev);
 	struct drm_device *drm = vc4_hdmi->connector.dev;
 	struct drm_connector *connector = &vc4_hdmi->connector;
+	struct vc4_dev *vc4 = to_vc4_dev(drm);
 	unsigned int sample_rate = params->sample_rate;
 	unsigned int channels = params->channels;
 	unsigned long flags;
@@ -2104,11 +2109,18 @@ static int vc4_hdmi_audio_prepare(struct device *dev, void *data,
 					     VC4_HDMI_AUDIO_PACKET_CEA_MASK);
 
 	/* Set the MAI threshold */
-	HDMI_WRITE(HDMI_MAI_THR,
-		   VC4_SET_FIELD(0x08, VC4_HD_MAI_THR_PANICHIGH) |
-		   VC4_SET_FIELD(0x08, VC4_HD_MAI_THR_PANICLOW) |
-		   VC4_SET_FIELD(0x06, VC4_HD_MAI_THR_DREQHIGH) |
-		   VC4_SET_FIELD(0x08, VC4_HD_MAI_THR_DREQLOW));
+	if (vc4->gen >= VC4_GEN_5)
+		HDMI_WRITE(HDMI_MAI_THR,
+			   VC4_SET_FIELD(0x10, VC4_HD_MAI_THR_PANICHIGH) |
+			   VC4_SET_FIELD(0x10, VC4_HD_MAI_THR_PANICLOW) |
+			   VC4_SET_FIELD(0x1c, VC4_HD_MAI_THR_DREQHIGH) |
+			   VC4_SET_FIELD(0x1c, VC4_HD_MAI_THR_DREQLOW));
+	else
+		HDMI_WRITE(HDMI_MAI_THR,
+			   VC4_SET_FIELD(0x8, VC4_HD_MAI_THR_PANICHIGH) |
+			   VC4_SET_FIELD(0x8, VC4_HD_MAI_THR_PANICLOW) |
+			   VC4_SET_FIELD(0x6, VC4_HD_MAI_THR_DREQHIGH) |
+			   VC4_SET_FIELD(0x8, VC4_HD_MAI_THR_DREQLOW));
 
 	HDMI_WRITE(HDMI_MAI_CONFIG,
 		   VC4_HDMI_MAI_CONFIG_BIT_REVERSE |
@@ -2951,13 +2963,13 @@ static int vc4_hdmi_init_resources(struct drm_device *drm,
 	if (IS_ERR(vc4_hdmi->pixel_clock)) {
 		ret = PTR_ERR(vc4_hdmi->pixel_clock);
 		if (ret != -EPROBE_DEFER)
-			DRM_ERROR("Failed to get pixel clock\n");
+			drm_err(drm, "Failed to get pixel clock\n");
 		return ret;
 	}
 
 	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
 	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		DRM_ERROR("Failed to get HDMI state machine clock\n");
+		drm_err(drm, "Failed to get HDMI state machine clock\n");
 		return PTR_ERR(vc4_hdmi->hsm_clock);
 	}
 	vc4_hdmi->audio_clock = vc4_hdmi->hsm_clock;
@@ -3041,31 +3053,31 @@ static int vc5_hdmi_init_resources(struct drm_device *drm,
 
 	vc4_hdmi->hsm_clock = devm_clk_get(dev, "hdmi");
 	if (IS_ERR(vc4_hdmi->hsm_clock)) {
-		DRM_ERROR("Failed to get HDMI state machine clock\n");
+		drm_err(drm, "Failed to get HDMI state machine clock\n");
 		return PTR_ERR(vc4_hdmi->hsm_clock);
 	}
 
 	vc4_hdmi->pixel_bvb_clock = devm_clk_get(dev, "bvb");
 	if (IS_ERR(vc4_hdmi->pixel_bvb_clock)) {
-		DRM_ERROR("Failed to get pixel bvb clock\n");
+		drm_err(drm, "Failed to get pixel bvb clock\n");
 		return PTR_ERR(vc4_hdmi->pixel_bvb_clock);
 	}
 
 	vc4_hdmi->audio_clock = devm_clk_get(dev, "audio");
 	if (IS_ERR(vc4_hdmi->audio_clock)) {
-		DRM_ERROR("Failed to get audio clock\n");
+		drm_err(drm, "Failed to get audio clock\n");
 		return PTR_ERR(vc4_hdmi->audio_clock);
 	}
 
 	vc4_hdmi->cec_clock = devm_clk_get(dev, "cec");
 	if (IS_ERR(vc4_hdmi->cec_clock)) {
-		DRM_ERROR("Failed to get CEC clock\n");
+		drm_err(drm, "Failed to get CEC clock\n");
 		return PTR_ERR(vc4_hdmi->cec_clock);
 	}
 
 	vc4_hdmi->reset = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(vc4_hdmi->reset)) {
-		DRM_ERROR("Failed to get HDMI reset line\n");
+		drm_err(drm, "Failed to get HDMI reset line\n");
 		return PTR_ERR(vc4_hdmi->reset);
 	}
 
@@ -3221,14 +3233,14 @@ static int vc4_hdmi_bind(struct device *dev, struct device *master, void *data)
 
 	ddc_node = of_parse_phandle(dev->of_node, "ddc", 0);
 	if (!ddc_node) {
-		DRM_ERROR("Failed to find ddc node in device tree\n");
+		drm_err(drm, "Failed to find ddc node in device tree\n");
 		return -ENODEV;
 	}
 
 	vc4_hdmi->ddc = of_find_i2c_adapter_by_node(ddc_node);
 	of_node_put(ddc_node);
 	if (!vc4_hdmi->ddc) {
-		DRM_DEBUG("Failed to get ddc i2c adapter by node\n");
+		drm_err(drm, "Failed to get ddc i2c adapter by node\n");
 		return -EPROBE_DEFER;
 	}
 

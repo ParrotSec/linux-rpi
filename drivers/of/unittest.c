@@ -900,8 +900,8 @@ static void __init of_unittest_changeset(void)
 	unittest(!of_find_node_by_path("/testcase-data/changeset/n2/n21"),
 		 "'%pOF' still present after revert\n", n21);
 
-	ppremove = of_find_property(parent, "prop-remove", NULL);
-	unittest(ppremove, "failed to find removed prop after revert\n");
+	unittest(of_property_present(parent, "prop-remove"),
+		 "failed to find removed prop after revert\n");
 
 	ret = of_property_read_string(parent, "prop-update", &propstr);
 	unittest(!ret, "failed to find updated prop after revert\n");
@@ -1342,6 +1342,7 @@ static void __init of_unittest_bus_3cell_ranges(void)
 static void __init of_unittest_reg(void)
 {
 	struct device_node *np;
+	struct resource res;
 	int ret;
 	u64 addr, size;
 
@@ -1358,6 +1359,19 @@ static void __init of_unittest_reg(void)
 		np, addr);
 
 	of_node_put(np);
+
+	np = of_find_node_by_path("/testcase-data/platform-tests-2/node/test-device@100");
+	if (!np) {
+		pr_err("missing testcase data\n");
+		return;
+	}
+
+	ret = of_address_to_resource(np, 0, &res);
+	unittest(ret == -EINVAL, "of_address_to_resource(%pOF) expected error on untranslatable address\n",
+		 np);
+
+	of_node_put(np);
+
 }
 
 struct of_unittest_expected_res {
@@ -1861,7 +1875,7 @@ static int __init unittest_data_add(void)
 	struct device_node *unittest_data_node = NULL, *np;
 	/*
 	 * __dtbo_testcases_begin[] and __dtbo_testcases_end[] are magically
-	 * created by cmd_dt_S_dtbo in scripts/Makefile.lib
+	 * created by cmd_wrap_S_dtbo in scripts/Makefile.dtbs
 	 */
 	extern uint8_t __dtbo_testcases_begin[];
 	extern uint8_t __dtbo_testcases_end[];
@@ -3525,7 +3539,7 @@ out_skip_tests:
 
 /*
  * __dtbo_##overlay_name##_begin[] and __dtbo_##overlay_name##_end[] are
- * created by cmd_dt_S_dtbo in scripts/Makefile.lib
+ * created by cmd_wrap_S_dtbo in scripts/Makefile.dtbs
  */
 
 #define OVERLAY_INFO_EXTERN(overlay_name) \

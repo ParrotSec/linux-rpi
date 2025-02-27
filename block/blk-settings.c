@@ -250,6 +250,13 @@ static int blk_validate_limits(struct queue_limits *lim)
 		lim->io_min = lim->physical_block_size;
 
 	/*
+	 * The optimal I/O size may not be aligned to physical block size
+	 * (because it may be limited by dma engines which have no clue about
+	 * block size of the disks attached to them), so we round it down here.
+	 */
+	lim->io_opt = round_down(lim->io_opt, lim->physical_block_size);
+
+	/*
 	 * max_hw_sectors has a somewhat weird default for historical reason,
 	 * but driver really should set their own instead of relying on this
 	 * value.
@@ -436,48 +443,6 @@ int queue_limits_set(struct request_queue *q, struct queue_limits *lim)
 	return queue_limits_commit_update(q, lim);
 }
 EXPORT_SYMBOL_GPL(queue_limits_set);
-
-/**
- * blk_limits_io_min - set minimum request size for a device
- * @limits: the queue limits
- * @min:  smallest I/O size in bytes
- *
- * Description:
- *   Some devices have an internal block size bigger than the reported
- *   hardware sector size.  This function can be used to signal the
- *   smallest I/O the device can perform without incurring a performance
- *   penalty.
- */
-void blk_limits_io_min(struct queue_limits *limits, unsigned int min)
-{
-	limits->io_min = min;
-
-	if (limits->io_min < limits->logical_block_size)
-		limits->io_min = limits->logical_block_size;
-
-	if (limits->io_min < limits->physical_block_size)
-		limits->io_min = limits->physical_block_size;
-}
-EXPORT_SYMBOL(blk_limits_io_min);
-
-/**
- * blk_limits_io_opt - set optimal request size for a device
- * @limits: the queue limits
- * @opt:  smallest I/O size in bytes
- *
- * Description:
- *   Storage devices may report an optimal I/O size, which is the
- *   device's preferred unit for sustained I/O.  This is rarely reported
- *   for disk drives.  For RAID arrays it is usually the stripe width or
- *   the internal track size.  A properly aligned multiple of
- *   optimal_io_size is the preferred request size for workloads where
- *   sustained throughput is desired.
- */
-void blk_limits_io_opt(struct queue_limits *limits, unsigned int opt)
-{
-	limits->io_opt = opt;
-}
-EXPORT_SYMBOL(blk_limits_io_opt);
 
 static int queue_limit_alignment_offset(const struct queue_limits *lim,
 		sector_t sector)

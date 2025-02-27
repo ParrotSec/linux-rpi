@@ -539,7 +539,6 @@ static int fill_analog_mode(struct drm_device *dev,
  * to reach those resolutions.
  *
  * Returns:
- *
  * A pointer to the mode, allocated with drm_mode_create(). Returns NULL
  * on error.
  */
@@ -1288,13 +1287,10 @@ EXPORT_SYMBOL(drm_mode_set_name);
  */
 int drm_mode_vrefresh(const struct drm_display_mode *mode)
 {
-	unsigned int num, den;
+	unsigned int num = 1, den = 1;
 
 	if (mode->htotal == 0 || mode->vtotal == 0)
 		return 0;
-
-	num = mode->clock;
-	den = mode->htotal * mode->vtotal;
 
 	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
 		num *= 2;
@@ -1302,6 +1298,12 @@ int drm_mode_vrefresh(const struct drm_display_mode *mode)
 		den *= 2;
 	if (mode->vscan > 1)
 		den *= mode->vscan;
+
+	if (check_mul_overflow(mode->clock, num, &num))
+		return 0;
+
+	if (check_mul_overflow(mode->htotal * mode->vtotal, den, &den))
+		return 0;
 
 	return DIV_ROUND_CLOSEST_ULL(mul_u32_u32(num, 1000), den);
 }

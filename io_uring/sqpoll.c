@@ -109,14 +109,14 @@ static struct io_sq_data *io_attach_sq_data(struct io_uring_params *p)
 	struct fd f;
 
 	f = fdget(p->wq_fd);
-	if (!f.file)
+	if (!fd_file(f))
 		return ERR_PTR(-ENXIO);
-	if (!io_is_uring_fops(f.file)) {
+	if (!io_is_uring_fops(fd_file(f))) {
 		fdput(f);
 		return ERR_PTR(-EINVAL);
 	}
 
-	ctx_attach = f.file->private_data;
+	ctx_attach = fd_file(f)->private_data;
 	sqd = ctx_attach->sq_data;
 	if (!sqd) {
 		fdput(f);
@@ -177,7 +177,7 @@ static int __io_sq_thread(struct io_ring_ctx *ctx, bool cap_entries)
 	if (cap_entries && to_submit > IORING_SQPOLL_CAP_ENTRIES_VALUE)
 		to_submit = IORING_SQPOLL_CAP_ENTRIES_VALUE;
 
-	if (!wq_list_empty(&ctx->iopoll_list) || to_submit) {
+	if (to_submit || !wq_list_empty(&ctx->iopoll_list)) {
 		const struct cred *creds = NULL;
 
 		if (ctx->sq_creds != current_cred())
@@ -195,9 +195,6 @@ static int __io_sq_thread(struct io_ring_ctx *ctx, bool cap_entries)
 		    !(ctx->flags & IORING_SETUP_R_DISABLED))
 			ret = io_submit_sqes(ctx, to_submit);
 		mutex_unlock(&ctx->uring_lock);
-
-		if (io_napi(ctx))
-			ret += io_napi_sqpoll_busy_poll(ctx);
 
 		if (to_submit && wq_has_sleeper(&ctx->sqo_sq_wait))
 			wake_up(&ctx->sqo_sq_wait);
@@ -278,8 +275,12 @@ static int io_sq_thread(void *data)
 	DEFINE_WAIT(wait);
 
 	/* offload context creation failed, just exit */
-	if (!current->io_uring)
+	if (!current->io_uring) {
+		mutex_lock(&sqd->lock);
+		sqd->thread = NULL;
+		mutex_unlock(&sqd->lock);
 		goto err_out;
+	}
 
 	snprintf(buf, sizeof(buf), "iou-sqp-%d", sqd->task_pid);
 	set_task_comm(current, buf);
@@ -322,6 +323,10 @@ static int io_sq_thread(void *data)
 		}
 		if (io_sq_tw(&retry_list, IORING_TW_CAP_ENTRIES_VALUE))
 			sqt_spin = true;
+
+		list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+			if (io_napi(ctx))
+				io_napi_sqpoll_busy_poll(ctx);
 
 		if (sqt_spin || !time_after(jiffies, timeout)) {
 			if (sqt_spin) {
@@ -411,6 +416,7 @@ void io_sqpoll_wait_sq(struct io_ring_ctx *ctx)
 __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 				struct io_uring_params *p)
 {
+	struct task_struct *task_to_put = NULL;
 	int ret;
 
 	/* Retain compatibility with failing for an invalid attach attempt */
@@ -419,9 +425,9 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 		struct fd f;
 
 		f = fdget(p->wq_fd);
-		if (!f.file)
+		if (!fd_file(f))
 			return -ENXIO;
-		if (!io_is_uring_fops(f.file)) {
+		if (!io_is_uring_fops(fd_file(f))) {
 			fdput(f);
 			return -EINVAL;
 		}
@@ -491,6 +497,7 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 		}
 
 		sqd->thread = tsk;
+		task_to_put = get_task_struct(tsk);
 		ret = io_uring_alloc_task_context(tsk, ctx);
 		wake_up_new_task(tsk);
 		if (ret)
@@ -501,11 +508,15 @@ __cold int io_sq_offload_create(struct io_ring_ctx *ctx,
 		goto err;
 	}
 
+	if (task_to_put)
+		put_task_struct(task_to_put);
 	return 0;
 err_sqpoll:
 	complete(&ctx->sq_data->exited);
 err:
 	io_sq_thread_finish(ctx);
+	if (task_to_put)
+		put_task_struct(task_to_put);
 	return ret;
 }
 

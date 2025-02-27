@@ -37,7 +37,8 @@ struct xe_devcoredump_snapshot {
 	/* GuC snapshots */
 	/** @ct: GuC CT snapshot */
 	struct xe_guc_ct_snapshot *ct;
-	/** @ge: Guc Engine snapshot */
+
+	/** @ge: GuC Submission Engine snapshot */
 	struct xe_guc_submit_exec_queue_snapshot *ge;
 
 	/** @hwe: HW Engine snapshot array */
@@ -46,6 +47,14 @@ struct xe_devcoredump_snapshot {
 	struct xe_sched_job_snapshot *job;
 	/** @vm: Snapshot of VM state */
 	struct xe_vm_snapshot *vm;
+
+	/** @read: devcoredump in human readable format */
+	struct {
+		/** @read.size: size of devcoredump in human readable format */
+		ssize_t size;
+		/** @read.buffer: buffer of devcoredump in human readable format */
+		char *buffer;
+	} read;
 };
 
 /**

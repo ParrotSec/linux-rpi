@@ -405,8 +405,10 @@ static bool mtk_drm_get_all_drm_priv(struct device *dev)
 		if (temp_drm_priv->mtk_drm_bound)
 			cnt++;
 
-		if (cnt == MAX_CRTC)
+		if (cnt == MAX_CRTC) {
+			of_node_put(node);
 			break;
+		}
 	}
 
 	if (drm_priv->data->mmsys_dev_num == cnt) {
@@ -559,11 +561,7 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	 * Configure the DMA segment size to make sure we get contiguous IOVA
 	 * when importing PRIME buffers.
 	 */
-	ret = dma_set_max_seg_size(dma_dev, UINT_MAX);
-	if (ret) {
-		dev_err(dma_dev, "Failed to set DMA segment size\n");
-		goto err_component_unbind;
-	}
+	dma_set_max_seg_size(dma_dev, UINT_MAX);
 
 	ret = drm_vblank_init(drm, MAX_CRTC);
 	if (ret < 0)
@@ -675,6 +673,8 @@ err_deinit:
 err_free:
 	private->drm = NULL;
 	drm_dev_put(drm);
+	for (i = 0; i < private->data->mmsys_dev_num; i++)
+		private->all_drm_private[i]->drm = NULL;
 	return ret;
 }
 

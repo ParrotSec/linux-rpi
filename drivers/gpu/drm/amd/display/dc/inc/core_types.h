@@ -215,6 +215,7 @@ struct resource_funcs {
 
 	void (*get_panel_config_defaults)(struct dc_panel_config *panel_config);
 	void (*build_pipe_pix_clk_params)(struct pipe_ctx *pipe_ctx);
+	unsigned int (*get_det_buffer_size)(const struct dc_state *context);
 };
 
 struct audio_support{
@@ -534,8 +535,8 @@ struct dcn_bw_output {
 	unsigned int legacy_svp_drr_stream_index;
 	bool legacy_svp_drr_stream_index_valid;
 	struct dml2_mcache_surface_allocation mcache_allocations[DML2_MAX_PLANES];
+	struct dmub_cmd_fams2_global_config fams2_global_config;
 	struct dmub_fams2_stream_static_state fams2_stream_params[DML2_MAX_PLANES];
-	unsigned fams2_stream_count;
 	struct dml2_display_arb_regs arb_regs;
 };
 

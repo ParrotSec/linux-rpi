@@ -143,6 +143,7 @@
 #define AXP717_DCDC3_NUM_VOLTAGES	103
 #define AXP717_DCDC_V_OUT_MASK		GENMASK(6, 0)
 #define AXP717_LDO_V_OUT_MASK		GENMASK(4, 0)
+#define AXP717_BOOST_V_OUT_MASK		GENMASK(7, 4)
 
 #define AXP803_PWR_OUT_DCDC1_MASK	BIT_MASK(0)
 #define AXP803_PWR_OUT_DCDC2_MASK	BIT_MASK(1)
@@ -370,8 +371,8 @@
 		.ops		= &axp20x_ops,					\
 	}
 
-#define AXP_DESC(_family, _id, _match, _supply, _min, _max, _step, _vreg,	\
-		 _vmask, _ereg, _emask) 					\
+#define AXP_DESC_DELAY(_family, _id, _match, _supply, _min, _max, _step, _vreg,	\
+		 _vmask, _ereg, _emask, _ramp_delay) 				\
 	[_family##_##_id] = {							\
 		.name		= (_match),					\
 		.supply_name	= (_supply),					\
@@ -387,8 +388,14 @@
 		.vsel_mask	= (_vmask),					\
 		.enable_reg	= (_ereg),					\
 		.enable_mask	= (_emask),					\
+		.ramp_delay = (_ramp_delay),					\
 		.ops		= &axp20x_ops,					\
 	}
+
+#define AXP_DESC(_family, _id, _match, _supply, _min, _max, _step, _vreg,	\
+		 _vmask, _ereg, _emask) 					\
+	AXP_DESC_DELAY(_family, _id, _match, _supply, _min, _max, _step, _vreg,	\
+		 _vmask, _ereg, _emask, 0)
 
 #define AXP_DESC_SW(_family, _id, _match, _supply, _ereg, _emask)		\
 	[_family##_##_id] = {							\
@@ -418,8 +425,8 @@
 		.ops		= &axp20x_ops_fixed				\
 	}
 
-#define AXP_DESC_RANGES(_family, _id, _match, _supply, _ranges, _n_voltages,	\
-			_vreg, _vmask, _ereg, _emask)				\
+#define AXP_DESC_RANGES_DELAY(_family, _id, _match, _supply, _ranges, _n_voltages,	\
+			_vreg, _vmask, _ereg, _emask, _ramp_delay)	\
 	[_family##_##_id] = {							\
 		.name		= (_match),					\
 		.supply_name	= (_supply),					\
@@ -435,8 +442,14 @@
 		.enable_mask	= (_emask),					\
 		.linear_ranges	= (_ranges),					\
 		.n_linear_ranges = ARRAY_SIZE(_ranges),				\
+		.ramp_delay = (_ramp_delay),					\
 		.ops		= &axp20x_ops_range,				\
 	}
+
+#define AXP_DESC_RANGES(_family, _id, _match, _supply, _ranges, _n_voltages,	\
+			_vreg, _vmask, _ereg, _emask)				\
+	AXP_DESC_RANGES_DELAY(_family, _id, _match, _supply, _ranges,		\
+		 _n_voltages, _vreg, _vmask, _ereg, _emask, 0)
 
 static const int axp209_dcdc2_ldo3_slew_rates[] = {
 	1600,
@@ -780,21 +793,21 @@ static const struct linear_range axp717_dcdc3_ranges[] = {
 };
 
 static const struct regulator_desc axp717_regulators[] = {
-	AXP_DESC_RANGES(AXP717, DCDC1, "dcdc1", "vin1",
+	AXP_DESC_RANGES_DELAY(AXP717, DCDC1, "dcdc1", "vin1",
 			axp717_dcdc1_ranges, AXP717_DCDC1_NUM_VOLTAGES,
 			AXP717_DCDC1_CONTROL, AXP717_DCDC_V_OUT_MASK,
-			AXP717_DCDC_OUTPUT_CONTROL, BIT(0)),
-	AXP_DESC_RANGES(AXP717, DCDC2, "dcdc2", "vin2",
+			AXP717_DCDC_OUTPUT_CONTROL, BIT(0), 640),
+	AXP_DESC_RANGES_DELAY(AXP717, DCDC2, "dcdc2", "vin2",
 			axp717_dcdc2_ranges, AXP717_DCDC2_NUM_VOLTAGES,
 			AXP717_DCDC2_CONTROL, AXP717_DCDC_V_OUT_MASK,
-			AXP717_DCDC_OUTPUT_CONTROL, BIT(1)),
-	AXP_DESC_RANGES(AXP717, DCDC3, "dcdc3", "vin3",
+			AXP717_DCDC_OUTPUT_CONTROL, BIT(1), 640),
+	AXP_DESC_RANGES_DELAY(AXP717, DCDC3, "dcdc3", "vin3",
 			axp717_dcdc3_ranges, AXP717_DCDC3_NUM_VOLTAGES,
 			AXP717_DCDC3_CONTROL, AXP717_DCDC_V_OUT_MASK,
-			AXP717_DCDC_OUTPUT_CONTROL, BIT(2)),
-	AXP_DESC(AXP717, DCDC4, "dcdc4", "vin4", 1000, 3700, 100,
+			AXP717_DCDC_OUTPUT_CONTROL, BIT(2), 640),
+	AXP_DESC_DELAY(AXP717, DCDC4, "dcdc4", "vin4", 1000, 3700, 100,
 		 AXP717_DCDC4_CONTROL, AXP717_DCDC_V_OUT_MASK,
-		 AXP717_DCDC_OUTPUT_CONTROL, BIT(3)),
+		 AXP717_DCDC_OUTPUT_CONTROL, BIT(3), 6400),
 	AXP_DESC(AXP717, ALDO1, "aldo1", "aldoin", 500, 3500, 100,
 		 AXP717_ALDO1_CONTROL, AXP717_LDO_V_OUT_MASK,
 		 AXP717_LDO0_OUTPUT_CONTROL, BIT(0)),
@@ -834,6 +847,9 @@ static const struct regulator_desc axp717_regulators[] = {
 	AXP_DESC(AXP717, CPUSLDO, "cpusldo", "vin1", 500, 1400, 50,
 		 AXP717_CPUSLDO_CONTROL, AXP717_LDO_V_OUT_MASK,
 		 AXP717_LDO1_OUTPUT_CONTROL, BIT(4)),
+	AXP_DESC(AXP717, BOOST, "boost", "vin1", 4550, 5510, 64,
+		 AXP717_BOOST_CONTROL, AXP717_BOOST_V_OUT_MASK,
+		 AXP717_MODULE_EN_CONTROL_2, BIT(4)),
 };
 
 /* DCDC ranges shared with AXP813 */

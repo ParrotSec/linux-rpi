@@ -21,3 +21,6 @@ linux source: source-contains-prebuilt-windows-binary *tools/perf/tests/pe-file.
 # Headers depends on the correct version of images, which might be
 # signed.
 linux source: version-substvar-for-external-package Depends ${binary:Version} linux-headers-*
+
+# loong64 is valid in trixie/unstable but unknown in bookworm
+linux source: invalid-arch-string-in-source-relation loong64 *

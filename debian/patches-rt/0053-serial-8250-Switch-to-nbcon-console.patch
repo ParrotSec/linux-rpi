@@ -132,7 +132,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  #ifdef CONFIG_SERIAL_8250_RSA
  /*
   * Attempts to turn on the RSA FIFO.  Returns zero on failure.
-@@ -3269,6 +3285,11 @@ static void serial8250_console_putchar(s
+@@ -3270,6 +3286,11 @@ static void serial8250_console_putchar(s
  
  	wait_for_xmitr(up, UART_LSR_THRE);
  	serial_port_out(port, UART_TX, ch);
@@ -144,15 +144,15 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  }
  
  /*
-@@ -3297,6 +3318,7 @@ static void serial8250_console_restore(s
- 	serial8250_out_MCR(up, up->mcr | UART_MCR_DTR | UART_MCR_RTS);
+@@ -3308,6 +3329,7 @@ static void fifo_wait_for_lsr(struct uar
+ 	}
  }
  
 +#ifdef CONFIG_SERIAL_8250_LEGACY_CONSOLE
  /*
   * Print a string to the serial port using the device FIFO
   *
-@@ -3355,7 +3377,7 @@ void serial8250_console_write(struct uar
+@@ -3375,7 +3397,7 @@ void serial8250_console_write(struct uar
  	 *	First save the IER then disable the interrupts
  	 */
  	ier = serial_port_in(port, UART_IER);
@@ -161,7 +161,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  
  	/* check scratch reg to see if port powered off during system sleep */
  	if (up->canary && (up->canary != serial_port_in(port, UART_SCR))) {
-@@ -3421,6 +3443,131 @@ void serial8250_console_write(struct uar
+@@ -3441,6 +3463,131 @@ void serial8250_console_write(struct uar
  	if (locked)
  		uart_port_unlock_irqrestore(port, flags);
  }
@@ -293,7 +293,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  
  static unsigned int probe_baud(struct uart_port *port)
  {
-@@ -3439,6 +3586,7 @@ static unsigned int probe_baud(struct ua
+@@ -3459,6 +3606,7 @@ static unsigned int probe_baud(struct ua
  
  int serial8250_console_setup(struct uart_port *port, char *options, bool probe)
  {
@@ -301,7 +301,7 @@ Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  	int baud = 9600;
  	int bits = 8;
  	int parity = 'n';
-@@ -3448,6 +3596,8 @@ int serial8250_console_setup(struct uart
+@@ -3468,6 +3616,8 @@ int serial8250_console_setup(struct uart
  	if (!port->iobase && !port->membase)
  		return -ENODEV;
  

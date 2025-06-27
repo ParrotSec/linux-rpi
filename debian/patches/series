@@ -37,7 +37,7 @@ bugfix/all/radeon-amdgpu-firmware-is-required-for-drm-and-kms-on-r600-onward.pat
 # Parrot patches
 features/all/wifi-injection.patch
 features/all/wireless-carl9170-Enable-sniffer-mode-promisc-flag-t.patch
-features/all/dwav-usb-mt-driver.patch
+#features/all/dwav-usb-mt-driver.patch
 
 # Change some defaults for security reasons
 debian/af_802154-Disable-auto-loading-as-mitigation-against.patch
@@ -78,8 +78,7 @@ features/x86/x86-make-x32-syscall-support-conditional.patch
 bugfix/all/disable-some-marvell-phys.patch
 bugfix/all/fs-add-module_softdep-declarations-for-hard-coded-cr.patch
 bugfix/all/documentation-use-relative-source-paths-in-abi-documentation.patch
-bugfix/all/nfsd-fix-legacy-client-tracking-initialization.patch
-bugfix/all/kbuild-switch-from-lz4c-to-lz4-for-compression.patch
+bugfix/all/Revert-drm-amd-display-more-liberal-vmin-vmax-update.patch
 
 # Miscellaneous features
 
@@ -112,8 +111,7 @@ bugfix/all/tools_lib_symbol_use_d_fortify_source_2_for_non_debug_builds.patch
 bugfix/all/perf-tools-support-extra-cxxflags.patch
 bugfix/all/perf-tools-pass-extra_cflags-through-to-libbpf-build-again.patch
 bugfix/all/kbuild-bpf-fix-btf-reproducibility.patch
-
-# debian-installer fixes
-bugfix/powerpc/fbdev-offb-Update-expected-device-name.patch
+bugfix/all/perf-docs-Fix-perf-check-manual-page-built-with-asci.patch
+bugfix/all/libbpf-use-the-standard-fixdep-build-rule.patch
 
 # ABI maintenance

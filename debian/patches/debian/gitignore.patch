@@ -10,7 +10,7 @@ Forwarded: not-needed
 
 --- a/.gitignore
 +++ b/.gitignore
-@@ -78,11 +78,6 @@ modules.order
+@@ -79,11 +79,6 @@ modules.order
  /rpmbuild/
  
  #
@@ -22,13 +22,14 @@ Forwarded: not-needed
  # Snap directory (make snap-pkg)
  #
  /snap/
-@@ -99,19 +94,6 @@ modules.order
+@@ -100,20 +95,6 @@ modules.order
  /pacman/
  
  #
 -# We don't want to ignore the following even if they are dot-files
 -#
 -!.clang-format
+-!.clippy.toml
 -!.cocciconfig
 -!.editorconfig
 -!.get_maintainer.ignore
@@ -42,7 +43,7 @@ Forwarded: not-needed
  # Generated include files
  #
  /include/config/
-@@ -177,3 +159,10 @@ sphinx_*/
+@@ -178,3 +159,10 @@ sphinx_*/
  
  # Rust analyzer configuration
  /rust-project.json

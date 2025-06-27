@@ -3,6 +3,8 @@ include:
 
 variables:
   RELEASE: 'bookworm-backports'
+  # Run lintian from the above release
+  SALSA_CI_IMAGES_LINTIAN: ${SALSA_CI_IMAGES}/lintian:${RELEASE}
   # Make that build quicker
   DEB_BUILD_PROFILES: pkg.linux.quick
   # We have to bump the version in source preparation, not later
@@ -14,9 +16,6 @@ variables:
   # a bit faster.
   DEB_BUILD_OPTIONS: 'terse parallel=4'
   DEBIAN_KERNEL_DISABLE_BUILD_PACKAGE_ARM64: 0
-  # Suppress 'aliased-location' as usrmerge-migration is not done in
-  # bookworm
-  SALSA_CI_LINTIAN_SUPPRESS_TAGS: 'aliased-location'
 
 # Add stages for signed packages
 stages:
@@ -186,13 +185,13 @@ autopkgtest:
 blhc:
     extends: .test-blhc
 
-piuparts:
-  extends: .test-piuparts
-  needs:
-  - job: build
-    artifacts: true
-  - job: build-signed
-    artifacts: true
+#piuparts:
+#  extends: .test-piuparts
+#  needs:
+#  - job: build
+#    artifacts: true
+#  - job: build-signed
+#    artifacts: true
 
 missing-breaks:
     extends: .test-missing-breaks
@@ -329,9 +328,28 @@ build-signed:
       dpkg-source -x ${WORKING_DIR}/linux-signed-${BUILD_ARCH}_*.dsc \
         ${WORKING_DIR}/${SOURCE_DIR}
 
-    # Install build-dependencies produced by build job
+    # Install build-dependencies produced by build job.
+    # Use aspcud solver for experimental and backports.
+    - apt_solver_opts=""
     - |
-      apt-get install --no-install-recommends -y \
+      case "$RELEASE" in
+      experimental | *-backports)
+        eatmydata apt-get install --no-install-recommends -y aspcud apt-cudf
+        apt_solver_opts="$apt_solver_opts --solver aspcud -oAPT::Solver::Strict-Pinning=false -oAPT::Solver::aspcud::Preferences="
+        # minimize number of packages from experimental and backports
+        case "$RELEASE" in
+        experimental)
+          apt_solver_opts="$apt_solver_opts-count(solution,APT-Release:=/a=experimental/),"
+          ;;
+        *-backports)
+          apt_solver_opts="$apt_solver_opts-count(solution,APT-Release:~/a=.*-backports/),"
+          ;;
+        esac
+        apt_solver_opts="$apt_solver_opts-removed,-changed,-new"
+        ;;
+      esac
+    - |
+      apt-get install --no-install-recommends -y $apt_solver_opts \
         ${WORKING_DIR}/linux-image-*-unsigned_*_${BUILD_ARCH}.deb
 
     # Do the same as the common .build-definition script

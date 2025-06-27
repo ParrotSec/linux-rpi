@@ -1316,11 +1316,6 @@ CONFIG_FB_HYPERV=m
 # CONFIG_FB_SM712 is not set
 
 ##
-## file: drivers/virt/Kconfig
-##
-# CONFIG_VIRT_DRIVERS is not set
-
-##
 ## file: drivers/w1/Kconfig
 ##
 # CONFIG_W1 is not set
@@ -1486,14 +1481,6 @@ CONFIG_EXT4_FS=y
 ## file: fs/ufs/Kconfig
 ##
 # CONFIG_UFS_FS is not set
-
-##
-## file: init/Kconfig
-##
-## choice: Kernel compression mode
-# CONFIG_KERNEL_XZ is not set
-CONFIG_KERNEL_LZ4=y
-## end choice
 
 ##
 ## file: kernel/power/Kconfig

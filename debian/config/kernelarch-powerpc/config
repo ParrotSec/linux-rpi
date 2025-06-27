@@ -744,7 +744,11 @@ CONFIG_USBPCWATCHDOG=m
 ##
 ## file: init/Kconfig
 ##
+## choice: Kernel compression mode
+CONFIG_KERNEL_XZ=y
+## end choice
 CONFIG_SGETMASK_SYSCALL=y
+CONFIG_KALLSYMS_ALL=y
 
 ##
 ## file: kernel/Kconfig.kexec

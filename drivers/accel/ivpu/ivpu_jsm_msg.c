@@ -48,9 +48,10 @@ const char *ivpu_jsm_msg_type_to_str(enum vpu_ipc_msg_type type)
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_HWS_RESUME_ENGINE_DONE);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_STATE_DUMP);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_STATE_DUMP_RSP);
-	IVPU_CASE_TO_STR(VPU_JSM_MSG_BLOB_DEINIT);
+	IVPU_CASE_TO_STR(VPU_JSM_MSG_BLOB_DEINIT_DEPRECATED);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_DYNDBG_CONTROL);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_JOB_DONE);
+	IVPU_CASE_TO_STR(VPU_JSM_MSG_NATIVE_FENCE_SIGNALLED);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_ENGINE_RESET_DONE);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_ENGINE_PREEMPT_DONE);
 	IVPU_CASE_TO_STR(VPU_JSM_MSG_REGISTER_DB_DONE);
@@ -554,4 +555,12 @@ int ivpu_jsm_dct_disable(struct ivpu_device *vdev)
 
 	return ivpu_ipc_send_receive_internal(vdev, &req, VPU_JSM_MSG_DCT_DISABLE_DONE, &resp,
 					      VPU_IPC_CHAN_ASYNC_CMD, vdev->timeout.jsm);
+}
+
+int ivpu_jsm_state_dump(struct ivpu_device *vdev)
+{
+	struct vpu_jsm_msg req = { .type = VPU_JSM_MSG_STATE_DUMP };
+
+	return ivpu_ipc_send_and_wait(vdev, &req, VPU_IPC_CHAN_ASYNC_CMD,
+				      vdev->timeout.state_dump_msg);
 }

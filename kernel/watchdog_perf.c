@@ -144,6 +144,7 @@ static int hardlockup_detector_event_create(void)
 			 PTR_ERR(evt));
 		return PTR_ERR(evt);
 	}
+	WARN_ONCE(this_cpu_read(watchdog_ev), "unexpected watchdog_ev leak");
 	this_cpu_write(watchdog_ev, evt);
 	return 0;
 }
@@ -183,6 +184,28 @@ void watchdog_hardlockup_disable(unsigned int cpu)
 		this_cpu_write(watchdog_ev, NULL);
 		atomic_dec(&watchdog_cpus);
 	}
+}
+
+/**
+ * hardlockup_detector_perf_adjust_period - Adjust the event period due
+ *                                          to current cpu frequency change
+ * @period: The target period to be set
+ */
+void hardlockup_detector_perf_adjust_period(u64 period)
+{
+	struct perf_event *event = this_cpu_read(watchdog_ev);
+
+	if (!(watchdog_enabled & WATCHDOG_HARDLOCKUP_ENABLED))
+		return;
+
+	if (!event)
+		return;
+
+	if (event->attr.sample_period == period)
+		return;
+
+	if (perf_event_period(event, period))
+		pr_err("failed to change period to %llu\n", period);
 }
 
 /**
@@ -268,12 +291,10 @@ void __init hardlockup_config_perf_event(const char *str)
 	} else {
 		unsigned int len = comma - str;
 
-		if (len >= sizeof(buf))
+		if (len > sizeof(buf))
 			return;
 
-		if (strscpy(buf, str, sizeof(buf)) < 0)
-			return;
-		buf[len] = 0;
+		strscpy(buf, str, len);
 		if (kstrtoull(buf, 16, &config))
 			return;
 	}

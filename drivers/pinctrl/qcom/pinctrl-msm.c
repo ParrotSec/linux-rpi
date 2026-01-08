@@ -19,6 +19,7 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/string_choices.h>
 
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinconf-generic.h>
@@ -214,7 +215,7 @@ static int msm_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	 */
 	if (d && i != gpio_func &&
 	    !test_and_set_bit(d->hwirq, pctrl->disabled_for_mux))
-		disable_irq(irq);
+		disable_irq_nosync(irq);
 
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
@@ -634,7 +635,7 @@ static int msm_gpio_get(struct gpio_chip *chip, unsigned offset)
 	return !!(val & BIT(g->in_bit));
 }
 
-static void msm_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
+static int msm_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
 {
 	const struct msm_pingroup *g;
 	struct msm_pinctrl *pctrl = gpiochip_get_data(chip);
@@ -653,6 +654,8 @@ static void msm_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 	msm_writel_io(val, pctrl, g);
 
 	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
+
+	return 0;
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -712,7 +715,7 @@ static void msm_gpio_dbg_show_one(struct seq_file *s,
 	}
 
 	seq_printf(s, " %-8s: %-3s", g->grp.name, is_out ? "out" : "in");
-	seq_printf(s, " %-4s func%d", val ? "high" : "low", func);
+	seq_printf(s, " %-4s func%d", str_high_low(val), func);
 	seq_printf(s, " %dmA", msm_regval_to_drive(drive));
 	if (pctrl->soc->pull_no_keeper)
 		seq_printf(s, " %s", pulls_no_keeper[pull]);
@@ -1033,6 +1036,25 @@ static bool msm_gpio_needs_dual_edge_parent_workaround(struct irq_data *d,
 	return type == IRQ_TYPE_EDGE_BOTH &&
 	       pctrl->soc->wakeirq_dual_edge_errata && d->parent_data &&
 	       test_bit(d->hwirq, pctrl->skip_wake_irqs);
+}
+
+static void msm_gpio_irq_init_valid_mask(struct gpio_chip *gc,
+					 unsigned long *valid_mask,
+					 unsigned int ngpios)
+{
+	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+	const struct msm_pingroup *g;
+	int i;
+
+	bitmap_fill(valid_mask, ngpios);
+
+	for (i = 0; i < ngpios; i++) {
+		g = &pctrl->soc->groups[i];
+
+		if (g->intr_detection_width != 1 &&
+		    g->intr_detection_width != 2)
+			clear_bit(i, valid_mask);
+	}
 }
 
 static int msm_gpio_irq_set_type(struct irq_data *d, unsigned int type)
@@ -1438,8 +1460,9 @@ static int msm_gpio_init(struct msm_pinctrl *pctrl)
 	girq->default_type = IRQ_TYPE_NONE;
 	girq->handler = handle_bad_irq;
 	girq->parents[0] = pctrl->irq;
+	girq->init_valid_mask = msm_gpio_irq_init_valid_mask;
 
-	ret = gpiochip_add_data(&pctrl->chip, pctrl);
+	ret = devm_gpiochip_add_data(pctrl->dev, &pctrl->chip, pctrl);
 	if (ret) {
 		dev_err(pctrl->dev, "Failed register gpiochip\n");
 		return ret;
@@ -1455,12 +1478,11 @@ static int msm_gpio_init(struct msm_pinctrl *pctrl)
 	 * files which don't set the "gpio-ranges" property or systems that
 	 * utilize ACPI the driver has to call gpiochip_add_pin_range().
 	 */
-	if (!of_property_read_bool(pctrl->dev->of_node, "gpio-ranges")) {
+	if (!of_property_present(pctrl->dev->of_node, "gpio-ranges")) {
 		ret = gpiochip_add_pin_range(&pctrl->chip,
 			dev_name(pctrl->dev), 0, 0, chip->ngpio);
 		if (ret) {
 			dev_err(pctrl->dev, "Failed to add pin range\n");
-			gpiochip_remove(&pctrl->chip);
 			return ret;
 		}
 	}
@@ -1595,14 +1617,6 @@ int msm_pinctrl_probe(struct platform_device *pdev,
 	return 0;
 }
 EXPORT_SYMBOL(msm_pinctrl_probe);
-
-void msm_pinctrl_remove(struct platform_device *pdev)
-{
-	struct msm_pinctrl *pctrl = platform_get_drvdata(pdev);
-
-	gpiochip_remove(&pctrl->chip);
-}
-EXPORT_SYMBOL(msm_pinctrl_remove);
 
 MODULE_DESCRIPTION("Qualcomm Technologies, Inc. TLMM driver");
 MODULE_LICENSE("GPL v2");

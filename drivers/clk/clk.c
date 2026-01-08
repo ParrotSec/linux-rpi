@@ -365,6 +365,18 @@ const char *clk_hw_get_name(const struct clk_hw *hw)
 }
 EXPORT_SYMBOL_GPL(clk_hw_get_name);
 
+struct device *clk_hw_get_dev(const struct clk_hw *hw)
+{
+	return hw->core->dev;
+}
+EXPORT_SYMBOL_GPL(clk_hw_get_dev);
+
+struct device_node *clk_hw_get_of_node(const struct clk_hw *hw)
+{
+	return hw->core->of_node;
+}
+EXPORT_SYMBOL_GPL(clk_hw_get_of_node);
+
 struct clk_hw *__clk_get_hw(struct clk *clk)
 {
 	return !clk ? NULL : clk->core->hw;
@@ -607,12 +619,6 @@ bool clk_hw_is_prepared(const struct clk_hw *hw)
 	return clk_core_is_prepared(hw->core);
 }
 EXPORT_SYMBOL_GPL(clk_hw_is_prepared);
-
-bool clk_hw_rate_is_protected(const struct clk_hw *hw)
-{
-	return clk_core_rate_is_protected(hw->core);
-}
-EXPORT_SYMBOL_GPL(clk_hw_rate_is_protected);
 
 bool clk_hw_is_enabled(const struct clk_hw *hw)
 {
@@ -2289,7 +2295,7 @@ static struct clk_core *clk_calc_new_rates(struct clk_core *core,
 	unsigned long min_rate;
 	unsigned long max_rate;
 	int p_index = 0;
-	long ret;
+	int ret;
 
 	/* sanity */
 	if (IS_ERR_OR_NULL(core))
@@ -4403,6 +4409,13 @@ fail_ops:
 fail_name:
 	kref_put(&core->ref, __clk_release);
 fail_out:
+	if (dev) {
+		dev_err_probe(dev, ret, "failed to register clk '%s' (%pS)\n",
+			      init->name, hw);
+	} else {
+		pr_err("%pOF: error %pe: failed to register clk '%s' (%pS)\n",
+		       np, ERR_PTR(ret), init->name, hw);
+	}
 	return ERR_PTR(ret);
 }
 

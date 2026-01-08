@@ -13,6 +13,7 @@
 #include <linux/scatterlist.h>
 #include <linux/export.h>
 #include <linux/slab.h>
+#include <linux/t10-pi.h>
 
 #include "blk.h"
 
@@ -52,6 +53,73 @@ new_segment:
 	}
 
 	return segments;
+}
+
+int blk_get_meta_cap(struct block_device *bdev, unsigned int cmd,
+		     struct logical_block_metadata_cap __user *argp)
+{
+	struct blk_integrity *bi = blk_get_integrity(bdev->bd_disk);
+	struct logical_block_metadata_cap meta_cap = {};
+	size_t usize = _IOC_SIZE(cmd);
+
+	if (_IOC_DIR(cmd)  != _IOC_DIR(FS_IOC_GETLBMD_CAP) ||
+	    _IOC_TYPE(cmd) != _IOC_TYPE(FS_IOC_GETLBMD_CAP) ||
+	    _IOC_NR(cmd)   != _IOC_NR(FS_IOC_GETLBMD_CAP) ||
+	    _IOC_SIZE(cmd) < LBMD_SIZE_VER0)
+		return -ENOIOCTLCMD;
+
+	if (!bi)
+		goto out;
+
+	if (bi->flags & BLK_INTEGRITY_DEVICE_CAPABLE)
+		meta_cap.lbmd_flags |= LBMD_PI_CAP_INTEGRITY;
+	if (bi->flags & BLK_INTEGRITY_REF_TAG)
+		meta_cap.lbmd_flags |= LBMD_PI_CAP_REFTAG;
+	meta_cap.lbmd_interval = 1 << bi->interval_exp;
+	meta_cap.lbmd_size = bi->metadata_size;
+	meta_cap.lbmd_pi_size = bi->pi_tuple_size;
+	meta_cap.lbmd_pi_offset = bi->pi_offset;
+	meta_cap.lbmd_opaque_size = bi->metadata_size - bi->pi_tuple_size;
+	if (meta_cap.lbmd_opaque_size && !bi->pi_offset)
+		meta_cap.lbmd_opaque_offset = bi->pi_tuple_size;
+
+	switch (bi->csum_type) {
+	case BLK_INTEGRITY_CSUM_NONE:
+		meta_cap.lbmd_guard_tag_type = LBMD_PI_CSUM_NONE;
+		break;
+	case BLK_INTEGRITY_CSUM_IP:
+		meta_cap.lbmd_guard_tag_type = LBMD_PI_CSUM_IP;
+		break;
+	case BLK_INTEGRITY_CSUM_CRC:
+		meta_cap.lbmd_guard_tag_type = LBMD_PI_CSUM_CRC16_T10DIF;
+		break;
+	case BLK_INTEGRITY_CSUM_CRC64:
+		meta_cap.lbmd_guard_tag_type = LBMD_PI_CSUM_CRC64_NVME;
+		break;
+	}
+
+	if (bi->csum_type != BLK_INTEGRITY_CSUM_NONE)
+		meta_cap.lbmd_app_tag_size = 2;
+
+	if (bi->flags & BLK_INTEGRITY_REF_TAG) {
+		switch (bi->csum_type) {
+		case BLK_INTEGRITY_CSUM_CRC64:
+			meta_cap.lbmd_ref_tag_size =
+				sizeof_field(struct crc64_pi_tuple, ref_tag);
+			break;
+		case BLK_INTEGRITY_CSUM_CRC:
+		case BLK_INTEGRITY_CSUM_IP:
+			meta_cap.lbmd_ref_tag_size =
+				sizeof_field(struct t10_pi_tuple, ref_tag);
+			break;
+		default:
+			break;
+		}
+	}
+
+out:
+	return copy_struct_to_user(argp, usize, &meta_cap, sizeof(meta_cap),
+				   NULL);
 }
 
 /**
@@ -113,10 +181,13 @@ new_segment:
 EXPORT_SYMBOL(blk_rq_map_integrity_sg);
 
 int blk_rq_integrity_map_user(struct request *rq, void __user *ubuf,
-			      ssize_t bytes, u32 seed)
+			      ssize_t bytes)
 {
-	int ret = bio_integrity_map_user(rq->bio, ubuf, bytes, seed);
+	int ret;
+	struct iov_iter iter;
 
+	iov_iter_ubuf(&iter, rq_data_dir(rq), ubuf, bytes);
+	ret = bio_integrity_map_user(rq->bio, &iter);
 	if (ret)
 		return ret;
 
@@ -218,9 +289,7 @@ static ssize_t flag_store(struct device *dev, const char *page, size_t count,
 	else
 		lim.integrity.flags |= flag;
 
-	blk_mq_freeze_queue(q);
-	err = queue_limits_commit_update(q, &lim);
-	blk_mq_unfreeze_queue(q);
+	err = queue_limits_commit_update_frozen(q, &lim);
 	if (err)
 		return err;
 	return count;
@@ -238,7 +307,7 @@ static ssize_t format_show(struct device *dev, struct device_attribute *attr,
 {
 	struct blk_integrity *bi = dev_to_bi(dev);
 
-	if (!bi->tuple_size)
+	if (!bi->metadata_size)
 		return sysfs_emit(page, "none\n");
 	return sysfs_emit(page, "%s\n", blk_integrity_profile_name(bi));
 }

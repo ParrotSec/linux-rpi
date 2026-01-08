@@ -90,7 +90,7 @@ static inline void i8042_write_command(int val)
  * ORDERING IS IMPORTANT! The first match will be apllied and the rest ignored.
  * This allows entries to overwrite vendor wide quirks on a per device basis.
  * Where this is irrelevant, entries are sorted case sensitive by DMI_SYS_VENDOR
- * and/or DMI_BOARD_VENDOR to make it easier to avoid dublicate entries.
+ * and/or DMI_BOARD_VENDOR to make it easier to avoid duplicate entries.
  */
 static const struct dmi_system_id i8042_dmi_quirk_table[] __initconst = {
 	{
@@ -1151,6 +1151,20 @@ static const struct dmi_system_id i8042_dmi_quirk_table[] __initconst = {
 	{
 		.matches = {
 			DMI_MATCH(DMI_BOARD_NAME, "GMxHGxx"),
+		},
+		.driver_data = (void *)(SERIO_QUIRK_NOMUX | SERIO_QUIRK_RESET_ALWAYS |
+					SERIO_QUIRK_NOLOOP | SERIO_QUIRK_NOPNP)
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_BOARD_NAME, "XxHP4NAx"),
+		},
+		.driver_data = (void *)(SERIO_QUIRK_NOMUX | SERIO_QUIRK_RESET_ALWAYS |
+					SERIO_QUIRK_NOLOOP | SERIO_QUIRK_NOPNP)
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_BOARD_NAME, "XxKK4NAx_XxSP4NAx"),
 		},
 		.driver_data = (void *)(SERIO_QUIRK_NOMUX | SERIO_QUIRK_RESET_ALWAYS |
 					SERIO_QUIRK_NOLOOP | SERIO_QUIRK_NOPNP)

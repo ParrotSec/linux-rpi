@@ -231,9 +231,8 @@ static int rza1_irqc_probe(struct platform_device *pdev)
 	priv->chip.irq_set_type = rza1_irqc_set_type;
 	priv->chip.flags = IRQCHIP_MASK_ON_SUSPEND | IRQCHIP_SKIP_SET_WAKE;
 
-	priv->irq_domain = irq_domain_add_hierarchy(parent, 0, IRQC_NUM_IRQ,
-						    np, &rza1_irqc_domain_ops,
-						    priv);
+	priv->irq_domain = irq_domain_create_hierarchy(parent, 0, IRQC_NUM_IRQ, dev_fwnode(dev),
+						       &rza1_irqc_domain_ops, priv);
 	if (!priv->irq_domain) {
 		dev_err(dev, "cannot initialize irq domain\n");
 		ret = -ENOMEM;
@@ -259,7 +258,7 @@ MODULE_DEVICE_TABLE(of, rza1_irqc_dt_ids);
 
 static struct platform_driver rza1_irqc_device_driver = {
 	.probe		= rza1_irqc_probe,
-	.remove_new	= rza1_irqc_remove,
+	.remove		= rza1_irqc_remove,
 	.driver		= {
 		.name		= "renesas_rza1_irqc",
 		.of_match_table	= rza1_irqc_dt_ids,

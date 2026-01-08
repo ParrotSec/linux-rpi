@@ -20,6 +20,7 @@
 #include "xfs_sysfs.h"
 #include "xfs_sb.h"
 #include "xfs_health.h"
+#include "xfs_zone_alloc.h"
 
 struct kmem_cache	*xfs_log_ticket_cache;
 
@@ -108,14 +109,14 @@ xlog_prepare_iovec(
 		vec = &lv->lv_iovecp[0];
 	}
 
-	len = lv->lv_buf_len + sizeof(struct xlog_op_header);
+	len = lv->lv_buf_used + sizeof(struct xlog_op_header);
 	if (!IS_ALIGNED(len, sizeof(uint64_t))) {
-		lv->lv_buf_len = round_up(len, sizeof(uint64_t)) -
+		lv->lv_buf_used = round_up(len, sizeof(uint64_t)) -
 					sizeof(struct xlog_op_header);
 	}
 
 	vec->i_type = type;
-	vec->i_addr = lv->lv_buf + lv->lv_buf_len;
+	vec->i_addr = lv->lv_buf + lv->lv_buf_used;
 
 	oph = vec->i_addr;
 	oph->oh_clientid = XFS_TRANSACTION;
@@ -1567,13 +1568,13 @@ xlog_cksum(
 	struct xlog		*log,
 	struct xlog_rec_header	*rhead,
 	char			*dp,
-	int			size)
+	unsigned int		hdrsize,
+	unsigned int		size)
 {
 	uint32_t		crc;
 
 	/* first generate the crc for the record header ... */
-	crc = xfs_start_cksum_update((char *)rhead,
-			      sizeof(struct xlog_rec_header),
+	crc = xfs_start_cksum_update((char *)rhead, hdrsize,
 			      offsetof(struct xlog_rec_header, h_crc));
 
 	/* ... then for additional cycle data for v2 logs ... */
@@ -1604,27 +1605,6 @@ xlog_bio_end_io(
 
 	queue_work(iclog->ic_log->l_ioend_workqueue,
 		   &iclog->ic_end_io_work);
-}
-
-static int
-xlog_map_iclog_data(
-	struct bio		*bio,
-	void			*data,
-	size_t			count)
-{
-	do {
-		struct page	*page = kmem_to_page(data);
-		unsigned int	off = offset_in_page(data);
-		size_t		len = min_t(size_t, count, PAGE_SIZE - off);
-
-		if (bio_add_page(bio, page, len, off) != len)
-			return -EIO;
-
-		data += len;
-		count -= len;
-	} while (count);
-
-	return 0;
 }
 
 STATIC void
@@ -1692,11 +1672,12 @@ xlog_write_iclog(
 
 	iclog->ic_flags &= ~(XLOG_ICL_NEED_FLUSH | XLOG_ICL_NEED_FUA);
 
-	if (xlog_map_iclog_data(&iclog->ic_bio, iclog->ic_data, count))
-		goto shutdown;
-
-	if (is_vmalloc_addr(iclog->ic_data))
-		flush_kernel_vmap_range(iclog->ic_data, count);
+	if (is_vmalloc_addr(iclog->ic_data)) {
+		if (!bio_add_vmalloc(&iclog->ic_bio, iclog->ic_data, count))
+			goto shutdown;
+	} else {
+		bio_add_virt_nofail(&iclog->ic_bio, iclog->ic_data, count);
+	}
 
 	/*
 	 * If this log buffer would straddle the end of the log we will have
@@ -1837,7 +1818,7 @@ xlog_sync(
 
 	/* calculcate the checksum */
 	iclog->ic_header.h_crc = xlog_cksum(log, &iclog->ic_header,
-					    iclog->ic_datap, size);
+			iclog->ic_datap, XLOG_REC_SIZE, size);
 	/*
 	 * Intentionally corrupt the log record CRC based on the error injection
 	 * frequency, if defined. This facilitates testing log recovery in the
@@ -1950,9 +1931,9 @@ xlog_print_trans(
 		if (!lv)
 			continue;
 		xfs_warn(mp, "  niovecs	= %d", lv->lv_niovecs);
-		xfs_warn(mp, "  size	= %d", lv->lv_size);
+		xfs_warn(mp, "  alloc_size = %d", lv->lv_alloc_size);
 		xfs_warn(mp, "  bytes	= %d", lv->lv_bytes);
-		xfs_warn(mp, "  buf len	= %d", lv->lv_buf_len);
+		xfs_warn(mp, "  buf used= %d", lv->lv_buf_used);
 
 		/* dump each iovec for the log item */
 		vec = lv->lv_iovecp;
@@ -2744,8 +2725,6 @@ xfs_log_ticket_regrant(
 	if (!ticket->t_cnt) {
 		xlog_grant_add_space(&log->l_reserve_head, ticket->t_unit_res);
 		trace_xfs_log_ticket_regrant_exit(log, ticket);
-
-		ticket->t_curr_res = ticket->t_unit_res;
 	}
 
 	xfs_log_ticket_put(ticket);
@@ -2889,7 +2868,7 @@ xlog_force_and_check_iclog(
  *
  *	1. the current iclog is active and has no data; the previous iclog
  *		is in the active or dirty state.
- *	2. the current iclog is drity, and the previous iclog is in the
+ *	2. the current iclog is dirty, and the previous iclog is in the
  *		active or dirty state.
  *
  * We may sleep if:
@@ -3113,16 +3092,16 @@ xfs_log_force_seq(
  */
 void
 xfs_log_ticket_put(
-	xlog_ticket_t	*ticket)
+	struct xlog_ticket	*ticket)
 {
 	ASSERT(atomic_read(&ticket->t_ref) > 0);
 	if (atomic_dec_and_test(&ticket->t_ref))
 		kmem_cache_free(xfs_log_ticket_cache, ticket);
 }
 
-xlog_ticket_t *
+struct xlog_ticket *
 xfs_log_ticket_get(
-	xlog_ticket_t	*ticket)
+	struct xlog_ticket	*ticket)
 {
 	ASSERT(atomic_read(&ticket->t_ref) > 0);
 	atomic_inc(&ticket->t_ref);
@@ -3456,6 +3435,16 @@ xlog_force_shutdown(
 		return false;
 
 	/*
+	 * Ensure that there is only ever one log shutdown being processed.
+	 * If we allow the log force below on a second pass after shutting
+	 * down the log, we risk deadlocking the CIL push as it may require
+	 * locks on objects the current shutdown context holds (e.g. taking
+	 * buffer locks to abort buffers on last unpin of buf log items).
+	 */
+	if (test_and_set_bit(XLOG_SHUTDOWN_STARTED, &log->l_opstate))
+		return false;
+
+	/*
 	 * Flush all the completed transactions to disk before marking the log
 	 * being shut down. We need to do this first as shutting down the log
 	 * before the force will prevent the log force from flushing the iclogs
@@ -3487,6 +3476,7 @@ xlog_force_shutdown(
 	spin_lock(&log->l_icloglock);
 	if (test_and_set_bit(XLOG_IO_ERROR, &log->l_opstate)) {
 		spin_unlock(&log->l_icloglock);
+		ASSERT(0);
 		return false;
 	}
 	spin_unlock(&log->l_icloglock);
@@ -3531,6 +3521,9 @@ xlog_force_shutdown(
 	spin_unlock(&log->l_icloglock);
 
 	wake_up_var(&log->l_opstate);
+	if (IS_ENABLED(CONFIG_XFS_RT) && xfs_has_zoned(log->l_mp))
+		xfs_zoned_wake_all(log->l_mp);
+
 	return log_error;
 }
 

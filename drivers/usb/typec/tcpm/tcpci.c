@@ -17,6 +17,7 @@
 #include <linux/usb/tcpci.h>
 #include <linux/usb/tcpm.h>
 #include <linux/usb/typec.h>
+#include <linux/regulator/consumer.h>
 
 #define	PD_RETRY_COUNT_DEFAULT			3
 #define	PD_RETRY_COUNT_3_0_OR_HIGHER		2
@@ -283,7 +284,7 @@ static int tcpci_set_polarity(struct tcpc_dev *tcpc,
 			if (cc2 == TYPEC_CC_RD)
 				/* Role control would have the Rp setting when DRP was enabled */
 				reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC2, TCPC_ROLE_CTRL_CC_RP);
-			else
+			else if (cc2 >= TYPEC_CC_RP_DEF)
 				reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC2, TCPC_ROLE_CTRL_CC_RD);
 		} else {
 			reg &= ~TCPC_ROLE_CTRL_CC1;
@@ -291,7 +292,7 @@ static int tcpci_set_polarity(struct tcpc_dev *tcpc,
 			if (cc1 == TYPEC_CC_RD)
 				/* Role control would have the Rp setting when DRP was enabled */
 				reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC1, TCPC_ROLE_CTRL_CC_RP);
-			else
+			else if (cc1 >= TYPEC_CC_RP_DEF)
 				reg |= FIELD_PREP(TCPC_ROLE_CTRL_CC1, TCPC_ROLE_CTRL_CC_RD);
 		}
 	}
@@ -904,6 +905,10 @@ static int tcpci_probe(struct i2c_client *client)
 	struct tcpci_chip *chip;
 	int err;
 	u16 val = 0;
+
+	err = devm_regulator_get_enable_optional(&client->dev, "vdd");
+	if (err && err != -ENODEV)
+		return dev_err_probe(&client->dev, err, "Failed to get regulator\n");
 
 	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
 	if (!chip)

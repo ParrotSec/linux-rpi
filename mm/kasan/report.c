@@ -10,6 +10,7 @@
  */
 
 #include <kunit/test.h>
+#include <kunit/visibility.h>
 #include <linux/bitops.h>
 #include <linux/ftrace.h>
 #include <linux/init.h>
@@ -132,20 +133,20 @@ static bool report_enabled(void)
 	return !test_and_set_bit(KASAN_BIT_REPORTED, &kasan_flags);
 }
 
-#if IS_ENABLED(CONFIG_KASAN_KUNIT_TEST) || IS_ENABLED(CONFIG_KASAN_MODULE_TEST)
+#if IS_ENABLED(CONFIG_KASAN_KUNIT_TEST)
 
-bool kasan_save_enable_multi_shot(void)
+VISIBLE_IF_KUNIT bool kasan_save_enable_multi_shot(void)
 {
 	return test_and_set_bit(KASAN_BIT_MULTI_SHOT, &kasan_flags);
 }
-EXPORT_SYMBOL_GPL(kasan_save_enable_multi_shot);
+EXPORT_SYMBOL_IF_KUNIT(kasan_save_enable_multi_shot);
 
-void kasan_restore_multi_shot(bool enabled)
+VISIBLE_IF_KUNIT void kasan_restore_multi_shot(bool enabled)
 {
 	if (!enabled)
 		clear_bit(KASAN_BIT_MULTI_SHOT, &kasan_flags);
 }
-EXPORT_SYMBOL_GPL(kasan_restore_multi_shot);
+EXPORT_SYMBOL_IF_KUNIT(kasan_restore_multi_shot);
 
 #endif
 
@@ -157,17 +158,17 @@ EXPORT_SYMBOL_GPL(kasan_restore_multi_shot);
  */
 static bool kasan_kunit_executing;
 
-void kasan_kunit_test_suite_start(void)
+VISIBLE_IF_KUNIT void kasan_kunit_test_suite_start(void)
 {
 	WRITE_ONCE(kasan_kunit_executing, true);
 }
-EXPORT_SYMBOL_GPL(kasan_kunit_test_suite_start);
+EXPORT_SYMBOL_IF_KUNIT(kasan_kunit_test_suite_start);
 
-void kasan_kunit_test_suite_end(void)
+VISIBLE_IF_KUNIT void kasan_kunit_test_suite_end(void)
 {
 	WRITE_ONCE(kasan_kunit_executing, false);
 }
-EXPORT_SYMBOL_GPL(kasan_kunit_test_suite_end);
+EXPORT_SYMBOL_IF_KUNIT(kasan_kunit_test_suite_end);
 
 static bool kasan_kunit_test_suite_executing(void)
 {
@@ -398,17 +399,10 @@ static void print_address_description(void *addr, u8 tag,
 	}
 
 	if (is_vmalloc_addr(addr)) {
-		struct vm_struct *va = find_vm_area(addr);
-
-		if (va) {
-			pr_err("The buggy address belongs to the virtual mapping at\n"
-			       " [%px, %px) created by:\n"
-			       " %pS\n",
-			       va->addr, va->addr + va->size, va->caller);
-			pr_err("\n");
-
-			page = vmalloc_to_page(addr);
-		}
+		pr_err("The buggy address belongs to a");
+		if (!vmalloc_dump_obj(addr))
+			pr_cont(" vmalloc virtual mapping\n");
+		page = vmalloc_to_page(addr);
 	}
 
 	if (page) {

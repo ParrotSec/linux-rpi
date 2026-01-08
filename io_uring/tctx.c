@@ -35,8 +35,6 @@ static struct io_wq *io_init_wq_offload(struct io_ring_ctx *ctx,
 
 	data.hash = hash;
 	data.task = task;
-	data.free_work = io_wq_free_work;
-	data.do_work = io_wq_submit_work;
 
 	/* Do QD, or 4 * CPUS, whatever is smallest */
 	concurrency = min(ctx->sq_entries, 4 * num_online_cpus());
@@ -92,6 +90,7 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 		return ret;
 	}
 
+	tctx->task = task;
 	xa_init(&tctx->xa);
 	init_waitqueue_head(&tctx->wait);
 	atomic_set(&tctx->in_cancel, 0);

@@ -9,6 +9,7 @@
 #ifndef TB_H_
 #define TB_H_
 
+#include <linux/debugfs.h>
 #include <linux/nvmem-provider.h>
 #include <linux/pci.h>
 #include <linux/thunderbolt.h>
@@ -160,6 +161,7 @@ struct tb_switch_tmu {
  * @max_pcie_credits: Router preferred number of buffers for PCIe
  * @max_dma_credits: Router preferred number of buffers for DMA/P2P
  * @clx: CLx states on the upstream link of the router
+ * @drom_blob: DROM debugfs blob wrapper
  *
  * When the switch is being added or removed to the domain (other
  * switches) you need to have domain lock held.
@@ -212,6 +214,9 @@ struct tb_switch {
 	unsigned int max_pcie_credits;
 	unsigned int max_dma_credits;
 	unsigned int clx;
+#ifdef CONFIG_DEBUG_FS
+	struct debugfs_blob_wrapper drom_blob;
+#endif
 };
 
 /**
@@ -799,6 +804,19 @@ static inline void tb_domain_put(struct tb *tb)
 	put_device(&tb->dev);
 }
 
+/**
+ * tb_domain_event() - Notify userspace about an event in domain
+ * @tb: Domain where event occurred
+ * @envp: Array of uevent environment strings (can be %NULL)
+ *
+ * This function provides a way to notify userspace about any events
+ * that take place in the domain.
+ */
+static inline void tb_domain_event(struct tb *tb, char *envp[])
+{
+	kobject_uevent_env(&tb->dev.kobj, KOBJ_CHANGE, envp);
+}
+
 struct tb_nvm *tb_nvm_alloc(struct device *dev);
 int tb_nvm_read_version(struct tb_nvm *nvm);
 int tb_nvm_validate(struct tb_nvm *nvm);
@@ -1299,7 +1317,7 @@ int usb4_switch_read_uid(struct tb_switch *sw, u64 *uid);
 int usb4_switch_drom_read(struct tb_switch *sw, unsigned int address, void *buf,
 			  size_t size);
 bool usb4_switch_lane_bonding_possible(struct tb_switch *sw);
-int usb4_switch_set_wake(struct tb_switch *sw, unsigned int flags);
+int usb4_switch_set_wake(struct tb_switch *sw, unsigned int flags, bool runtime);
 int usb4_switch_set_sleep(struct tb_switch *sw);
 int usb4_switch_nvm_sector_size(struct tb_switch *sw);
 int usb4_switch_nvm_read(struct tb_switch *sw, unsigned int address, void *buf,
@@ -1367,11 +1385,18 @@ enum usb4_margin_sw_error_counter {
 	USB4_MARGIN_SW_ERROR_COUNTER_STOP,
 };
 
+enum usb4_margining_lane {
+	USB4_MARGINING_LANE_RX0 = 0,
+	USB4_MARGINING_LANE_RX1 = 1,
+	USB4_MARGINING_LANE_RX2 = 2,
+	USB4_MARGINING_LANE_ALL = 7,
+};
+
 /**
  * struct usb4_port_margining_params - USB4 margining parameters
  * @error_counter: Error counter operation for software margining
  * @ber_level: Current BER level contour value
- * @lanes: %0, %1 or %7 (all)
+ * @lanes: Lanes to enable for the margining operation
  * @voltage_time_offset: Offset for voltage / time for software margining
  * @optional_voltage_offset_range: Enable optional extended voltage range
  * @right_high: %false if left/low margin test is performed, %true if right/high
@@ -1380,18 +1405,19 @@ enum usb4_margin_sw_error_counter {
 struct usb4_port_margining_params {
 	enum usb4_margin_sw_error_counter error_counter;
 	u32 ber_level;
-	u32 lanes;
+	enum usb4_margining_lane lanes;
 	u32 voltage_time_offset;
 	bool optional_voltage_offset_range;
 	bool right_high;
+	bool upper_eye;
 	bool time;
 };
 
 int usb4_port_margining_caps(struct tb_port *port, enum usb4_sb_target target,
-			     u8 index, u32 *caps);
+			     u8 index, u32 *caps, size_t ncaps);
 int usb4_port_hw_margin(struct tb_port *port, enum usb4_sb_target target,
 			u8 index, const struct usb4_port_margining_params *params,
-			u32 *results);
+			u32 *results, size_t nresults);
 int usb4_port_sw_margin(struct tb_port *port, enum usb4_sb_target target,
 			u8 index, const struct usb4_port_margining_params *params,
 			u32 *results);
@@ -1455,6 +1481,7 @@ static inline struct usb4_port *tb_to_usb4_port_device(struct device *dev)
 struct usb4_port *usb4_port_device_add(struct tb_port *port);
 void usb4_port_device_remove(struct usb4_port *usb4);
 int usb4_port_device_resume(struct usb4_port *usb4);
+int usb4_port_index(const struct tb_switch *sw, const struct tb_port *port);
 
 static inline bool usb4_port_device_is_offline(const struct usb4_port *usb4)
 {

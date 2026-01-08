@@ -77,6 +77,7 @@ static inline struct hlist_head *ping_hashslot(struct ping_table *table,
 
 int ping_get_port(struct sock *sk, unsigned short ident)
 {
+	struct net *net = sock_net(sk);
 	struct inet_sock *isk, *isk2;
 	struct hlist_head *hlist;
 	struct sock *sk2 = NULL;
@@ -90,9 +91,10 @@ int ping_get_port(struct sock *sk, unsigned short ident)
 		for (i = 0; i < (1L << 16); i++, result++) {
 			if (!result)
 				result++; /* avoid zero */
-			hlist = ping_hashslot(&ping_table, sock_net(sk),
-					    result);
+			hlist = ping_hashslot(&ping_table, net, result);
 			sk_for_each(sk2, hlist) {
+				if (!net_eq(sock_net(sk2), net))
+					continue;
 				isk2 = inet_sk(sk2);
 
 				if (isk2->inet_num == result)
@@ -108,8 +110,10 @@ next_port:
 		if (i >= (1L << 16))
 			goto fail;
 	} else {
-		hlist = ping_hashslot(&ping_table, sock_net(sk), ident);
+		hlist = ping_hashslot(&ping_table, net, ident);
 		sk_for_each(sk2, hlist) {
+			if (!net_eq(sock_net(sk2), net))
+				continue;
 			isk2 = inet_sk(sk2);
 
 			/* BUG? Why is this reuse and not reuseaddr? ping.c
@@ -129,7 +133,7 @@ next_port:
 		pr_debug("was not hashed\n");
 		sk_add_node_rcu(sk, hlist);
 		sock_set_flag(sk, SOCK_RCU_FREE);
-		sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
+		sock_prot_inuse_add(net, sk->sk_prot, 1);
 	}
 	spin_unlock(&ping_table.lock);
 	return 0;
@@ -188,6 +192,8 @@ static struct sock *ping_lookup(struct net *net, struct sk_buff *skb, u16 ident)
 	}
 
 	sk_for_each_rcu(sk, hslot) {
+		if (!net_eq(sock_net(sk), net))
+			continue;
 		isk = inet_sk(sk);
 
 		pr_debug("iterate\n");
@@ -705,7 +711,7 @@ static int ping_v4_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	struct ip_options_data opt_copy;
 	int free = 0;
 	__be32 saddr, daddr, faddr;
-	u8 tos, scope;
+	u8 scope;
 	int err;
 
 	pr_debug("ping_v4_sendmsg(sk=%p,sk->num=%u)\n", inet, inet->inet_num);
@@ -768,7 +774,6 @@ static int ping_v4_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		}
 		faddr = ipc.opt->opt.faddr;
 	}
-	tos = get_rttos(&ipc, inet);
 	scope = ip_sendmsg_scope(inet, &ipc, msg);
 
 	if (ipv4_is_multicast(daddr)) {
@@ -779,9 +784,10 @@ static int ping_v4_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	} else if (!ipc.oif)
 		ipc.oif = READ_ONCE(inet->uc_index);
 
-	flowi4_init_output(&fl4, ipc.oif, ipc.sockc.mark, tos, scope,
+	flowi4_init_output(&fl4, ipc.oif, ipc.sockc.mark,
+			   ipc.tos & INET_DSCP_MASK, scope,
 			   sk->sk_protocol, inet_sk_flowi_flags(sk), faddr,
-			   saddr, 0, 0, sk->sk_uid);
+			   saddr, 0, 0, sk_uid(sk));
 
 	fl4.fl4_icmp_type = user_icmph.type;
 	fl4.fl4_icmp_code = user_icmph.code;
@@ -966,10 +972,9 @@ EXPORT_SYMBOL_GPL(ping_queue_rcv_skb);
 
 enum skb_drop_reason ping_rcv(struct sk_buff *skb)
 {
-	enum skb_drop_reason reason = SKB_DROP_REASON_NO_SOCKET;
-	struct sock *sk;
 	struct net *net = dev_net(skb->dev);
 	struct icmphdr *icmph = icmp_hdr(skb);
+	struct sock *sk;
 
 	/* We assume the packet has already been checked by icmp_rcv */
 
@@ -980,20 +985,11 @@ enum skb_drop_reason ping_rcv(struct sk_buff *skb)
 	skb_push(skb, skb->data - (u8 *)icmph);
 
 	sk = ping_lookup(net, skb, ntohs(icmph->un.echo.id));
-	if (sk) {
-		struct sk_buff *skb2 = skb_clone(skb, GFP_ATOMIC);
+	if (sk)
+		return __ping_queue_rcv_skb(sk, skb);
 
-		pr_debug("rcv on socket %p\n", sk);
-		if (skb2)
-			reason = __ping_queue_rcv_skb(sk, skb2);
-		else
-			reason = SKB_DROP_REASON_NOMEM;
-	}
-
-	if (reason)
-		pr_debug("no socket, dropping\n");
-
-	return reason;
+	kfree_skb_reason(skb, SKB_DROP_REASON_NO_SOCKET);
+	return SKB_DROP_REASON_NO_SOCKET;
 }
 EXPORT_SYMBOL_GPL(ping_rcv);
 
@@ -1126,7 +1122,7 @@ static void ping_v4_format_sock(struct sock *sp, struct seq_file *f,
 		sk_wmem_alloc_get(sp),
 		sk_rmem_alloc_get(sp),
 		0, 0L, 0,
-		from_kuid_munged(seq_user_ns(f), sock_i_uid(sp)),
+		from_kuid_munged(seq_user_ns(f), sk_uid(sp)),
 		0, sock_i_ino(sp),
 		refcount_read(&sp->sk_refcnt), sp,
 		atomic_read(&sp->sk_drops));

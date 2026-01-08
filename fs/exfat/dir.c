@@ -82,11 +82,8 @@ static int exfat_readdir(struct inode *inode, loff_t *cpos, struct exfat_dir_ent
 	if (ei->type != TYPE_DIR)
 		return -EPERM;
 
-	if (ei->entry == -1)
-		exfat_chain_set(&dir, sbi->root_dir, 0, ALLOC_FAT_CHAIN);
-	else
-		exfat_chain_set(&dir, ei->start_clu,
-			EXFAT_B_TO_CLU(i_size_read(inode), sbi), ei->flags);
+	exfat_chain_set(&dir, ei->start_clu,
+		EXFAT_B_TO_CLU(i_size_read(inode), sbi), ei->flags);
 
 	dentries_per_clu = sbi->dentries_per_clu;
 	max_dentries = (unsigned int)min_t(u64, MAX_EXFAT_DENTRIES,
@@ -135,21 +132,6 @@ static int exfat_readdir(struct inode *inode, loff_t *cpos, struct exfat_dir_ent
 
 			num_ext = ep->dentry.file.num_ext;
 			dir_entry->attr = le16_to_cpu(ep->dentry.file.attr);
-			exfat_get_entry_time(sbi, &dir_entry->crtime,
-					ep->dentry.file.create_tz,
-					ep->dentry.file.create_time,
-					ep->dentry.file.create_date,
-					ep->dentry.file.create_time_cs);
-			exfat_get_entry_time(sbi, &dir_entry->mtime,
-					ep->dentry.file.modify_tz,
-					ep->dentry.file.modify_time,
-					ep->dentry.file.modify_date,
-					ep->dentry.file.modify_time_cs);
-			exfat_get_entry_time(sbi, &dir_entry->atime,
-					ep->dentry.file.access_tz,
-					ep->dentry.file.access_time,
-					ep->dentry.file.access_date,
-					0);
 
 			*uni_name.name = 0x0;
 			err = exfat_get_uniname_from_ext_entry(sb, &clu, i,
@@ -166,9 +148,8 @@ static int exfat_readdir(struct inode *inode, loff_t *cpos, struct exfat_dir_ent
 			ep = exfat_get_dentry(sb, &clu, i + 1, &bh);
 			if (!ep)
 				return -EIO;
-			dir_entry->size =
-				le64_to_cpu(ep->dentry.stream.valid_size);
-			dir_entry->entry = dentry;
+			dir_entry->entry = i;
+			dir_entry->dir = clu;
 			brelse(bh);
 
 			ei->hint_bmap.off = EXFAT_DEN_TO_CLU(dentry, sbi);
@@ -277,7 +258,7 @@ get_new:
 	if (!nb->lfn[0])
 		goto end_of_dir;
 
-	i_pos = ((loff_t)ei->start_clu << 32) |	(de.entry & 0xffffffff);
+	i_pos = ((loff_t)de.dir.dir << 32) | (de.entry & 0xffffffff);
 	tmp = exfat_iget(sb, i_pos);
 	if (tmp) {
 		inum = tmp->i_ino;
@@ -1015,6 +996,7 @@ int exfat_find_dir_entry(struct super_block *sb, struct exfat_inode_info *ei,
 	struct exfat_hint_femp candi_empty;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 	int num_entries = exfat_calc_num_entries(p_uniname);
+	unsigned int clu_count = 0;
 
 	if (num_entries < 0)
 		return num_entries;
@@ -1152,6 +1134,10 @@ rewind:
 		} else {
 			if (exfat_get_next_cluster(sb, &clu.dir))
 				return -EIO;
+
+			/* break if the cluster chain includes a loop */
+			if (unlikely(++clu_count > EXFAT_DATA_CLUSTER_COUNT(sbi)))
+				goto not_found;
 		}
 	}
 
@@ -1214,6 +1200,7 @@ int exfat_count_dir_entries(struct super_block *sb, struct exfat_chain *p_dir)
 	int i, count = 0;
 	int dentries_per_clu;
 	unsigned int entry_type;
+	unsigned int clu_count = 0;
 	struct exfat_chain clu;
 	struct exfat_dentry *ep;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
@@ -1246,6 +1233,12 @@ int exfat_count_dir_entries(struct super_block *sb, struct exfat_chain *p_dir)
 		} else {
 			if (exfat_get_next_cluster(sb, &(clu.dir)))
 				return -EIO;
+
+			if (unlikely(++clu_count > sbi->used_clusters)) {
+				exfat_fs_error(sb, "FAT or bitmap is corrupted");
+				return -EIO;
+			}
+
 		}
 	}
 

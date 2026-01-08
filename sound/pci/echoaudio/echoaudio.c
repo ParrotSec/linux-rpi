@@ -6,6 +6,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/string.h>
 
 MODULE_AUTHOR("Giuliano Pochini <pochini@shiny.it>");
 MODULE_LICENSE("GPL v2");
@@ -916,7 +917,7 @@ static int snd_echo_new_pcm(struct echoaudio *chip)
 		return err;
 	pcm->private_data = chip;
 	chip->analog_pcm = pcm;
-	strcpy(pcm->name, chip->card->shortname);
+	strscpy(pcm->name, chip->card->shortname);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &analog_playback_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &analog_capture_ops);
 	snd_echo_preallocate_pages(pcm, &chip->pci->dev);
@@ -929,7 +930,7 @@ static int snd_echo_new_pcm(struct echoaudio *chip)
 		return err;
 	pcm->private_data = chip;
 	chip->digital_pcm = pcm;
-	strcpy(pcm->name, chip->card->shortname);
+	strscpy(pcm->name, chip->card->shortname);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &digital_capture_ops);
 	snd_echo_preallocate_pages(pcm, &chip->pci->dev);
 #endif /* ECHOCARD_HAS_DIGITAL_IO */
@@ -949,7 +950,7 @@ static int snd_echo_new_pcm(struct echoaudio *chip)
 		return err;
 	pcm->private_data = chip;
 	chip->analog_pcm = pcm;
-	strcpy(pcm->name, chip->card->shortname);
+	strscpy(pcm->name, chip->card->shortname);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &analog_playback_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &analog_capture_ops);
 	snd_echo_preallocate_pages(pcm, &chip->pci->dev);
@@ -963,7 +964,7 @@ static int snd_echo_new_pcm(struct echoaudio *chip)
 		return err;
 	pcm->private_data = chip;
 	chip->digital_pcm = pcm;
-	strcpy(pcm->name, chip->card->shortname);
+	strscpy(pcm->name, chip->card->shortname);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &digital_playback_ops);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &digital_capture_ops);
 	snd_echo_preallocate_pages(pcm, &chip->pci->dev);
@@ -1910,7 +1911,7 @@ static int snd_echo_create(struct snd_card *card,
 	chip->can_set_rate = 1;
 
 	/* PCI resource allocation */
-	err = pci_request_regions(pci, ECHOCARD_NAME);
+	err = pcim_request_all_regions(pci, ECHOCARD_NAME);
 	if (err < 0)
 		return err;
 
@@ -1966,7 +1967,6 @@ static int __snd_echo_probe(struct pci_dev *pci,
 	struct snd_card *card;
 	struct echoaudio *chip;
 	char *dsp;
-	__maybe_unused int i;
 	int err;
 
 	if (dev >= SNDRV_CARDS)
@@ -1976,7 +1976,6 @@ static int __snd_echo_probe(struct pci_dev *pci,
 		return -ENOENT;
 	}
 
-	i = 0;
 	err = snd_devm_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
 				sizeof(*chip), &card);
 	if (err < 0)
@@ -1987,8 +1986,8 @@ static int __snd_echo_probe(struct pci_dev *pci,
 	if (err < 0)
 		return err;
 
-	strcpy(card->driver, "Echo_" ECHOCARD_NAME);
-	strcpy(card->shortname, chip->card_name);
+	strscpy(card->driver, "Echo_" ECHOCARD_NAME);
+	strscpy(card->shortname, chip->card_name);
 
 	dsp = "56301";
 	if (pci_id->device == 0x3410)
@@ -2080,7 +2079,7 @@ static int __snd_echo_probe(struct pci_dev *pci,
 #ifdef ECHOCARD_HAS_DIGITAL_MODE_SWITCH
 	/* Creates a list of available digital modes */
 	chip->num_digital_modes = 0;
-	for (i = 0; i < 6; i++)
+	for (int i = 0; i < 6; i++)
 		if (chip->digital_modes & (1 << i))
 			chip->digital_mode_list[chip->num_digital_modes++] = i;
 
@@ -2092,7 +2091,7 @@ static int __snd_echo_probe(struct pci_dev *pci,
 #ifdef ECHOCARD_HAS_EXTERNAL_CLOCK
 	/* Creates a list of available clock sources */
 	chip->num_clock_sources = 0;
-	for (i = 0; i < 10; i++)
+	for (int i = 0; i < 10; i++)
 		if (chip->input_clock_types & (1 << i))
 			chip->clock_source_list[chip->num_clock_sources++] = i;
 

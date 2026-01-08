@@ -286,7 +286,7 @@ v9fs_vfs_atomic_open_dotl(struct inode *dir, struct dentry *dentry,
 	}
 
 	if ((v9ses->cache & CACHE_WRITEBACK) && (p9_omode & P9_OWRITE)) {
-		p9_omode = (p9_omode & ~P9_OWRITE) | P9_ORDWR;
+		p9_omode = (p9_omode & ~(P9_OWRITE | P9_DOTL_APPEND)) | P9_ORDWR;
 		p9_debug(P9_DEBUG_CACHE,
 			"write-only file with writeback enabled, creating w/ O_RDWR\n");
 	}
@@ -350,9 +350,9 @@ out:
  *
  */
 
-static int v9fs_vfs_mkdir_dotl(struct mnt_idmap *idmap,
-			       struct inode *dir, struct dentry *dentry,
-			       umode_t omode)
+static struct dentry *v9fs_vfs_mkdir_dotl(struct mnt_idmap *idmap,
+					  struct inode *dir, struct dentry *dentry,
+					  umode_t omode)
 {
 	int err;
 	struct v9fs_session_info *v9ses;
@@ -417,7 +417,7 @@ error:
 	p9_fid_put(fid);
 	v9fs_put_acl(dacl, pacl);
 	p9_fid_put(dfid);
-	return err;
+	return ERR_PTR(err);
 }
 
 static int

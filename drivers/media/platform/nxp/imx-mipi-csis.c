@@ -28,6 +28,7 @@
 #include <linux/reset.h>
 #include <linux/spinlock.h>
 
+#include <media/mipi-csi2.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
@@ -227,27 +228,6 @@
 #define MIPI_CSIS_PKTDATA_EVEN			0x3000
 #define MIPI_CSIS_PKTDATA_SIZE			SZ_4K
 
-#define DEFAULT_SCLK_CSIS_FREQ			166000000UL
-
-/* MIPI CSI-2 Data Types */
-#define MIPI_CSI2_DATA_TYPE_YUV420_8		0x18
-#define MIPI_CSI2_DATA_TYPE_YUV420_10		0x19
-#define MIPI_CSI2_DATA_TYPE_LE_YUV420_8		0x1a
-#define MIPI_CSI2_DATA_TYPE_CS_YUV420_8		0x1c
-#define MIPI_CSI2_DATA_TYPE_CS_YUV420_10	0x1d
-#define MIPI_CSI2_DATA_TYPE_YUV422_8		0x1e
-#define MIPI_CSI2_DATA_TYPE_YUV422_10		0x1f
-#define MIPI_CSI2_DATA_TYPE_RGB565		0x22
-#define MIPI_CSI2_DATA_TYPE_RGB666		0x23
-#define MIPI_CSI2_DATA_TYPE_RGB888		0x24
-#define MIPI_CSI2_DATA_TYPE_RAW6		0x28
-#define MIPI_CSI2_DATA_TYPE_RAW7		0x29
-#define MIPI_CSI2_DATA_TYPE_RAW8		0x2a
-#define MIPI_CSI2_DATA_TYPE_RAW10		0x2b
-#define MIPI_CSI2_DATA_TYPE_RAW12		0x2c
-#define MIPI_CSI2_DATA_TYPE_RAW14		0x2d
-#define MIPI_CSI2_DATA_TYPE_USER(x)		(0x30 + (x))
-
 struct mipi_csis_event {
 	bool debug;
 	u32 mask;
@@ -357,116 +337,116 @@ static const struct csis_pix_format mipi_csis_formats[] = {
 	{
 		.code = MEDIA_BUS_FMT_UYVY8_1X16,
 		.output = MEDIA_BUS_FMT_UYVY8_1X16,
-		.data_type = MIPI_CSI2_DATA_TYPE_YUV422_8,
+		.data_type = MIPI_CSI2_DT_YUV422_8B,
 		.width = 16,
 	},
 	/* RGB formats. */
 	{
 		.code = MEDIA_BUS_FMT_RGB565_1X16,
 		.output = MEDIA_BUS_FMT_RGB565_1X16,
-		.data_type = MIPI_CSI2_DATA_TYPE_RGB565,
+		.data_type = MIPI_CSI2_DT_RGB565,
 		.width = 16,
 	}, {
 		.code = MEDIA_BUS_FMT_BGR888_1X24,
 		.output = MEDIA_BUS_FMT_RGB888_1X24,
-		.data_type = MIPI_CSI2_DATA_TYPE_RGB888,
+		.data_type = MIPI_CSI2_DT_RGB888,
 		.width = 24,
 	},
 	/* RAW (Bayer and greyscale) formats. */
 	{
 		.code = MEDIA_BUS_FMT_SBGGR8_1X8,
 		.output = MEDIA_BUS_FMT_SBGGR8_1X8,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}, {
 		.code = MEDIA_BUS_FMT_SGBRG8_1X8,
 		.output = MEDIA_BUS_FMT_SGBRG8_1X8,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}, {
 		.code = MEDIA_BUS_FMT_SGRBG8_1X8,
 		.output = MEDIA_BUS_FMT_SGRBG8_1X8,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}, {
 		.code = MEDIA_BUS_FMT_SRGGB8_1X8,
 		.output = MEDIA_BUS_FMT_SRGGB8_1X8,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}, {
 		.code = MEDIA_BUS_FMT_Y8_1X8,
 		.output = MEDIA_BUS_FMT_Y8_1X8,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}, {
 		.code = MEDIA_BUS_FMT_SBGGR10_1X10,
 		.output = MEDIA_BUS_FMT_SBGGR10_1X10,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW10,
+		.data_type = MIPI_CSI2_DT_RAW10,
 		.width = 10,
 	}, {
 		.code = MEDIA_BUS_FMT_SGBRG10_1X10,
 		.output = MEDIA_BUS_FMT_SGBRG10_1X10,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW10,
+		.data_type = MIPI_CSI2_DT_RAW10,
 		.width = 10,
 	}, {
 		.code = MEDIA_BUS_FMT_SGRBG10_1X10,
 		.output = MEDIA_BUS_FMT_SGRBG10_1X10,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW10,
+		.data_type = MIPI_CSI2_DT_RAW10,
 		.width = 10,
 	}, {
 		.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 		.output = MEDIA_BUS_FMT_SRGGB10_1X10,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW10,
+		.data_type = MIPI_CSI2_DT_RAW10,
 		.width = 10,
 	}, {
 		.code = MEDIA_BUS_FMT_Y10_1X10,
 		.output = MEDIA_BUS_FMT_Y10_1X10,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW10,
+		.data_type = MIPI_CSI2_DT_RAW10,
 		.width = 10,
 	}, {
 		.code = MEDIA_BUS_FMT_SBGGR12_1X12,
 		.output = MEDIA_BUS_FMT_SBGGR12_1X12,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW12,
+		.data_type = MIPI_CSI2_DT_RAW12,
 		.width = 12,
 	}, {
 		.code = MEDIA_BUS_FMT_SGBRG12_1X12,
 		.output = MEDIA_BUS_FMT_SGBRG12_1X12,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW12,
+		.data_type = MIPI_CSI2_DT_RAW12,
 		.width = 12,
 	}, {
 		.code = MEDIA_BUS_FMT_SGRBG12_1X12,
 		.output = MEDIA_BUS_FMT_SGRBG12_1X12,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW12,
+		.data_type = MIPI_CSI2_DT_RAW12,
 		.width = 12,
 	}, {
 		.code = MEDIA_BUS_FMT_SRGGB12_1X12,
 		.output = MEDIA_BUS_FMT_SRGGB12_1X12,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW12,
+		.data_type = MIPI_CSI2_DT_RAW12,
 		.width = 12,
 	}, {
 		.code = MEDIA_BUS_FMT_Y12_1X12,
 		.output = MEDIA_BUS_FMT_Y12_1X12,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW12,
+		.data_type = MIPI_CSI2_DT_RAW12,
 		.width = 12,
 	}, {
 		.code = MEDIA_BUS_FMT_SBGGR14_1X14,
 		.output = MEDIA_BUS_FMT_SBGGR14_1X14,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW14,
+		.data_type = MIPI_CSI2_DT_RAW14,
 		.width = 14,
 	}, {
 		.code = MEDIA_BUS_FMT_SGBRG14_1X14,
 		.output = MEDIA_BUS_FMT_SGBRG14_1X14,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW14,
+		.data_type = MIPI_CSI2_DT_RAW14,
 		.width = 14,
 	}, {
 		.code = MEDIA_BUS_FMT_SGRBG14_1X14,
 		.output = MEDIA_BUS_FMT_SGRBG14_1X14,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW14,
+		.data_type = MIPI_CSI2_DT_RAW14,
 		.width = 14,
 	}, {
 		.code = MEDIA_BUS_FMT_SRGGB14_1X14,
 		.output = MEDIA_BUS_FMT_SRGGB14_1X14,
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW14,
+		.data_type = MIPI_CSI2_DT_RAW14,
 		.width = 14,
 	},
 	/* JPEG */
@@ -494,7 +474,7 @@ static const struct csis_pix_format mipi_csis_formats[] = {
 		 * SoC that can support quad pixel mode, this will have to be
 		 * revisited.
 		 */
-		.data_type = MIPI_CSI2_DATA_TYPE_RAW8,
+		.data_type = MIPI_CSI2_DT_RAW8,
 		.width = 8,
 	}
 };
@@ -583,7 +563,7 @@ static void __mipi_csis_set_format(struct mipi_csis_device *csis,
 	 *
 	 * TODO: Verify which other formats require DUAL (or QUAD) modes.
 	 */
-	if (csis_fmt->data_type == MIPI_CSI2_DATA_TYPE_YUV422_8)
+	if (csis_fmt->data_type == MIPI_CSI2_DT_YUV422_8B)
 		val |= MIPI_CSIS_ISPCFG_PIXEL_MODE_DUAL;
 
 	val |= MIPI_CSIS_ISPCFG_FMT(csis_fmt->data_type);
@@ -597,12 +577,13 @@ static void __mipi_csis_set_format(struct mipi_csis_device *csis,
 static int mipi_csis_calculate_params(struct mipi_csis_device *csis,
 				      const struct csis_pix_format *csis_fmt)
 {
+	struct media_pad *src_pad =
+		&csis->source.sd->entity.pads[csis->source.pad->index];
 	s64 link_freq;
 	u32 lane_rate;
 
 	/* Calculate the line rate from the pixel rate. */
-	link_freq = v4l2_get_link_freq(csis->source.sd->ctrl_handler,
-				       csis_fmt->width,
+	link_freq = v4l2_get_link_freq(src_pad, csis_fmt->width,
 				       csis->bus.num_data_lanes * 2);
 	if (link_freq < 0) {
 		dev_err(csis->dev, "Unable to obtain link frequency: %d\n",
@@ -721,12 +702,17 @@ static int mipi_csis_clk_get(struct mipi_csis_device *csis)
 	if (ret < 0)
 		return ret;
 
-	/* Set clock rate */
-	ret = clk_set_rate(csis->clks[MIPI_CSIS_CLK_WRAP].clk,
-			   csis->clk_frequency);
-	if (ret < 0)
-		dev_err(csis->dev, "set rate=%d failed: %d\n",
-			csis->clk_frequency, ret);
+	if (csis->clk_frequency) {
+		/*
+		 * Set the clock rate. This is deprecated, for backward
+		 * compatibility with old device trees.
+		 */
+		ret = clk_set_rate(csis->clks[MIPI_CSIS_CLK_WRAP].clk,
+				   csis->clk_frequency);
+		if (ret < 0)
+			dev_err(csis->dev, "set rate=%d failed: %d\n",
+				csis->clk_frequency, ret);
+	}
 
 	return ret;
 }
@@ -1430,9 +1416,7 @@ static int mipi_csis_parse_dt(struct mipi_csis_device *csis)
 {
 	struct device_node *node = csis->dev->of_node;
 
-	if (of_property_read_u32(node, "clock-frequency",
-				 &csis->clk_frequency))
-		csis->clk_frequency = DEFAULT_SCLK_CSIS_FREQ;
+	of_property_read_u32(node, "clock-frequency", &csis->clk_frequency);
 
 	return 0;
 }
@@ -1570,7 +1554,7 @@ MODULE_DEVICE_TABLE(of, mipi_csis_of_match);
 
 static struct platform_driver mipi_csis_driver = {
 	.probe		= mipi_csis_probe,
-	.remove_new	= mipi_csis_remove,
+	.remove		= mipi_csis_remove,
 	.driver		= {
 		.of_match_table = mipi_csis_of_match,
 		.name		= CSIS_DRIVER_NAME,

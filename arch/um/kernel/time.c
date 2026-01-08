@@ -25,6 +25,8 @@
 #include <shared/init.h>
 
 #ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+#include <linux/sched/clock.h>
+
 enum time_travel_mode time_travel_mode;
 EXPORT_SYMBOL_GPL(time_travel_mode);
 
@@ -46,6 +48,15 @@ static unsigned long long _time_travel_ext_free_until;
 static u16 time_travel_shm_id;
 static struct um_timetravel_schedshm *time_travel_shm;
 static union um_timetravel_schedshm_client *time_travel_shm_client;
+
+unsigned long tt_extra_sched_jiffies;
+
+notrace unsigned long long sched_clock(void)
+{
+	return (unsigned long long)(jiffies - INITIAL_JIFFIES +
+				    tt_extra_sched_jiffies)
+					* (NSEC_PER_SEC / HZ);
+}
 
 static void time_travel_set_time(unsigned long long ns)
 {
@@ -443,6 +454,11 @@ static void time_travel_periodic_timer(struct time_travel_event *e)
 {
 	time_travel_add_event(&time_travel_timer_event,
 			      time_travel_time + time_travel_timer_interval);
+
+	/* clock tick; decrease extra jiffies by keeping sched_clock constant */
+	if (tt_extra_sched_jiffies > 0)
+		tt_extra_sched_jiffies -= 1;
+
 	deliver_alarm();
 }
 
@@ -594,6 +610,10 @@ EXPORT_SYMBOL_GPL(time_travel_add_irq_event);
 
 static void time_travel_oneshot_timer(struct time_travel_event *e)
 {
+	/* clock tick; decrease extra jiffies by keeping sched_clock constant */
+	if (tt_extra_sched_jiffies > 0)
+		tt_extra_sched_jiffies -= 1;
+
 	deliver_alarm();
 }
 
@@ -836,11 +856,16 @@ static struct clock_event_device timer_clockevent = {
 
 static irqreturn_t um_timer(int irq, void *dev)
 {
-	if (get_current()->mm != NULL)
-	{
-        /* userspace - relay signal, results in correct userspace timers */
+	/*
+	 * Interrupt the (possibly) running userspace process, technically this
+	 * should only happen if userspace is currently executing.
+	 * With infinite CPU time-travel, we can only get here when userspace
+	 * is not executing. Do not notify there and avoid spurious scheduling.
+	 */
+	if (time_travel_mode != TT_MODE_INFCPU &&
+	    time_travel_mode != TT_MODE_EXTERNAL &&
+	    get_current()->mm)
 		os_alarm_process(get_current()->mm->context.id.pid);
-	}
 
 	(*timer_clockevent.event_handler)(&timer_clockevent);
 

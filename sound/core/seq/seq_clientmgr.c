@@ -1256,7 +1256,7 @@ static void get_client_info(struct snd_seq_client *cptr,
 
 	/* fill the info fields */
 	info->type = cptr->type;
-	strcpy(info->name, cptr->name);
+	strscpy(info->name, cptr->name);
 	info->filter = cptr->filter;
 	info->event_lost = cptr->event_lost;
 	memcpy(info->event_filter, cptr->event_filter, 32);
@@ -1329,6 +1329,10 @@ static int snd_seq_ioctl_set_client_info(struct snd_seq_client *client,
 		client->midi_version = client_info->midi_version;
 	memcpy(client->event_filter, client_info->event_filter, 32);
 	client->group_filter = client_info->group_filter;
+
+	/* notify the change */
+	snd_seq_system_client_ev_client_change(client->number);
+
 	return 0;
 }
 
@@ -1452,6 +1456,9 @@ static int snd_seq_ioctl_set_port_info(struct snd_seq_client *client, void *arg)
 	if (port) {
 		snd_seq_set_port_info(port, info);
 		snd_seq_port_unlock(port);
+		/* notify the change */
+		snd_seq_system_client_ev_port_change(info->addr.client,
+						     info->addr.port);
 	}
 	return 0;
 }
@@ -1508,7 +1515,7 @@ int snd_seq_client_notify_subscription(int client, int port,
 	event.data.connect.dest = info->dest;
 	event.data.connect.sender = info->sender;
 
-	return snd_seq_system_notify(client, port, &event);  /* non-atomic */
+	return snd_seq_system_notify(client, port, &event, false);  /* non-atomic */
 }
 
 
@@ -2262,6 +2269,16 @@ static int snd_seq_ioctl_client_ump_info(struct snd_seq_client *caller,
  error:
 	mutex_unlock(&cptr->ioctl_mutex);
 	snd_seq_client_unlock(cptr);
+	if (!err && cmd == SNDRV_SEQ_IOCTL_SET_CLIENT_UMP_INFO) {
+		if (type == SNDRV_SEQ_CLIENT_UMP_INFO_ENDPOINT)
+			snd_seq_system_ump_notify(client, 0,
+						  SNDRV_SEQ_EVENT_UMP_EP_CHANGE,
+						  false);
+		else
+			snd_seq_system_ump_notify(client, type - 1,
+						  SNDRV_SEQ_EVENT_UMP_BLOCK_CHANGE,
+						  false);
+	}
 	return err;
 }
 #endif
@@ -2723,6 +2740,7 @@ void snd_seq_info_clients_read(struct snd_info_entry *entry,
 			continue;
 		}
 
+		mutex_lock(&client->ioctl_mutex);
 		snd_iprintf(buffer, "Client %3d : \"%s\" [%s %s]\n",
 			    c, client->name,
 			    client->type == USER_CLIENT ? "User" : "Kernel",
@@ -2740,6 +2758,7 @@ void snd_seq_info_clients_read(struct snd_info_entry *entry,
 			snd_iprintf(buffer, "  Input pool :\n");
 			snd_seq_info_pool(buffer, client->data.user.fifo->pool, "    ");
 		}
+		mutex_unlock(&client->ioctl_mutex);
 		snd_seq_client_unlock(client);
 	}
 }

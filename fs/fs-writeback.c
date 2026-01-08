@@ -65,7 +65,7 @@ struct wb_writeback_work {
  * timestamps written to disk after 12 hours, but in the worst case a
  * few inodes might not their timestamps updated for 24 hours.
  */
-unsigned int dirtytime_expire_interval = 12 * 60 * 60;
+static unsigned int dirtytime_expire_interval = 12 * 60 * 60;
 
 static inline struct inode *wb_inode(struct list_head *head)
 {
@@ -290,7 +290,6 @@ void __inode_attach_wb(struct inode *inode, struct folio *folio)
 	if (unlikely(cmpxchg(&inode->i_wb, NULL, wb)))
 		wb_put(wb);
 }
-EXPORT_SYMBOL_GPL(__inode_attach_wb);
 
 /**
  * inode_cgwb_move_to_attached - put the inode onto wb->b_attached list
@@ -446,22 +445,23 @@ static bool inode_do_switch_wbs(struct inode *inode,
 	 * Transfer to @new_wb's IO list if necessary.  If the @inode is dirty,
 	 * the specific list @inode was on is ignored and the @inode is put on
 	 * ->b_dirty which is always correct including from ->b_dirty_time.
-	 * The transfer preserves @inode->dirtied_when ordering.  If the @inode
-	 * was clean, it means it was on the b_attached list, so move it onto
-	 * the b_attached list of @new_wb.
+	 * If the @inode was clean, it means it was on the b_attached list, so
+	 * move it onto the b_attached list of @new_wb.
 	 */
 	if (!list_empty(&inode->i_io_list)) {
 		inode->i_wb = new_wb;
 
 		if (inode->i_state & I_DIRTY_ALL) {
-			struct inode *pos;
-
-			list_for_each_entry(pos, &new_wb->b_dirty, i_io_list)
-				if (time_after_eq(inode->dirtied_when,
-						  pos->dirtied_when))
-					break;
+			/*
+			 * We need to keep b_dirty list sorted by
+			 * dirtied_time_when. However properly sorting the
+			 * inode in the list gets too expensive when switching
+			 * many inodes. So just attach inode at the end of the
+			 * dirty list and clobber the dirtied_time_when.
+			 */
+			inode->dirtied_time_when = jiffies;
 			inode_io_list_move_locked(inode, new_wb,
-						  pos->i_io_list.prev);
+						  &new_wb->b_dirty);
 		} else {
 			inode_cgwb_move_to_attached(inode, new_wb);
 		}
@@ -503,6 +503,7 @@ static void inode_switch_wbs_work_fn(struct work_struct *work)
 	 */
 	down_read(&bdi->wb_switch_rwsem);
 
+	inodep = isw->inodes;
 	/*
 	 * By the time control reaches here, RCU grace period has passed
 	 * since I_WB_SWITCH assertion and all wb stat update transactions
@@ -513,6 +514,7 @@ static void inode_switch_wbs_work_fn(struct work_struct *work)
 	 * gives us exclusion against all wb related operations on @inode
 	 * including IO list manipulations and stat updates.
 	 */
+relock:
 	if (old_wb < new_wb) {
 		spin_lock(&old_wb->list_lock);
 		spin_lock_nested(&new_wb->list_lock, SINGLE_DEPTH_NESTING);
@@ -521,10 +523,17 @@ static void inode_switch_wbs_work_fn(struct work_struct *work)
 		spin_lock_nested(&old_wb->list_lock, SINGLE_DEPTH_NESTING);
 	}
 
-	for (inodep = isw->inodes; *inodep; inodep++) {
+	while (*inodep) {
 		WARN_ON_ONCE((*inodep)->i_wb != old_wb);
 		if (inode_do_switch_wbs(*inodep, old_wb, new_wb))
 			nr_switched++;
+		inodep++;
+		if (*inodep && need_resched()) {
+			spin_unlock(&new_wb->list_lock);
+			spin_unlock(&old_wb->list_lock);
+			cond_resched();
+			goto relock;
+		}
 	}
 
 	spin_unlock(&new_wb->list_lock);
@@ -731,8 +740,9 @@ bool cleanup_offline_cgwb(struct bdi_writeback *wb)
  * writeback completion, wbc_detach_inode() should be called.  This is used
  * to track the cgroup writeback context.
  */
-void wbc_attach_and_unlock_inode(struct writeback_control *wbc,
-				 struct inode *inode)
+static void wbc_attach_and_unlock_inode(struct writeback_control *wbc,
+		struct inode *inode)
+	__releases(&inode->i_lock)
 {
 	if (!inode_cgwb_enabled(inode)) {
 		spin_unlock(&inode->i_lock);
@@ -762,7 +772,24 @@ void wbc_attach_and_unlock_inode(struct writeback_control *wbc,
 	if (unlikely(wb_dying(wbc->wb) && !css_is_dying(wbc->wb->memcg_css)))
 		inode_switch_wbs(inode, wbc->wb_id);
 }
-EXPORT_SYMBOL_GPL(wbc_attach_and_unlock_inode);
+
+/**
+ * wbc_attach_fdatawrite_inode - associate wbc and inode for fdatawrite
+ * @wbc: writeback_control of interest
+ * @inode: target inode
+ *
+ * This function is to be used by __filemap_fdatawrite_range(), which is an
+ * alternative entry point into writeback code, and first ensures @inode is
+ * associated with a bdi_writeback and attaches it to @wbc.
+ */
+void wbc_attach_fdatawrite_inode(struct writeback_control *wbc,
+		struct inode *inode)
+{
+	spin_lock(&inode->i_lock);
+	inode_attach_wb(inode, NULL);
+	wbc_attach_and_unlock_inode(wbc, inode);
+}
+EXPORT_SYMBOL_GPL(wbc_attach_fdatawrite_inode);
 
 /**
  * wbc_detach_inode - disassociate wbc from inode and perform foreign detection
@@ -1223,6 +1250,13 @@ static void bdi_split_work_to_wbs(struct backing_dev_info *bdi,
 		base_work->auto_free = 0;
 		wb_queue_work(&bdi->wb, base_work);
 	}
+}
+
+static inline void wbc_attach_and_unlock_inode(struct writeback_control *wbc,
+					       struct inode *inode)
+	__releases(&inode->i_lock)
+{
+	spin_unlock(&inode->i_lock);
 }
 
 #endif	/* CONFIG_CGROUP_WRITEBACK */
@@ -2411,14 +2445,7 @@ static void wakeup_dirtytime_writeback(struct work_struct *w)
 	schedule_delayed_work(&dirtytime_work, dirtytime_expire_interval * HZ);
 }
 
-static int __init start_dirtytime_writeback(void)
-{
-	schedule_delayed_work(&dirtytime_work, dirtytime_expire_interval * HZ);
-	return 0;
-}
-__initcall(start_dirtytime_writeback);
-
-int dirtytime_interval_handler(const struct ctl_table *table, int write,
+static int dirtytime_interval_handler(const struct ctl_table *table, int write,
 			       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
@@ -2428,6 +2455,25 @@ int dirtytime_interval_handler(const struct ctl_table *table, int write,
 		mod_delayed_work(system_wq, &dirtytime_work, 0);
 	return ret;
 }
+
+static const struct ctl_table vm_fs_writeback_table[] = {
+	{
+		.procname	= "dirtytime_expire_seconds",
+		.data		= &dirtytime_expire_interval,
+		.maxlen		= sizeof(dirtytime_expire_interval),
+		.mode		= 0644,
+		.proc_handler	= dirtytime_interval_handler,
+		.extra1		= SYSCTL_ZERO,
+	},
+};
+
+static int __init start_dirtytime_writeback(void)
+{
+	schedule_delayed_work(&dirtytime_work, dirtytime_expire_interval * HZ);
+	register_sysctl_init("vm", vm_fs_writeback_table);
+	return 0;
+}
+__initcall(start_dirtytime_writeback);
 
 /**
  * __mark_inode_dirty -	internal function to mark an inode dirty
@@ -2572,10 +2618,6 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 			wakeup_bdi = inode_io_list_move_locked(inode, wb,
 							       dirty_list);
 
-			spin_unlock(&wb->list_lock);
-			spin_unlock(&inode->i_lock);
-			trace_writeback_dirty_inode_enqueue(inode);
-
 			/*
 			 * If this is the first dirty inode for this bdi,
 			 * we have to wake-up the corresponding bdi thread
@@ -2585,6 +2627,11 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 			if (wakeup_bdi &&
 			    (wb->bdi->capabilities & BDI_CAP_WRITEBACK))
 				wb_wakeup_delayed(wb);
+
+			spin_unlock(&wb->list_lock);
+			spin_unlock(&inode->i_lock);
+			trace_writeback_dirty_inode_enqueue(inode);
+
 			return;
 		}
 	}

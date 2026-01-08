@@ -95,6 +95,9 @@ void fbnic_mbx_init(struct fbnic_dev *fbd)
 	/* Initialize lock to protect Tx ring */
 	spin_lock_init(&fbd->fw_tx_lock);
 
+	/* Reset FW Capabilities */
+	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
+
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
 		memset(&fbd->mbx[i], 0, sizeof(struct fbnic_fw_mbx));
@@ -127,11 +130,8 @@ static int fbnic_mbx_map_msg(struct fbnic_dev *fbd, int mbx_idx,
 		return -EBUSY;
 
 	addr = dma_map_single(fbd->dev, msg, PAGE_SIZE, direction);
-	if (dma_mapping_error(fbd->dev, addr)) {
-		free_page((unsigned long)msg);
-
+	if (dma_mapping_error(fbd->dev, addr))
 		return -ENOSPC;
-	}
 
 	mbx->buf_info[tail].msg = msg;
 	mbx->buf_info[tail].addr = addr;
@@ -201,7 +201,7 @@ static int fbnic_mbx_alloc_rx_msgs(struct fbnic_dev *fbd)
 		return -ENODEV;
 
 	/* Fill all but 1 unused descriptors in the Rx queue. */
-	count = (head - tail - 1) % FBNIC_IPC_MBX_DESC_LEN;
+	count = (head - tail - 1) & (FBNIC_IPC_MBX_DESC_LEN - 1);
 	while (!err && count--) {
 		struct fbnic_tlv_msg *msg;
 
@@ -237,6 +237,44 @@ static int fbnic_mbx_map_tlv_msg(struct fbnic_dev *fbd,
 	return err;
 }
 
+static int fbnic_mbx_set_cmpl_slot(struct fbnic_dev *fbd,
+				   struct fbnic_fw_completion *cmpl_data)
+{
+	struct fbnic_fw_mbx *tx_mbx = &fbd->mbx[FBNIC_IPC_MBX_TX_IDX];
+	int free = -EXFULL;
+	int i;
+
+	if (!tx_mbx->ready)
+		return -ENODEV;
+
+	for (i = 0; i < FBNIC_MBX_CMPL_SLOTS; i++) {
+		if (!fbd->cmpl_data[i])
+			free = i;
+		else if (fbd->cmpl_data[i]->msg_type == cmpl_data->msg_type)
+			return -EEXIST;
+	}
+
+	if (free == -EXFULL)
+		return -EXFULL;
+
+	fbd->cmpl_data[free] = cmpl_data;
+
+	return 0;
+}
+
+static void fbnic_mbx_clear_cmpl_slot(struct fbnic_dev *fbd,
+				      struct fbnic_fw_completion *cmpl_data)
+{
+	int i;
+
+	for (i = 0; i < FBNIC_MBX_CMPL_SLOTS; i++) {
+		if (fbd->cmpl_data[i] == cmpl_data) {
+			fbd->cmpl_data[i] = NULL;
+			break;
+		}
+	}
+}
+
 static void fbnic_mbx_process_tx_msgs(struct fbnic_dev *fbd)
 {
 	struct fbnic_fw_mbx *tx_mbx = &fbd->mbx[FBNIC_IPC_MBX_TX_IDX];
@@ -258,6 +296,89 @@ static void fbnic_mbx_process_tx_msgs(struct fbnic_dev *fbd)
 	tx_mbx->head = head;
 }
 
+int fbnic_mbx_set_cmpl(struct fbnic_dev *fbd,
+		       struct fbnic_fw_completion *cmpl_data)
+{
+	unsigned long flags;
+	int err;
+
+	spin_lock_irqsave(&fbd->fw_tx_lock, flags);
+	err = fbnic_mbx_set_cmpl_slot(fbd, cmpl_data);
+	spin_unlock_irqrestore(&fbd->fw_tx_lock, flags);
+
+	return err;
+}
+
+static int fbnic_mbx_map_req_w_cmpl(struct fbnic_dev *fbd,
+				    struct fbnic_tlv_msg *msg,
+				    struct fbnic_fw_completion *cmpl_data)
+{
+	unsigned long flags;
+	int err;
+
+	spin_lock_irqsave(&fbd->fw_tx_lock, flags);
+	if (cmpl_data) {
+		err = fbnic_mbx_set_cmpl_slot(fbd, cmpl_data);
+		if (err)
+			goto unlock_mbx;
+	}
+
+	err = fbnic_mbx_map_msg(fbd, FBNIC_IPC_MBX_TX_IDX, msg,
+				le16_to_cpu(msg->hdr.len) * sizeof(u32), 1);
+
+	/* If we successfully reserved a completion and msg failed
+	 * then clear completion data for next caller
+	 */
+	if (err && cmpl_data)
+		fbnic_mbx_clear_cmpl_slot(fbd, cmpl_data);
+
+unlock_mbx:
+	spin_unlock_irqrestore(&fbd->fw_tx_lock, flags);
+
+	return err;
+}
+
+void fbnic_mbx_clear_cmpl(struct fbnic_dev *fbd,
+			  struct fbnic_fw_completion *fw_cmpl)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&fbd->fw_tx_lock, flags);
+	fbnic_mbx_clear_cmpl_slot(fbd, fw_cmpl);
+	spin_unlock_irqrestore(&fbd->fw_tx_lock, flags);
+}
+
+static void fbnic_fw_release_cmpl_data(struct kref *kref)
+{
+	struct fbnic_fw_completion *cmpl_data;
+
+	cmpl_data = container_of(kref, struct fbnic_fw_completion,
+				 ref_count);
+	kfree(cmpl_data);
+}
+
+static struct fbnic_fw_completion *
+fbnic_fw_get_cmpl_by_type(struct fbnic_dev *fbd, u32 msg_type)
+{
+	struct fbnic_fw_completion *cmpl_data = NULL;
+	unsigned long flags;
+	int i;
+
+	spin_lock_irqsave(&fbd->fw_tx_lock, flags);
+	for (i = 0; i < FBNIC_MBX_CMPL_SLOTS; i++) {
+		if (fbd->cmpl_data[i] &&
+		    fbd->cmpl_data[i]->msg_type == msg_type) {
+			cmpl_data = fbd->cmpl_data[i];
+			kref_get(&cmpl_data->ref_count);
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&fbd->fw_tx_lock, flags);
+
+	return cmpl_data;
+}
+
 /**
  * fbnic_fw_xmit_simple_msg - Transmit a simple single TLV message w/o data
  * @fbd: FBNIC device structure
@@ -265,11 +386,11 @@ static void fbnic_mbx_process_tx_msgs(struct fbnic_dev *fbd)
  *
  * Return:
  *   One the following values:
- *     -EOPNOTSUPP: Is not ASIC so mailbox is not supported
- *     -ENODEV: Device I/O error
- *     -ENOMEM: Failed to allocate message
- *     -EBUSY: No space in mailbox
- *     -ENOSPC: DMA mapping failed
+ *	-EOPNOTSUPP: Is not ASIC so mailbox is not supported
+ *	-ENODEV: Device I/O error
+ *	-ENOMEM: Failed to allocate message
+ *	-EBUSY: No space in mailbox
+ *	-ENOSPC: DMA mapping failed
  *
  * This function sends a single TLV header indicating the host wants to take
  * some action. However there are no other side effects which means that any
@@ -407,6 +528,7 @@ static const struct fbnic_tlv_index fbnic_fw_cap_resp_index[] = {
 	FBNIC_TLV_ATTR_U32(FBNIC_FW_CAP_RESP_UEFI_VERSION),
 	FBNIC_TLV_ATTR_STRING(FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR,
 			      FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION),
 	FBNIC_TLV_ATTR_LAST
 };
 
@@ -441,29 +563,25 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 
 static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 {
-	u32 active_slot = 0, all_multi = 0;
+	u32 all_multi = 0, version = 0;
 	struct fbnic_dev *fbd = opaque;
-	u32 speed = 0, fec = 0;
-	size_t commit_size = 0;
 	bool bmc_present;
 	int err;
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_VERSION,
-			    fbd->fw_cap.running.mgmt.version);
-
+	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_VERSION);
+	fbd->fw_cap.running.mgmt.version = version;
 	if (!fbd->fw_cap.running.mgmt.version)
 		return -EINVAL;
 
-	if (fbd->fw_cap.running.mgmt.version < MIN_FW_VERSION_CODE) {
+	if (fbd->fw_cap.running.mgmt.version < MIN_FW_VER_CODE) {
+		char required_ver[FBNIC_FW_VER_MAX_SIZE];
 		char running_ver[FBNIC_FW_VER_MAX_SIZE];
 
 		fbnic_mk_fw_ver_str(fbd->fw_cap.running.mgmt.version,
 				    running_ver);
-		dev_err(fbd->dev, "Device firmware version(%s) is older than minimum required version(%02d.%02d.%02d)\n",
-			running_ver,
-			MIN_FW_MAJOR_VERSION,
-			MIN_FW_MINOR_VERSION,
-			MIN_FW_BUILD_VERSION);
+		fbnic_mk_fw_ver_str(MIN_FW_VER_CODE, required_ver);
+		dev_err(fbd->dev, "Device firmware version(%s) is older than minimum required version(%s)\n",
+			running_ver, required_ver);
 		/* Disable TX mailbox to prevent card use until firmware is
 		 * updated.
 		 */
@@ -471,43 +589,41 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 		return -EINVAL;
 	}
 
-	get_string_result(FBNIC_FW_CAP_RESP_VERSION_COMMIT_STR, commit_size,
-			  fbd->fw_cap.running.mgmt.commit,
-			  FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
-	if (!commit_size)
+	if (fta_get_str(results, FBNIC_FW_CAP_RESP_VERSION_COMMIT_STR,
+			fbd->fw_cap.running.mgmt.commit,
+			FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE) <= 0)
 		dev_warn(fbd->dev, "Firmware did not send mgmt commit!\n");
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_STORED_VERSION,
-			    fbd->fw_cap.stored.mgmt.version);
-	get_string_result(FBNIC_FW_CAP_RESP_STORED_COMMIT_STR, commit_size,
-			  fbd->fw_cap.stored.mgmt.commit,
-			  FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
+	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_STORED_VERSION);
+	fbd->fw_cap.stored.mgmt.version = version;
+	fta_get_str(results, FBNIC_FW_CAP_RESP_STORED_COMMIT_STR,
+		    fbd->fw_cap.stored.mgmt.commit,
+		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_CMRT_VERSION,
-			    fbd->fw_cap.running.bootloader.version);
-	get_string_result(FBNIC_FW_CAP_RESP_CMRT_COMMIT_STR, commit_size,
-			  fbd->fw_cap.running.bootloader.commit,
-			  FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
+	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_CMRT_VERSION);
+	fbd->fw_cap.running.bootloader.version = version;
+	fta_get_str(results, FBNIC_FW_CAP_RESP_CMRT_COMMIT_STR,
+		    fbd->fw_cap.running.bootloader.commit,
+		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_STORED_CMRT_VERSION,
-			    fbd->fw_cap.stored.bootloader.version);
-	get_string_result(FBNIC_FW_CAP_RESP_STORED_CMRT_COMMIT_STR, commit_size,
-			  fbd->fw_cap.stored.bootloader.commit,
-			  FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
+	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_STORED_CMRT_VERSION);
+	fbd->fw_cap.stored.bootloader.version = version;
+	fta_get_str(results, FBNIC_FW_CAP_RESP_STORED_CMRT_COMMIT_STR,
+		    fbd->fw_cap.stored.bootloader.commit,
+		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_UEFI_VERSION,
-			    fbd->fw_cap.stored.undi.version);
-	get_string_result(FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR, commit_size,
-			  fbd->fw_cap.stored.undi.commit,
-			  FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
+	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_UEFI_VERSION);
+	fbd->fw_cap.stored.undi.version = version;
+	fta_get_str(results, FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR,
+		    fbd->fw_cap.stored.undi.commit,
+		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	get_unsigned_result(FBNIC_FW_CAP_RESP_ACTIVE_FW_SLOT, active_slot);
-	fbd->fw_cap.active_slot = active_slot;
-
-	get_unsigned_result(FBNIC_FW_CAP_RESP_FW_LINK_SPEED, speed);
-	get_unsigned_result(FBNIC_FW_CAP_RESP_FW_LINK_FEC, fec);
-	fbd->fw_cap.link_speed = speed;
-	fbd->fw_cap.link_fec = fec;
+	fbd->fw_cap.active_slot =
+		fta_get_uint(results, FBNIC_FW_CAP_RESP_ACTIVE_FW_SLOT);
+	fbd->fw_cap.link_speed =
+		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_SPEED);
+	fbd->fw_cap.link_fec =
+		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_FEC);
 
 	bmc_present = !!results[FBNIC_FW_CAP_RESP_BMC_PRESENT];
 	if (bmc_present) {
@@ -522,7 +638,8 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 		if (err)
 			return err;
 
-		get_unsigned_result(FBNIC_FW_CAP_RESP_BMC_ALL_MULTI, all_multi);
+		all_multi =
+			fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
 	} else {
 		memset(fbd->fw_cap.bmc_mac_addr, 0,
 		       sizeof(fbd->fw_cap.bmc_mac_addr));
@@ -532,6 +649,9 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 
 	if (results[FBNIC_FW_CAP_RESP_BMC_ALL_MULTI] || !bmc_present)
 		fbd->fw_cap.all_multi = all_multi;
+
+	fbd->fw_cap.anti_rollback_version =
+		fta_get_uint(results, FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION);
 
 	return 0;
 }
@@ -655,6 +775,428 @@ void fbnic_fw_check_heartbeat(struct fbnic_dev *fbd)
 		dev_warn(fbd->dev, "Failed to send heartbeat message\n");
 }
 
+int fbnic_fw_xmit_fw_start_upgrade(struct fbnic_dev *fbd,
+				   struct fbnic_fw_completion *cmpl_data,
+				   unsigned int id, unsigned int len)
+{
+	struct fbnic_tlv_msg *msg;
+	int err;
+
+	if (!fbnic_fw_present(fbd))
+		return -ENODEV;
+
+	if (!len)
+		return -EINVAL;
+
+	msg = fbnic_tlv_msg_alloc(FBNIC_TLV_MSG_ID_FW_START_UPGRADE_REQ);
+	if (!msg)
+		return -ENOMEM;
+
+	err = fbnic_tlv_attr_put_int(msg, FBNIC_FW_START_UPGRADE_SECTION, id);
+	if (err)
+		goto free_message;
+
+	err = fbnic_tlv_attr_put_int(msg, FBNIC_FW_START_UPGRADE_IMAGE_LENGTH,
+				     len);
+	if (err)
+		goto free_message;
+
+	err = fbnic_mbx_map_req_w_cmpl(fbd, msg, cmpl_data);
+	if (err)
+		goto free_message;
+
+	return 0;
+
+free_message:
+	free_page((unsigned long)msg);
+	return err;
+}
+
+static const struct fbnic_tlv_index fbnic_fw_start_upgrade_resp_index[] = {
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_START_UPGRADE_ERROR),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_fw_start_upgrade_resp(void *opaque,
+						struct fbnic_tlv_msg **results)
+{
+	struct fbnic_fw_completion *cmpl_data;
+	struct fbnic_dev *fbd = opaque;
+	u32 msg_type;
+	s32 err;
+
+	/* Verify we have a completion pointer */
+	msg_type = FBNIC_TLV_MSG_ID_FW_START_UPGRADE_REQ;
+	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd, msg_type);
+	if (!cmpl_data)
+		return -ENOSPC;
+
+	/* Check for errors */
+	err = fta_get_sint(results, FBNIC_FW_START_UPGRADE_ERROR);
+
+	cmpl_data->result = err;
+	complete(&cmpl_data->done);
+	fbnic_fw_put_cmpl(cmpl_data);
+
+	return 0;
+}
+
+int fbnic_fw_xmit_fw_write_chunk(struct fbnic_dev *fbd,
+				 const u8 *data, u32 offset, u16 length,
+				 int cancel_error)
+{
+	struct fbnic_tlv_msg *msg;
+	int err;
+
+	msg = fbnic_tlv_msg_alloc(FBNIC_TLV_MSG_ID_FW_WRITE_CHUNK_RESP);
+	if (!msg)
+		return -ENOMEM;
+
+	/* Report error to FW to cancel upgrade */
+	if (cancel_error) {
+		err = fbnic_tlv_attr_put_int(msg, FBNIC_FW_WRITE_CHUNK_ERROR,
+					     cancel_error);
+		if (err)
+			goto free_message;
+	}
+
+	if (data) {
+		err = fbnic_tlv_attr_put_int(msg, FBNIC_FW_WRITE_CHUNK_OFFSET,
+					     offset);
+		if (err)
+			goto free_message;
+
+		err = fbnic_tlv_attr_put_int(msg, FBNIC_FW_WRITE_CHUNK_LENGTH,
+					     length);
+		if (err)
+			goto free_message;
+
+		err = fbnic_tlv_attr_put_value(msg, FBNIC_FW_WRITE_CHUNK_DATA,
+					       data + offset, length);
+		if (err)
+			goto free_message;
+	}
+
+	err = fbnic_mbx_map_tlv_msg(fbd, msg);
+	if (err)
+		goto free_message;
+
+	return 0;
+
+free_message:
+	free_page((unsigned long)msg);
+	return err;
+}
+
+static const struct fbnic_tlv_index fbnic_fw_write_chunk_req_index[] = {
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_WRITE_CHUNK_OFFSET),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_WRITE_CHUNK_LENGTH),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_fw_write_chunk_req(void *opaque,
+					     struct fbnic_tlv_msg **results)
+{
+	struct fbnic_fw_completion *cmpl_data;
+	struct fbnic_dev *fbd = opaque;
+	u32 msg_type;
+	u32 offset;
+	u32 length;
+
+	/* Verify we have a completion pointer */
+	msg_type = FBNIC_TLV_MSG_ID_FW_WRITE_CHUNK_REQ;
+	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd, msg_type);
+	if (!cmpl_data)
+		return -ENOSPC;
+
+	/* Pull length/offset pair and mark it as complete */
+	offset = fta_get_uint(results, FBNIC_FW_WRITE_CHUNK_OFFSET);
+	length = fta_get_uint(results, FBNIC_FW_WRITE_CHUNK_LENGTH);
+	cmpl_data->u.fw_update.offset = offset;
+	cmpl_data->u.fw_update.length = length;
+
+	complete(&cmpl_data->done);
+	fbnic_fw_put_cmpl(cmpl_data);
+
+	return 0;
+}
+
+static const struct fbnic_tlv_index fbnic_fw_finish_upgrade_req_index[] = {
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_FINISH_UPGRADE_ERROR),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_fw_finish_upgrade_req(void *opaque,
+						struct fbnic_tlv_msg **results)
+{
+	struct fbnic_fw_completion *cmpl_data;
+	struct fbnic_dev *fbd = opaque;
+	u32 msg_type;
+	s32 err;
+
+	/* Verify we have a completion pointer */
+	msg_type = FBNIC_TLV_MSG_ID_FW_WRITE_CHUNK_REQ;
+	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd, msg_type);
+	if (!cmpl_data)
+		return -ENOSPC;
+
+	/* Check for errors */
+	err = fta_get_sint(results, FBNIC_FW_FINISH_UPGRADE_ERROR);
+
+	/* Close out update by incrementing offset by length which should
+	 * match the total size of the component. Set length to 0 since no
+	 * new chunks will be requested.
+	 */
+	cmpl_data->u.fw_update.offset += cmpl_data->u.fw_update.length;
+	cmpl_data->u.fw_update.length = 0;
+
+	cmpl_data->result = err;
+	complete(&cmpl_data->done);
+	fbnic_fw_put_cmpl(cmpl_data);
+
+	return 0;
+}
+
+/**
+ * fbnic_fw_xmit_tsene_read_msg - Create and transmit a sensor read request
+ * @fbd: FBNIC device structure
+ * @cmpl_data: Completion data structure to store sensor response
+ *
+ * Asks the firmware to provide an update with the latest sensor data.
+ * The response will contain temperature and voltage readings.
+ *
+ * Return: 0 on success, negative error value on failure
+ */
+int fbnic_fw_xmit_tsene_read_msg(struct fbnic_dev *fbd,
+				 struct fbnic_fw_completion *cmpl_data)
+{
+	struct fbnic_tlv_msg *msg;
+	int err;
+
+	if (!fbnic_fw_present(fbd))
+		return -ENODEV;
+
+	msg = fbnic_tlv_msg_alloc(FBNIC_TLV_MSG_ID_TSENE_READ_REQ);
+	if (!msg)
+		return -ENOMEM;
+
+	err = fbnic_mbx_map_req_w_cmpl(fbd, msg, cmpl_data);
+	if (err)
+		goto free_message;
+
+	return 0;
+
+free_message:
+	free_page((unsigned long)msg);
+	return err;
+}
+
+static const struct fbnic_tlv_index fbnic_tsene_read_resp_index[] = {
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_THERM),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_VOLT),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_ERROR),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_tsene_read_resp(void *opaque,
+					  struct fbnic_tlv_msg **results)
+{
+	struct fbnic_fw_completion *cmpl_data;
+	struct fbnic_dev *fbd = opaque;
+	s32 err_resp;
+	int err = 0;
+
+	/* Verify we have a completion pointer to provide with data */
+	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd,
+					      FBNIC_TLV_MSG_ID_TSENE_READ_RESP);
+	if (!cmpl_data)
+		return -ENOSPC;
+
+	err_resp = fta_get_sint(results, FBNIC_FW_TSENE_ERROR);
+	if (err_resp)
+		goto msg_err;
+
+	if (!results[FBNIC_FW_TSENE_THERM] || !results[FBNIC_FW_TSENE_VOLT]) {
+		err = -EINVAL;
+		goto msg_err;
+	}
+
+	cmpl_data->u.tsene.millidegrees =
+		fta_get_sint(results, FBNIC_FW_TSENE_THERM);
+	cmpl_data->u.tsene.millivolts =
+		fta_get_sint(results, FBNIC_FW_TSENE_VOLT);
+
+msg_err:
+	cmpl_data->result = err_resp ? : err;
+	complete(&cmpl_data->done);
+	fbnic_fw_put_cmpl(cmpl_data);
+
+	return err;
+}
+
+static const struct fbnic_tlv_index fbnic_fw_log_req_index[] = {
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_LOG_MSEC),
+	FBNIC_TLV_ATTR_U64(FBNIC_FW_LOG_INDEX),
+	FBNIC_TLV_ATTR_STRING(FBNIC_FW_LOG_MSG, FBNIC_FW_LOG_MAX_SIZE),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_LOG_LENGTH),
+	FBNIC_TLV_ATTR_ARRAY(FBNIC_FW_LOG_MSEC_ARRAY),
+	FBNIC_TLV_ATTR_ARRAY(FBNIC_FW_LOG_INDEX_ARRAY),
+	FBNIC_TLV_ATTR_ARRAY(FBNIC_FW_LOG_MSG_ARRAY),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_process_log_array(struct fbnic_tlv_msg **results,
+				      u16 length, u16 arr_type_idx,
+				      u16 attr_type_idx,
+				      struct fbnic_tlv_msg **tlv_array_out)
+{
+	struct fbnic_tlv_msg *attr;
+	int attr_len;
+	int err;
+
+	if (!results[attr_type_idx])
+		return -EINVAL;
+
+	tlv_array_out[0] = results[attr_type_idx];
+
+	if (!length)
+		return 0;
+
+	if (!results[arr_type_idx])
+		return -EINVAL;
+
+	attr = results[arr_type_idx];
+	attr_len = le16_to_cpu(attr->hdr.len) / sizeof(u32) - 1;
+	err = fbnic_tlv_attr_parse_array(&attr[1], attr_len, &tlv_array_out[1],
+					 fbnic_fw_log_req_index,
+					 attr_type_idx,
+					 length);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static int fbnic_fw_parse_logs(struct fbnic_dev *fbd,
+			       struct fbnic_tlv_msg **msec_tlv,
+			       struct fbnic_tlv_msg **index_tlv,
+			       struct fbnic_tlv_msg **log_tlv,
+			       int count)
+{
+	int i;
+
+	for (i = 0; i < count; i++) {
+		char log[FBNIC_FW_LOG_MAX_SIZE];
+		ssize_t len;
+		u64 index;
+		u32 msec;
+		int err;
+
+		if (!msec_tlv[i] || !index_tlv[i] || !log_tlv[i]) {
+			dev_warn(fbd->dev, "Received log message with missing attributes!\n");
+			return -EINVAL;
+		}
+
+		index = fbnic_tlv_attr_get_signed(index_tlv[i], 0);
+		msec = fbnic_tlv_attr_get_signed(msec_tlv[i], 0);
+		len = fbnic_tlv_attr_get_string(log_tlv[i], log,
+						FBNIC_FW_LOG_MAX_SIZE);
+		if (len < 0)
+			return len;
+
+		err = fbnic_fw_log_write(fbd, index, msec, log);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static int fbnic_fw_parse_log_req(void *opaque,
+				  struct fbnic_tlv_msg **results)
+{
+	struct fbnic_tlv_msg *index_tlv[FBNIC_FW_MAX_LOG_HISTORY];
+	struct fbnic_tlv_msg *msec_tlv[FBNIC_FW_MAX_LOG_HISTORY];
+	struct fbnic_tlv_msg *log_tlv[FBNIC_FW_MAX_LOG_HISTORY];
+	struct fbnic_dev *fbd = opaque;
+	u16 length;
+	int err;
+
+	length = fta_get_uint(results, FBNIC_FW_LOG_LENGTH);
+	if (length >= FBNIC_FW_MAX_LOG_HISTORY)
+		return -E2BIG;
+
+	err = fbnic_fw_process_log_array(results, length,
+					 FBNIC_FW_LOG_MSEC_ARRAY,
+					 FBNIC_FW_LOG_MSEC, msec_tlv);
+	if (err)
+		return err;
+
+	err = fbnic_fw_process_log_array(results, length,
+					 FBNIC_FW_LOG_INDEX_ARRAY,
+					 FBNIC_FW_LOG_INDEX, index_tlv);
+	if (err)
+		return err;
+
+	err = fbnic_fw_process_log_array(results, length,
+					 FBNIC_FW_LOG_MSG_ARRAY,
+					 FBNIC_FW_LOG_MSG, log_tlv);
+	if (err)
+		return err;
+
+	err = fbnic_fw_parse_logs(fbd, msec_tlv, index_tlv, log_tlv,
+				  length + 1);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+int fbnic_fw_xmit_send_logs(struct fbnic_dev *fbd, bool enable,
+			    bool send_log_history)
+{
+	struct fbnic_tlv_msg *msg;
+	int err;
+
+	if (fbd->fw_cap.running.mgmt.version < MIN_FW_VER_CODE_LOG) {
+		dev_warn(fbd->dev, "Firmware version is too old to support firmware logs!\n");
+		return -EOPNOTSUPP;
+	}
+
+	msg = fbnic_tlv_msg_alloc(FBNIC_TLV_MSG_ID_LOG_SEND_LOGS_REQ);
+	if (!msg)
+		return -ENOMEM;
+
+	if (enable) {
+		err = fbnic_tlv_attr_put_flag(msg, FBNIC_SEND_LOGS);
+		if (err)
+			goto free_message;
+
+		/* Report request for version 1 of logs */
+		err = fbnic_tlv_attr_put_int(msg, FBNIC_SEND_LOGS_VERSION,
+					     FBNIC_FW_LOG_VERSION);
+		if (err)
+			goto free_message;
+
+		if (send_log_history) {
+			err = fbnic_tlv_attr_put_flag(msg,
+						      FBNIC_SEND_LOGS_HISTORY);
+			if (err)
+				goto free_message;
+		}
+	}
+
+	err = fbnic_mbx_map_tlv_msg(fbd, msg);
+	if (err)
+		goto free_message;
+
+	return 0;
+
+free_message:
+	free_page((unsigned long)msg);
+	return err;
+}
+
 static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 	FBNIC_TLV_PARSER(FW_CAP_RESP, fbnic_fw_cap_resp_index,
 			 fbnic_fw_parse_cap_resp),
@@ -662,6 +1204,21 @@ static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 			 fbnic_fw_parse_ownership_resp),
 	FBNIC_TLV_PARSER(HEARTBEAT_RESP, fbnic_heartbeat_resp_index,
 			 fbnic_fw_parse_heartbeat_resp),
+	FBNIC_TLV_PARSER(FW_START_UPGRADE_RESP,
+			 fbnic_fw_start_upgrade_resp_index,
+			 fbnic_fw_parse_fw_start_upgrade_resp),
+	FBNIC_TLV_PARSER(FW_WRITE_CHUNK_REQ,
+			 fbnic_fw_write_chunk_req_index,
+			 fbnic_fw_parse_fw_write_chunk_req),
+	FBNIC_TLV_PARSER(FW_FINISH_UPGRADE_REQ,
+			 fbnic_fw_finish_upgrade_req_index,
+			 fbnic_fw_parse_fw_finish_upgrade_req),
+	FBNIC_TLV_PARSER(TSENE_READ_RESP,
+			 fbnic_tsene_read_resp_index,
+			 fbnic_fw_parse_tsene_read_resp),
+	FBNIC_TLV_PARSER(LOG_MSG_REQ,
+			 fbnic_fw_log_req_index,
+			 fbnic_fw_parse_log_req),
 	FBNIC_TLV_MSG_ERROR
 };
 
@@ -738,6 +1295,7 @@ void fbnic_mbx_poll(struct fbnic_dev *fbd)
 
 int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 {
+	struct fbnic_fw_mbx *tx_mbx = &fbd->mbx[FBNIC_IPC_MBX_TX_IDX];
 	unsigned long timeout = jiffies + 10 * HZ + 1;
 	int err, i;
 
@@ -770,14 +1328,49 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 	if (err)
 		goto clean_mbx;
 
-	/* Use "1" to indicate we entered the state waiting for a response */
-	fbd->fw_cap.running.mgmt.version = 1;
+	/* Poll until we get a current management firmware version, use "1"
+	 * to indicate we entered the polling state waiting for a response
+	 */
+	for (fbd->fw_cap.running.mgmt.version = 1;
+	     fbd->fw_cap.running.mgmt.version < MIN_FW_VER_CODE;) {
+		if (!tx_mbx->ready)
+			err = -ENODEV;
+		if (err)
+			goto clean_mbx;
+
+		msleep(20);
+		fbnic_mbx_poll(fbd);
+
+		/* set err, but wait till mgmt.version check to report it */
+		if (!time_is_after_jiffies(timeout))
+			err = -ETIMEDOUT;
+	}
 
 	return 0;
 clean_mbx:
 	/* Cleanup Rx buffers and disable mailbox */
 	fbnic_mbx_clean(fbd);
 	return err;
+}
+
+static void __fbnic_fw_evict_cmpl(struct fbnic_fw_completion *cmpl_data)
+{
+	cmpl_data->result = -EPIPE;
+	complete(&cmpl_data->done);
+}
+
+static void fbnic_mbx_evict_all_cmpl(struct fbnic_dev *fbd)
+{
+	int i;
+
+	for (i = 0; i < FBNIC_MBX_CMPL_SLOTS; i++) {
+		struct fbnic_fw_completion *cmpl_data = fbd->cmpl_data[i];
+
+		if (cmpl_data)
+			__fbnic_fw_evict_cmpl(cmpl_data);
+	}
+
+	memset(fbd->cmpl_data, 0, sizeof(fbd->cmpl_data));
 }
 
 void fbnic_mbx_flush_tx(struct fbnic_dev *fbd)
@@ -796,6 +1389,9 @@ void fbnic_mbx_flush_tx(struct fbnic_dev *fbd)
 
 	/* Read tail to determine the last tail state for the ring */
 	tail = tx_mbx->tail;
+
+	/* Flush any completions as we are no longer processing Rx */
+	fbnic_mbx_evict_all_cmpl(fbd);
 
 	spin_unlock_irq(&fbd->fw_tx_lock);
 
@@ -825,4 +1421,24 @@ void fbnic_get_fw_ver_commit_str(struct fbnic_dev *fbd, char *fw_version,
 
 	fbnic_mk_full_fw_ver_str(mgmt->version, delim, mgmt->commit,
 				 fw_version, str_sz);
+}
+
+struct fbnic_fw_completion *fbnic_fw_alloc_cmpl(u32 msg_type)
+{
+	struct fbnic_fw_completion *cmpl;
+
+	cmpl = kzalloc(sizeof(*cmpl), GFP_KERNEL);
+	if (!cmpl)
+		return NULL;
+
+	cmpl->msg_type = msg_type;
+	init_completion(&cmpl->done);
+	kref_init(&cmpl->ref_count);
+
+	return cmpl;
+}
+
+void fbnic_fw_put_cmpl(struct fbnic_fw_completion *fw_cmpl)
+{
+	kref_put(&fw_cmpl->ref_count, fbnic_fw_release_cmpl_data);
 }

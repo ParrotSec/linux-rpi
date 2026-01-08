@@ -29,7 +29,14 @@
 #include "flask.h"
 #include "avc.h"
 
-struct task_security_struct {
+struct avdc_entry {
+	u32 isid; /* inode SID */
+	u32 allowed; /* allowed permission bitmask */
+	u32 audited; /* audited permission bitmask */
+	bool permissive; /* AVC permissive flag */
+};
+
+struct cred_security_struct {
 	u32 osid; /* SID prior to last execve */
 	u32 sid; /* current SID */
 	u32 exec_sid; /* exec SID */
@@ -37,6 +44,25 @@ struct task_security_struct {
 	u32 keycreate_sid; /* keycreate SID */
 	u32 sockcreate_sid; /* fscreate SID */
 } __randomize_layout;
+
+struct task_security_struct {
+#define TSEC_AVDC_DIR_SIZE (1 << 2)
+	struct {
+		u32 sid; /* current SID for cached entries */
+		u32 seqno; /* AVC sequence number */
+		unsigned int dir_spot; /* dir cache index to check first */
+		struct avdc_entry dir[TSEC_AVDC_DIR_SIZE]; /* dir entries */
+		bool permissive_neveraudit; /* permissive and neveraudit */
+	} avdcache;
+} __randomize_layout;
+
+static inline bool task_avdcache_permnoaudit(struct task_security_struct *tsec,
+					     u32 sid)
+{
+	return (tsec->avdcache.permissive_neveraudit &&
+		sid == tsec->avdcache.sid &&
+		tsec->avdcache.seqno == avc_policy_seqno());
+}
 
 enum label_initialized {
 	LABEL_INVALID, /* invalid or not initialized */
@@ -82,7 +108,7 @@ struct ipc_security_struct {
 };
 
 struct netif_security_struct {
-	struct net *ns; /* network namespace */
+	const struct net *ns; /* network namespace */
 	int ifindex; /* device index */
 	u32 sid; /* SID for this interface */
 };
@@ -149,9 +175,15 @@ struct perf_event_security_struct {
 };
 
 extern struct lsm_blob_sizes selinux_blob_sizes;
-static inline struct task_security_struct *selinux_cred(const struct cred *cred)
+static inline struct cred_security_struct *selinux_cred(const struct cred *cred)
 {
 	return cred->security + selinux_blob_sizes.lbs_cred;
+}
+
+static inline struct task_security_struct *
+selinux_task(const struct task_struct *task)
+{
+	return task->security + selinux_blob_sizes.lbs_task;
 }
 
 static inline struct file_security_struct *selinux_file(const struct file *file)
@@ -184,7 +216,7 @@ selinux_ipc(const struct kern_ipc_perm *ipc)
  */
 static inline u32 current_sid(void)
 {
-	const struct task_security_struct *tsec = selinux_cred(current_cred());
+	const struct cred_security_struct *tsec = selinux_cred(current_cred());
 
 	return tsec->sid;
 }

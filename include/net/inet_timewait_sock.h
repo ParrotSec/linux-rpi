@@ -45,6 +45,8 @@ struct inet_timewait_sock {
 #define tw_node			__tw_common.skc_nulls_node
 #define tw_bind_node		__tw_common.skc_bind_node
 #define tw_refcnt		__tw_common.skc_refcnt
+#define tw_tx_queue_mapping	__tw_common.skc_tx_queue_mapping
+#define tw_rx_queue_mapping	__tw_common.skc_rx_queue_mapping
 #define tw_hash			__tw_common.skc_hash
 #define tw_prot			__tw_common.skc_prot
 #define tw_net			__tw_common.skc_net
@@ -68,10 +70,15 @@ struct inet_timewait_sock {
 	unsigned int		tw_transparent  : 1,
 				tw_flowlabel	: 20,
 				tw_usec_ts	: 1,
-				tw_pad		: 2,	/* 2 bits hole */
+				tw_connect_bind	: 1,
+				tw_pad		: 1,	/* 1 bit hole */
 				tw_tos		: 8;
 	u32			tw_txhash;
 	u32			tw_priority;
+	/**
+	 * @tw_reuse_stamp: Time of entry into %TCP_TIME_WAIT state in msec.
+	 */
+	u32			tw_entry_stamp;
 	struct timer_list	tw_timer;
 	struct inet_bind_bucket	*tw_tb;
 	struct inet_bind2_bucket	*tw_tb2;

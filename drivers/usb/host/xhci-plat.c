@@ -152,7 +152,7 @@ int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev, const s
 	int			ret;
 	int			irq;
 	struct xhci_plat_priv	*priv = NULL;
-	bool			of_match;
+	const struct of_device_id *of_match;
 
 	if (usb_disabled())
 		return -ENODEV;
@@ -171,6 +171,7 @@ int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev, const s
 		return ret;
 
 	pm_runtime_set_active(&pdev->dev);
+	pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_noresume(&pdev->dev);
 
@@ -267,6 +268,8 @@ int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev, const s
 
 		device_property_read_u32(tmpdev, "imod-interval-ns",
 					 &xhci->imod_interval);
+		device_property_read_u16(tmpdev, "num-hc-interrupters",
+					 &xhci->max_interrupters);
 	}
 
 	/*
@@ -326,10 +329,13 @@ int xhci_plat_probe(struct platform_device *pdev, struct device *sysdev, const s
 	}
 
 	usb3_hcd = xhci_get_usb3_hcd(xhci);
-	if (usb3_hcd && HCC_MAX_PSA(xhci->hcc_params) >= 4)
+	if (usb3_hcd && HCC_MAX_PSA(xhci->hcc_params) >= 4 &&
+	    !(xhci->quirks & XHCI_BROKEN_STREAMS))
 		usb3_hcd->can_do_streams = 1;
 
 	if (xhci->shared_hcd) {
+		xhci->shared_hcd->rsrc_start = hcd->rsrc_start;
+		xhci->shared_hcd->rsrc_len = hcd->rsrc_len;
 		ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
 		if (ret)
 			goto put_usb3_hcd;
@@ -477,9 +483,10 @@ static int xhci_plat_suspend(struct device *dev)
 	return 0;
 }
 
-static int xhci_plat_resume_common(struct device *dev, struct pm_message pmsg)
+static int xhci_plat_resume_common(struct device *dev, bool power_lost)
 {
 	struct usb_hcd	*hcd = dev_get_drvdata(dev);
+	struct xhci_plat_priv *priv = hcd_to_xhci_priv(hcd);
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	int ret;
 
@@ -499,7 +506,7 @@ static int xhci_plat_resume_common(struct device *dev, struct pm_message pmsg)
 	if (ret)
 		goto disable_clks;
 
-	ret = xhci_resume(xhci, pmsg);
+	ret = xhci_resume(xhci, power_lost || priv->power_lost, false);
 	if (ret)
 		goto disable_clks;
 
@@ -520,12 +527,12 @@ disable_clks:
 
 static int xhci_plat_resume(struct device *dev)
 {
-	return xhci_plat_resume_common(dev, PMSG_RESUME);
+	return xhci_plat_resume_common(dev, false);
 }
 
 static int xhci_plat_restore(struct device *dev)
 {
-	return xhci_plat_resume_common(dev, PMSG_RESTORE);
+	return xhci_plat_resume_common(dev, true);
 }
 
 static int __maybe_unused xhci_plat_runtime_suspend(struct device *dev)
@@ -546,7 +553,7 @@ static int __maybe_unused xhci_plat_runtime_resume(struct device *dev)
 	struct usb_hcd  *hcd = dev_get_drvdata(dev);
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 
-	return xhci_resume(xhci, PMSG_AUTO_RESUME);
+	return xhci_resume(xhci, false, true);
 }
 
 const struct dev_pm_ops xhci_plat_pm_ops = {
@@ -567,6 +574,7 @@ EXPORT_SYMBOL_GPL(xhci_plat_pm_ops);
 static const struct acpi_device_id usb_xhci_acpi_match[] = {
 	/* XHCI-compliant USB Controller */
 	{ "PNP0D10", },
+	{ "PNP0D15", },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, usb_xhci_acpi_match);
@@ -574,7 +582,7 @@ MODULE_DEVICE_TABLE(acpi, usb_xhci_acpi_match);
 
 static struct platform_driver usb_generic_xhci_driver = {
 	.probe	= xhci_generic_plat_probe,
-	.remove_new = xhci_plat_remove,
+	.remove = xhci_plat_remove,
 	.shutdown = usb_hcd_platform_shutdown,
 	.driver	= {
 		.name = "xhci-hcd",

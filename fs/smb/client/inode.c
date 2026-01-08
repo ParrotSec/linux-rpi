@@ -598,6 +598,17 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
 		} else if (memcmp("IntxCHR\0", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Char device\n");
@@ -609,6 +620,17 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				__u64 mnr; /* minor */
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
 		} else if (memcmp("LnxSOCK", pbuf, 8) == 0) {
@@ -1181,18 +1203,17 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 			goto out;
 		}
 		break;
-	case IO_REPARSE_TAG_MOUNT_POINT:
-		cifs_create_junction_fattr(fattr, sb);
-		rc = 0;
-		goto out;
 	default:
 		/* Check for cached reparse point data */
 		if (data->symlink_target || data->reparse.buf) {
 			rc = 0;
-		} else if (iov && server->ops->parse_reparse_point) {
-			rc = server->ops->parse_reparse_point(cifs_sb,
-							      full_path,
-							      iov, data);
+		} else if (iov && server->ops->get_reparse_point_buffer) {
+			struct reparse_data_buffer *reparse_buf;
+			u32 reparse_len;
+
+			reparse_buf = server->ops->get_reparse_point_buffer(iov, &reparse_len);
+			rc = parse_reparse_point(reparse_buf, reparse_len,
+						 cifs_sb, full_path, data);
 			/*
 			 * If the reparse point was not handled but it is the
 			 * name surrogate which points to directory, then treat
@@ -1216,6 +1237,11 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 			 */
 			if (rc == -EOPNOTSUPP)
 				rc = 0;
+		}
+
+		if (data->reparse.tag == IO_REPARSE_TAG_SYMLINK && !rc) {
+			bool directory = le32_to_cpu(data->fi.Attributes) & ATTR_DIRECTORY;
+			rc = smb2_fix_symlink_target_type(&data->symlink_target, directory, cifs_sb);
 		}
 		break;
 	}
@@ -1905,7 +1931,7 @@ cifs_drop_nlink(struct inode *inode)
  * but will return the EACCES to the caller. Note that the VFS does not call
  * unlink on negative dentries currently.
  */
-int cifs_unlink(struct inode *dir, struct dentry *dentry)
+static int __cifs_unlink(struct inode *dir, struct dentry *dentry, bool sillyrename)
 {
 	int rc = 0;
 	unsigned int xid;
@@ -1917,14 +1943,23 @@ int cifs_unlink(struct inode *dir, struct dentry *dentry)
 	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
 	struct tcon_link *tlink;
 	struct cifs_tcon *tcon;
+	__u32 dosattr = 0, origattr = 0;
 	struct TCP_Server_Info *server;
 	struct iattr *attrs = NULL;
-	__u32 dosattr = 0, origattr = 0;
+	bool rehash = false;
 
 	cifs_dbg(FYI, "cifs_unlink, dir=0x%p, dentry=0x%p\n", dir, dentry);
 
 	if (unlikely(cifs_forced_shutdown(cifs_sb)))
 		return -EIO;
+
+	/* Unhash dentry in advance to prevent any concurrent opens */
+	spin_lock(&dentry->d_lock);
+	if (!d_unhashed(dentry)) {
+		__d_drop(dentry);
+		rehash = true;
+	}
+	spin_unlock(&dentry->d_lock);
 
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
@@ -1949,7 +1984,7 @@ int cifs_unlink(struct inode *dir, struct dentry *dentry)
 	}
 
 	netfs_wait_for_outstanding_io(inode);
-	cifs_close_deferred_file_under_dentry(tcon, full_path);
+	cifs_close_deferred_file_under_dentry(tcon, dentry);
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 	if (cap_unix(tcon->ses) && (CIFS_UNIX_POSIX_PATH_OPS_CAP &
 				le64_to_cpu(tcon->fsUnixInfo.Capability))) {
@@ -1968,7 +2003,24 @@ retry_std_delete:
 		goto psx_del_no_retry;
 	}
 
-	rc = server->ops->unlink(xid, tcon, full_path, cifs_sb, dentry);
+	/* For SMB2+, if the file is open, we always perform a silly rename.
+	 *
+	 * We check for d_count() right after calling
+	 * cifs_close_deferred_file_under_dentry() to make sure that the
+	 * dentry's refcount gets dropped in case the file had any deferred
+	 * close.
+	 */
+	if (!sillyrename && server->vals->protocol_id > SMB10_PROT_ID) {
+		spin_lock(&dentry->d_lock);
+		if (d_count(dentry) > 1)
+			sillyrename = true;
+		spin_unlock(&dentry->d_lock);
+	}
+
+	if (sillyrename)
+		rc = -EBUSY;
+	else
+		rc = server->ops->unlink(xid, tcon, full_path, cifs_sb, dentry);
 
 psx_del_no_retry:
 	if (!rc) {
@@ -1977,7 +2029,8 @@ psx_del_no_retry:
 			cifs_drop_nlink(inode);
 		}
 	} else if (rc == -ENOENT) {
-		d_drop(dentry);
+		if (simple_positive(dentry))
+			d_delete(dentry);
 	} else if (rc == -EBUSY) {
 		if (server->ops->rename_pending_delete) {
 			rc = server->ops->rename_pending_delete(full_path,
@@ -2030,7 +2083,14 @@ unlink_out:
 	kfree(attrs);
 	free_xid(xid);
 	cifs_put_tlink(tlink);
+	if (rehash)
+		d_rehash(dentry);
 	return rc;
+}
+
+int cifs_unlink(struct inode *dir, struct dentry *dentry)
+{
+	return __cifs_unlink(dir, dentry, false);
 }
 
 static int
@@ -2190,8 +2250,8 @@ posix_mkdir_get_info:
 }
 #endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 
-int cifs_mkdir(struct mnt_idmap *idmap, struct inode *inode,
-	       struct dentry *direntry, umode_t mode)
+struct dentry *cifs_mkdir(struct mnt_idmap *idmap, struct inode *inode,
+			  struct dentry *direntry, umode_t mode)
 {
 	int rc = 0;
 	unsigned int xid;
@@ -2207,10 +2267,10 @@ int cifs_mkdir(struct mnt_idmap *idmap, struct inode *inode,
 
 	cifs_sb = CIFS_SB(inode->i_sb);
 	if (unlikely(cifs_forced_shutdown(cifs_sb)))
-		return -EIO;
+		return ERR_PTR(-EIO);
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
-		return PTR_ERR(tlink);
+		return ERR_CAST(tlink);
 	tcon = tlink_tcon(tlink);
 
 	xid = get_xid();
@@ -2266,7 +2326,7 @@ mkdir_out:
 	free_dentry_path(page);
 	free_xid(xid);
 	cifs_put_tlink(tlink);
-	return rc;
+	return ERR_PTR(rc);
 }
 
 int cifs_rmdir(struct inode *inode, struct dentry *direntry)
@@ -2320,14 +2380,16 @@ int cifs_rmdir(struct inode *inode, struct dentry *direntry)
 	rc = server->ops->rmdir(xid, tcon, full_path, cifs_sb);
 	cifs_put_tlink(tlink);
 
+	cifsInode = CIFS_I(d_inode(direntry));
+
 	if (!rc) {
+		set_bit(CIFS_INO_DELETE_PENDING, &cifsInode->flags);
 		spin_lock(&d_inode(direntry)->i_lock);
 		i_size_write(d_inode(direntry), 0);
 		clear_nlink(d_inode(direntry));
 		spin_unlock(&d_inode(direntry)->i_lock);
 	}
 
-	cifsInode = CIFS_I(d_inode(direntry));
 	/* force revalidate to go get info when needed */
 	cifsInode->time = 0;
 
@@ -2369,8 +2431,10 @@ cifs_do_rename(const unsigned int xid, struct dentry *from_dentry,
 	tcon = tlink_tcon(tlink);
 	server = tcon->ses->server;
 
-	if (!server->ops->rename)
-		return -ENOSYS;
+	if (!server->ops->rename) {
+		rc = -ENOSYS;
+		goto do_rename_exit;
+	}
 
 	/* try path-based rename first */
 	rc = server->ops->rename(xid, tcon, from_dentry,
@@ -2391,6 +2455,13 @@ cifs_do_rename(const unsigned int xid, struct dentry *from_dentry,
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 	/* open-file renames don't work across directories */
 	if (to_dentry->d_parent != from_dentry->d_parent)
+		goto do_rename_exit;
+
+	/*
+	 * CIFSSMBRenameOpenFile() uses SMB_SET_FILE_RENAME_INFORMATION
+	 * which is SMB PASSTHROUGH level.
+	 */
+	if (!(tcon->ses->capabilities & CAP_INFOLEVEL_PASSTHRU))
 		goto do_rename_exit;
 
 	oparms = (struct cifs_open_parms) {
@@ -2425,10 +2496,12 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 	     struct dentry *target_dentry, unsigned int flags)
 {
 	const char *from_name, *to_name;
+	struct TCP_Server_Info *server;
 	void *page1, *page2;
 	struct cifs_sb_info *cifs_sb;
 	struct tcon_link *tlink;
 	struct cifs_tcon *tcon;
+	bool rehash = false;
 	unsigned int xid;
 	int rc, tmprc;
 	int retry_count = 0;
@@ -2444,10 +2517,22 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 	if (unlikely(cifs_forced_shutdown(cifs_sb)))
 		return -EIO;
 
+	/*
+	 * Prevent any concurrent opens on the target by unhashing the dentry.
+	 * VFS already unhashes the target when renaming directories.
+	 */
+	if (d_is_positive(target_dentry) && !d_is_dir(target_dentry)) {
+		if (!d_unhashed(target_dentry)) {
+			d_drop(target_dentry);
+			rehash = true;
+		}
+	}
+
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
 		return PTR_ERR(tlink);
 	tcon = tlink_tcon(tlink);
+	server = tcon->ses->server;
 
 	page1 = alloc_dentry_path();
 	page2 = alloc_dentry_path();
@@ -2465,10 +2550,10 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 		goto cifs_rename_exit;
 	}
 
-	cifs_close_deferred_file_under_dentry(tcon, from_name);
+	cifs_close_deferred_file_under_dentry(tcon, source_dentry);
 	if (d_inode(target_dentry) != NULL) {
 		netfs_wait_for_outstanding_io(d_inode(target_dentry));
-		cifs_close_deferred_file_under_dentry(tcon, to_name);
+		cifs_close_deferred_file_under_dentry(tcon, target_dentry);
 	}
 
 	rc = cifs_do_rename(xid, source_dentry, from_name, target_dentry,
@@ -2485,6 +2570,8 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 		}
 	}
 
+	if (!rc)
+		rehash = false;
 	/*
 	 * No-replace is the natural behavior for CIFS, so skip unlink hacks.
 	 */
@@ -2532,23 +2619,61 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 
 unlink_target:
 #endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
-
-	/* Try unlinking the target dentry if it's not negative */
-	if (d_really_is_positive(target_dentry) && (rc == -EACCES || rc == -EEXIST)) {
-		if (d_is_dir(target_dentry))
-			tmprc = cifs_rmdir(target_dir, target_dentry);
-		else
-			tmprc = cifs_unlink(target_dir, target_dentry);
-		if (tmprc)
-			goto cifs_rename_exit;
-		rc = cifs_do_rename(xid, source_dentry, from_name,
-				    target_dentry, to_name);
+	if (d_really_is_positive(target_dentry)) {
+		if (!rc) {
+			struct inode *inode = d_inode(target_dentry);
+			/*
+			 * Samba and ksmbd servers allow renaming a target
+			 * directory that is open, so make sure to update
+			 * ->i_nlink and then mark it as delete pending.
+			 */
+			if (S_ISDIR(inode->i_mode)) {
+				drop_cached_dir_by_name(xid, tcon, to_name, cifs_sb);
+				spin_lock(&inode->i_lock);
+				i_size_write(inode, 0);
+				clear_nlink(inode);
+				spin_unlock(&inode->i_lock);
+				set_bit(CIFS_INO_DELETE_PENDING, &CIFS_I(inode)->flags);
+				CIFS_I(inode)->time = 0; /* force reval */
+				inode_set_ctime_current(inode);
+				inode_set_mtime_to_ts(inode, inode_set_ctime_current(inode));
+			}
+		} else if (rc == -EACCES || rc == -EEXIST) {
+			/*
+			 * Rename failed, possibly due to a busy target.
+			 * Retry it by unliking the target first.
+			 */
+			if (d_is_dir(target_dentry)) {
+				tmprc = cifs_rmdir(target_dir, target_dentry);
+			} else {
+				tmprc = __cifs_unlink(target_dir, target_dentry,
+						      server->vals->protocol_id > SMB10_PROT_ID);
+			}
+			if (tmprc) {
+				/*
+				 * Some servers will return STATUS_ACCESS_DENIED
+				 * or STATUS_DIRECTORY_NOT_EMPTY when failing to
+				 * rename a non-empty directory.  Make sure to
+				 * propagate the appropriate error back to
+				 * userspace.
+				 */
+				if (tmprc == -EEXIST || tmprc == -ENOTEMPTY)
+					rc = tmprc;
+				goto cifs_rename_exit;
+			}
+			rc = cifs_do_rename(xid, source_dentry, from_name,
+					    target_dentry, to_name);
+			if (!rc)
+				rehash = false;
+		}
 	}
 
 	/* force revalidate to go get info when needed */
 	CIFS_I(source_dir)->time = CIFS_I(target_dir)->time = 0;
 
 cifs_rename_exit:
+	if (rehash)
+		d_rehash(target_dentry);
 	kfree(info_buf_source);
 	free_dentry_path(page2);
 	free_dentry_path(page1);
@@ -2566,6 +2691,8 @@ cifs_dentry_needs_reval(struct dentry *dentry)
 	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
 	struct cached_fid *cfid = NULL;
 
+	if (test_bit(CIFS_INO_DELETE_PENDING, &cifs_i->flags))
+		return false;
 	if (cifs_i->time == 0)
 		return true;
 
@@ -2877,23 +3004,6 @@ int cifs_fiemap(struct inode *inode, struct fiemap_extent_info *fei, u64 start,
 	return -EOPNOTSUPP;
 }
 
-int cifs_truncate_page(struct address_space *mapping, loff_t from)
-{
-	pgoff_t index = from >> PAGE_SHIFT;
-	unsigned offset = from & (PAGE_SIZE - 1);
-	struct page *page;
-	int rc = 0;
-
-	page = grab_cache_page(mapping, index);
-	if (!page)
-		return -ENOMEM;
-
-	zero_user_segment(page, offset, PAGE_SIZE);
-	unlock_page(page);
-	put_page(page);
-	return rc;
-}
-
 void cifs_setsize(struct inode *inode, loff_t offset)
 {
 	struct cifsInodeInfo *cifs_i = CIFS_I(inode);
@@ -2988,8 +3098,6 @@ set_size_out:
 		 */
 		attrs->ia_ctime = attrs->ia_mtime = current_time(inode);
 		attrs->ia_valid |= ATTR_CTIME | ATTR_MTIME;
-
-		cifs_truncate_page(inode->i_mapping, inode->i_size);
 	}
 
 	return rc;

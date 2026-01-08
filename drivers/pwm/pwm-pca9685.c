@@ -8,7 +8,6 @@
  * based on the pwm-twl-led.c driver
  */
 
-#include <linux/acpi.h>
 #include <linux/gpio/driver.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
@@ -62,6 +61,8 @@
 #define MODE1_SUB2		BIT(2)
 #define MODE1_SUB1		BIT(3)
 #define MODE1_SLEEP		BIT(4)
+#define MODE1_AI		BIT(5)
+
 #define MODE2_INVRT		BIT(4)
 #define MODE2_OUTDRV		BIT(2)
 
@@ -132,6 +133,19 @@ static int pca9685_write_reg(struct pwm_chip *chip, unsigned int reg, unsigned i
 	return err;
 }
 
+static int pca9685_write_4reg(struct pwm_chip *chip, unsigned int reg, u8 val[4])
+{
+	struct pca9685 *pca = to_pca(chip);
+	struct device *dev = pwmchip_parent(chip);
+	int err;
+
+	err = regmap_bulk_write(pca->regmap, reg, val, 4);
+	if (err)
+		dev_err(dev, "regmap_write to register 0x%x failed: %pe\n", reg, ERR_PTR(err));
+
+	return err;
+}
+
 /* Helper function to set the duty cycle ratio to duty/4096 (e.g. duty=2048 -> 50%) */
 static void pca9685_pwm_set_duty(struct pwm_chip *chip, int channel, unsigned int duty)
 {
@@ -144,11 +158,9 @@ static void pca9685_pwm_set_duty(struct pwm_chip *chip, int channel, unsigned in
 		return;
 	} else if (duty >= PCA9685_COUNTER_RANGE) {
 		/* Set the full ON bit and clear the full OFF bit */
-		pca9685_write_reg(chip, REG_ON_H(channel), LED_FULL);
-		pca9685_write_reg(chip, REG_OFF_H(channel), 0);
+		pca9685_write_4reg(chip, REG_ON_L(channel), (u8[4]){ 0, LED_FULL, 0, 0 });
 		return;
 	}
-
 
 	if (pwm->state.usage_power && channel < PCA9685_MAXCHAN) {
 		/*
@@ -164,12 +176,9 @@ static void pca9685_pwm_set_duty(struct pwm_chip *chip, int channel, unsigned in
 
 	off = (on + duty) % PCA9685_COUNTER_RANGE;
 
-	/* Set ON time (clears full ON bit) */
-	pca9685_write_reg(chip, REG_ON_L(channel), on & 0xff);
-	pca9685_write_reg(chip, REG_ON_H(channel), (on >> 8) & 0xf);
-	/* Set OFF time (clears full OFF bit) */
-	pca9685_write_reg(chip, REG_OFF_L(channel), off & 0xff);
-	pca9685_write_reg(chip, REG_OFF_H(channel), (off >> 8) & 0xf);
+	/* implicitly clear full ON and full OFF bit */
+	pca9685_write_4reg(chip, REG_ON_L(channel),
+			   (u8[4]){ on & 0xff, (on >> 8) & 0xf, off & 0xff, (off >> 8) & 0xf });
 }
 
 static unsigned int pca9685_pwm_get_duty(struct pwm_chip *chip, int channel)
@@ -264,12 +273,14 @@ static int pca9685_pwm_gpio_get(struct gpio_chip *gpio, unsigned int offset)
 	return pca9685_pwm_get_duty(chip, offset) != 0;
 }
 
-static void pca9685_pwm_gpio_set(struct gpio_chip *gpio, unsigned int offset,
-				 int value)
+static int pca9685_pwm_gpio_set(struct gpio_chip *gpio, unsigned int offset,
+				int value)
 {
 	struct pwm_chip *chip = gpiochip_get_data(gpio);
 
 	pca9685_pwm_set_duty(chip, offset, value ? PCA9685_COUNTER_RANGE : 0);
+
+	return 0;
 }
 
 static void pca9685_pwm_gpio_free(struct gpio_chip *gpio, unsigned int offset)
@@ -543,9 +554,8 @@ static int pca9685_pwm_probe(struct i2c_client *client)
 
 	mutex_init(&pca->lock);
 
-	ret = pca9685_read_reg(chip, PCA9685_MODE2, &reg);
-	if (ret)
-		return ret;
+	/* clear MODE2_OCH */
+	reg = 0;
 
 	if (device_property_read_bool(&client->dev, "invert"))
 		reg |= MODE2_INVRT;
@@ -561,16 +571,19 @@ static int pca9685_pwm_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
-	/* Disable all LED ALLCALL and SUBx addresses to avoid bus collisions */
+	/*
+	 * Disable all LED ALLCALL and SUBx addresses to avoid bus collisions,
+	 * enable Auto-Increment.
+	 */
 	pca9685_read_reg(chip, PCA9685_MODE1, &reg);
 	reg &= ~(MODE1_ALLCALL | MODE1_SUB1 | MODE1_SUB2 | MODE1_SUB3);
+	reg |= MODE1_AI;
 	pca9685_write_reg(chip, PCA9685_MODE1, reg);
 
 	/* Reset OFF/ON registers to POR default */
-	pca9685_write_reg(chip, PCA9685_ALL_LED_OFF_L, 0);
-	pca9685_write_reg(chip, PCA9685_ALL_LED_OFF_H, LED_FULL);
-	pca9685_write_reg(chip, PCA9685_ALL_LED_ON_L, 0);
-	pca9685_write_reg(chip, PCA9685_ALL_LED_ON_H, LED_FULL);
+	ret = pca9685_write_4reg(chip, PCA9685_ALL_LED_ON_L, (u8[]){ 0, LED_FULL, 0, LED_FULL });
+	if (ret < 0)
+		return dev_err_probe(&client->dev, ret, "Failed to reset ON/OFF registers\n");
 
 	chip->ops = &pca9685_pwm_ops;
 
@@ -639,21 +652,17 @@ static const struct i2c_device_id pca9685_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, pca9685_id);
 
-#ifdef CONFIG_ACPI
 static const struct acpi_device_id pca9685_acpi_ids[] = {
 	{ "INT3492", 0 },
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(acpi, pca9685_acpi_ids);
-#endif
 
-#ifdef CONFIG_OF
 static const struct of_device_id pca9685_dt_ids[] = {
 	{ .compatible = "nxp,pca9685-pwm", },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, pca9685_dt_ids);
-#endif
 
 static const struct dev_pm_ops pca9685_pwm_pm = {
 	SET_RUNTIME_PM_OPS(pca9685_pwm_runtime_suspend,
@@ -663,8 +672,8 @@ static const struct dev_pm_ops pca9685_pwm_pm = {
 static struct i2c_driver pca9685_i2c_driver = {
 	.driver = {
 		.name = "pca9685-pwm",
-		.acpi_match_table = ACPI_PTR(pca9685_acpi_ids),
-		.of_match_table = of_match_ptr(pca9685_dt_ids),
+		.acpi_match_table = pca9685_acpi_ids,
+		.of_match_table = pca9685_dt_ids,
 		.pm = &pca9685_pwm_pm,
 	},
 	.probe = pca9685_pwm_probe,

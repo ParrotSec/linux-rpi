@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <sched.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -25,15 +26,27 @@ static uint32_t last_guest_seed;
 
 static int vcpu_mmap_sz(void);
 
-int open_path_or_exit(const char *path, int flags)
+int __open_path_or_exit(const char *path, int flags, const char *enoent_help)
 {
 	int fd;
 
 	fd = open(path, flags);
-	__TEST_REQUIRE(fd >= 0 || errno != ENOENT, "Cannot open %s: %s", path, strerror(errno));
-	TEST_ASSERT(fd >= 0, "Failed to open '%s'", path);
+	if (fd < 0)
+		goto error;
 
 	return fd;
+
+error:
+	if (errno == EACCES || errno == ENOENT)
+		ksft_exit_skip("- Cannot open '%s': %s.  %s\n",
+			       path, strerror(errno),
+			       errno == EACCES ? "Root required?" : enoent_help);
+	TEST_FAIL("Failed to open '%s'", path);
+}
+
+int open_path_or_exit(const char *path, int flags)
+{
+	return __open_path_or_exit(path, flags, "");
 }
 
 /*
@@ -47,7 +60,7 @@ int open_path_or_exit(const char *path, int flags)
  */
 static int _open_kvm_dev_path_or_exit(int flags)
 {
-	return open_path_or_exit(KVM_DEV_PATH, flags);
+	return __open_path_or_exit(KVM_DEV_PATH, flags, "Is KVM loaded and enabled?");
 }
 
 int open_kvm_dev_path_or_exit(void)
@@ -62,6 +75,9 @@ static ssize_t get_module_param(const char *module_name, const char *param,
 	char path[path_size];
 	ssize_t bytes_read;
 	int fd, r;
+
+	/* Verify KVM is loaded, to provide a more helpful SKIP message. */
+	close(open_kvm_dev_path_or_exit());
 
 	r = snprintf(path, path_size, "/sys/module/%s/parameters/%s",
 		     module_name, param);
@@ -196,6 +212,11 @@ static void vm_open(struct kvm_vm *vm)
 
 	vm->fd = __kvm_ioctl(vm->kvm_fd, KVM_CREATE_VM, (void *)vm->type);
 	TEST_ASSERT(vm->fd >= 0, KVM_IOCTL_ERROR(KVM_CREATE_VM, vm->fd));
+
+	if (kvm_has_cap(KVM_CAP_BINARY_STATS_FD))
+		vm->stats.fd = vm_get_stats_fd(vm);
+	else
+		vm->stats.fd = -1;
 }
 
 const char *vm_guest_mode_string(uint32_t i)
@@ -216,6 +237,7 @@ const char *vm_guest_mode_string(uint32_t i)
 		[VM_MODE_P36V48_4K]	= "PA-bits:36,  VA-bits:48,  4K pages",
 		[VM_MODE_P36V48_16K]	= "PA-bits:36,  VA-bits:48, 16K pages",
 		[VM_MODE_P36V48_64K]	= "PA-bits:36,  VA-bits:48, 64K pages",
+		[VM_MODE_P47V47_16K]	= "PA-bits:47,  VA-bits:47, 16K pages",
 		[VM_MODE_P36V47_16K]	= "PA-bits:36,  VA-bits:47, 16K pages",
 	};
 	_Static_assert(sizeof(strings)/sizeof(char *) == NUM_VM_MODES,
@@ -242,6 +264,7 @@ const struct vm_guest_mode_params vm_guest_mode_params[] = {
 	[VM_MODE_P36V48_4K]	= { 36, 48,  0x1000, 12 },
 	[VM_MODE_P36V48_16K]	= { 36, 48,  0x4000, 14 },
 	[VM_MODE_P36V48_64K]	= { 36, 48, 0x10000, 16 },
+	[VM_MODE_P47V47_16K]	= { 47, 47,  0x4000, 14 },
 	[VM_MODE_P36V47_16K]	= { 36, 47,  0x4000, 14 },
 };
 _Static_assert(sizeof(vm_guest_mode_params)/sizeof(struct vm_guest_mode_params) == NUM_VM_MODES,
@@ -313,6 +336,7 @@ struct kvm_vm *____vm_create(struct vm_shape shape)
 	case VM_MODE_P36V48_16K:
 		vm->pgtable_levels = 4;
 		break;
+	case VM_MODE_P47V47_16K:
 	case VM_MODE_P36V47_16K:
 		vm->pgtable_levels = 3;
 		break;
@@ -406,6 +430,47 @@ static uint64_t vm_nr_pages_required(enum vm_guest_mode mode,
 	return vm_adjust_num_guest_pages(mode, nr_pages);
 }
 
+void kvm_set_files_rlimit(uint32_t nr_vcpus)
+{
+	/*
+	 * Each vCPU will open two file descriptors: the vCPU itself and the
+	 * vCPU's binary stats file descriptor.  Add an arbitrary amount of
+	 * buffer for all other files a test may open.
+	 */
+	int nr_fds_wanted = nr_vcpus * 2 + 100;
+	struct rlimit rl;
+
+	/*
+	 * Check that we're allowed to open nr_fds_wanted file descriptors and
+	 * try raising the limits if needed.
+	 */
+	TEST_ASSERT(!getrlimit(RLIMIT_NOFILE, &rl), "getrlimit() failed!");
+
+	if (rl.rlim_cur < nr_fds_wanted) {
+		rl.rlim_cur = nr_fds_wanted;
+		if (rl.rlim_max < nr_fds_wanted) {
+			int old_rlim_max = rl.rlim_max;
+
+			rl.rlim_max = nr_fds_wanted;
+			__TEST_REQUIRE(setrlimit(RLIMIT_NOFILE, &rl) >= 0,
+				       "RLIMIT_NOFILE hard limit is too low (%d, wanted %d)",
+				       old_rlim_max, nr_fds_wanted);
+		} else {
+			TEST_ASSERT(!setrlimit(RLIMIT_NOFILE, &rl), "setrlimit() failed!");
+		}
+	}
+
+}
+
+static bool is_guest_memfd_required(struct vm_shape shape)
+{
+#ifdef __x86_64__
+	return shape.type == KVM_X86_SNP_VM;
+#else
+	return false;
+#endif
+}
+
 struct kvm_vm *__vm_create(struct vm_shape shape, uint32_t nr_runnable_vcpus,
 			   uint64_t nr_extra_pages)
 {
@@ -413,14 +478,24 @@ struct kvm_vm *__vm_create(struct vm_shape shape, uint32_t nr_runnable_vcpus,
 						 nr_extra_pages);
 	struct userspace_mem_region *slot0;
 	struct kvm_vm *vm;
-	int i;
+	int i, flags;
+
+	kvm_set_files_rlimit(nr_runnable_vcpus);
 
 	pr_debug("%s: mode='%s' type='%d', pages='%ld'\n", __func__,
 		 vm_guest_mode_string(shape.mode), shape.type, nr_pages);
 
 	vm = ____vm_create(shape);
 
-	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS, 0, 0, nr_pages, 0);
+	/*
+	 * Force GUEST_MEMFD for the primary memory region if necessary, e.g.
+	 * for CoCo VMs that require GUEST_MEMFD backed private memory.
+	 */
+	flags = 0;
+	if (is_guest_memfd_required(shape))
+		flags |= KVM_MEM_GUEST_MEMFD;
+
+	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS, 0, 0, nr_pages, flags);
 	for (i = 0; i < NR_MEM_REGIONS; i++)
 		vm->memslots[i] = 0;
 
@@ -545,15 +620,14 @@ struct kvm_vcpu *vm_recreate_with_one_vcpu(struct kvm_vm *vm)
 	return vm_vcpu_recreate(vm, 0);
 }
 
-void kvm_pin_this_task_to_pcpu(uint32_t pcpu)
+int __pin_task_to_cpu(pthread_t task, int cpu)
 {
-	cpu_set_t mask;
-	int r;
+	cpu_set_t cpuset;
 
-	CPU_ZERO(&mask);
-	CPU_SET(pcpu, &mask);
-	r = sched_setaffinity(0, sizeof(mask), &mask);
-	TEST_ASSERT(!r, "sched_setaffinity() failed for pCPU '%u'.", pcpu);
+	CPU_ZERO(&cpuset);
+	CPU_SET(cpu, &cpuset);
+
+	return pthread_setaffinity_np(task, sizeof(cpuset), &cpuset);
 }
 
 static uint32_t parse_pcpu(const char *cpu_str, const cpu_set_t *allowed_mask)
@@ -607,7 +681,7 @@ void kvm_parse_vcpu_pinning(const char *pcpus_string, uint32_t vcpu_to_pcpu[],
 
 	/* 2. Check if the main worker needs to be pinned. */
 	if (cpu) {
-		kvm_pin_this_task_to_pcpu(parse_pcpu(cpu, &allowed_mask));
+		pin_self_to_cpu(parse_pcpu(cpu, &allowed_mask));
 		cpu = strtok(NULL, delim);
 	}
 
@@ -657,6 +731,23 @@ userspace_mem_region_find(struct kvm_vm *vm, uint64_t start, uint64_t end)
 	return NULL;
 }
 
+static void kvm_stats_release(struct kvm_binary_stats *stats)
+{
+	int ret;
+
+	if (stats->fd < 0)
+		return;
+
+	if (stats->desc) {
+		free(stats->desc);
+		stats->desc = NULL;
+	}
+
+	ret = close(stats->fd);
+	TEST_ASSERT(!ret,  __KVM_SYSCALL_ERROR("close()", ret));
+	stats->fd = -1;
+}
+
 __weak void vcpu_arch_free(struct kvm_vcpu *vcpu)
 {
 
@@ -690,6 +781,8 @@ static void vm_vcpu_rm(struct kvm_vm *vm, struct kvm_vcpu *vcpu)
 	ret = close(vcpu->fd);
 	TEST_ASSERT(!ret,  __KVM_SYSCALL_ERROR("close()", ret));
 
+	kvm_stats_release(&vcpu->stats);
+
 	list_del(&vcpu->list);
 
 	vcpu_arch_free(vcpu);
@@ -709,6 +802,9 @@ void kvm_vm_release(struct kvm_vm *vmp)
 
 	ret = close(vmp->kvm_fd);
 	TEST_ASSERT(!ret,  __KVM_SYSCALL_ERROR("close()", ret));
+
+	/* Free cached stats metadata and close FD */
+	kvm_stats_release(&vmp->stats);
 }
 
 static void __vm_mem_region_delete(struct kvm_vm *vm,
@@ -719,9 +815,6 @@ static void __vm_mem_region_delete(struct kvm_vm *vm,
 	rb_erase(&region->gpa_node, &vm->regions.gpa_tree);
 	rb_erase(&region->hva_node, &vm->regions.hva_tree);
 	hash_del(&region->slot_node);
-
-	region->region.memory_size = 0;
-	vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION2, &region->region);
 
 	sparsebit_free(&region->unused_phy_pages);
 	sparsebit_free(&region->protected_phy_pages);
@@ -750,12 +843,6 @@ void kvm_vm_free(struct kvm_vm *vmp)
 
 	if (vmp == NULL)
 		return;
-
-	/* Free cached stats metadata and close FD */
-	if (vmp->stats_fd) {
-		free(vmp->stats_desc);
-		close(vmp->stats_fd);
-	}
 
 	/* Free userspace_mem_regions. */
 	hash_for_each_safe(vmp->regions.slot_hash, ctr, node, region, slot_node)
@@ -1197,7 +1284,12 @@ void vm_mem_region_move(struct kvm_vm *vm, uint32_t slot, uint64_t new_gpa)
  */
 void vm_mem_region_delete(struct kvm_vm *vm, uint32_t slot)
 {
-	__vm_mem_region_delete(vm, memslot2region(vm, slot));
+	struct userspace_mem_region *region = memslot2region(vm, slot);
+
+	region->region.memory_size = 0;
+	vm_ioctl(vm, KVM_SET_USER_MEMORY_REGION2, &region->region);
+
+	__vm_mem_region_delete(vm, region);
 }
 
 void vm_guest_mem_fallocate(struct kvm_vm *vm, uint64_t base, uint64_t size,
@@ -1283,6 +1375,11 @@ struct kvm_vcpu *__vm_vcpu_add(struct kvm_vm *vm, uint32_t vcpu_id)
 		PROT_READ | PROT_WRITE, MAP_SHARED, vcpu->fd, 0);
 	TEST_ASSERT(vcpu->run != MAP_FAILED,
 		    __KVM_SYSCALL_ERROR("mmap()", (int)(unsigned long)MAP_FAILED));
+
+	if (kvm_has_cap(KVM_CAP_BINARY_STATS_FD))
+		vcpu->stats.fd = vcpu_get_stats_fd(vcpu);
+	else
+		vcpu->stats.fd = -1;
 
 	/* Add to linked-list of VCPUs. */
 	list_add(&vcpu->list, &vm->vcpus);
@@ -1633,7 +1730,18 @@ void *addr_gpa2alias(struct kvm_vm *vm, vm_paddr_t gpa)
 /* Create an interrupt controller chip for the specified VM. */
 void vm_create_irqchip(struct kvm_vm *vm)
 {
-	vm_ioctl(vm, KVM_CREATE_IRQCHIP, NULL);
+	int r;
+
+	/*
+	 * Allocate a fully in-kernel IRQ chip by default, but fall back to a
+	 * split model (x86 only) if that fails (KVM x86 allows compiling out
+	 * support for KVM_CREATE_IRQCHIP).
+	 */
+	r = __vm_ioctl(vm, KVM_CREATE_IRQCHIP, NULL);
+	if (r && errno == ENOTTY && kvm_has_cap(KVM_CAP_SPLIT_IRQCHIP))
+		vm_enable_cap(vm, KVM_CAP_SPLIT_IRQCHIP, 24);
+	else
+		TEST_ASSERT_VM_VCPU_IOCTL(!r, KVM_CREATE_IRQCHIP, r, vm);
 
 	vm->has_irqchip = true;
 }
@@ -1646,7 +1754,8 @@ int _vcpu_run(struct kvm_vcpu *vcpu)
 		rc = __vcpu_run(vcpu);
 	} while (rc == -1 && errno == EINTR);
 
-	assert_on_unhandled_exception(vcpu);
+	if (!rc)
+		assert_on_unhandled_exception(vcpu);
 
 	return rc;
 }
@@ -1955,9 +2064,8 @@ static struct exit_reason {
 	KVM_EXIT_STRING(RISCV_SBI),
 	KVM_EXIT_STRING(RISCV_CSR),
 	KVM_EXIT_STRING(NOTIFY),
-#ifdef KVM_EXIT_MEMORY_NOT_PRESENT
-	KVM_EXIT_STRING(MEMORY_NOT_PRESENT),
-#endif
+	KVM_EXIT_STRING(LOONGARCH_IOCSR),
+	KVM_EXIT_STRING(MEMORY_FAULT),
 };
 
 /*
@@ -2195,46 +2303,31 @@ void read_stat_data(int stats_fd, struct kvm_stats_header *header,
 		    desc->name, size, ret);
 }
 
-/*
- * Read the data of the named stat
- *
- * Input Args:
- *   vm - the VM for which the stat should be read
- *   stat_name - the name of the stat to read
- *   max_elements - the maximum number of 8-byte values to read into data
- *
- * Output Args:
- *   data - the buffer into which stat data should be read
- *
- * Read the data values of a specified stat from the binary stats interface.
- */
-void __vm_get_stat(struct kvm_vm *vm, const char *stat_name, uint64_t *data,
-		   size_t max_elements)
+void kvm_get_stat(struct kvm_binary_stats *stats, const char *name,
+		  uint64_t *data, size_t max_elements)
 {
 	struct kvm_stats_desc *desc;
 	size_t size_desc;
 	int i;
 
-	if (!vm->stats_fd) {
-		vm->stats_fd = vm_get_stats_fd(vm);
-		read_stats_header(vm->stats_fd, &vm->stats_header);
-		vm->stats_desc = read_stats_descriptors(vm->stats_fd,
-							&vm->stats_header);
+	if (!stats->desc) {
+		read_stats_header(stats->fd, &stats->header);
+		stats->desc = read_stats_descriptors(stats->fd, &stats->header);
 	}
 
-	size_desc = get_stats_descriptor_size(&vm->stats_header);
+	size_desc = get_stats_descriptor_size(&stats->header);
 
-	for (i = 0; i < vm->stats_header.num_desc; ++i) {
-		desc = (void *)vm->stats_desc + (i * size_desc);
+	for (i = 0; i < stats->header.num_desc; ++i) {
+		desc = (void *)stats->desc + (i * size_desc);
 
-		if (strcmp(desc->name, stat_name))
+		if (strcmp(desc->name, name))
 			continue;
 
-		read_stat_data(vm->stats_fd, &vm->stats_header, desc,
-			       data, max_elements);
-
-		break;
+		read_stat_data(stats->fd, &stats->header, desc, data, max_elements);
+		return;
 	}
+
+	TEST_FAIL("Unable to find stat '%s'", name);
 }
 
 __weak void kvm_arch_vm_post_create(struct kvm_vm *vm)

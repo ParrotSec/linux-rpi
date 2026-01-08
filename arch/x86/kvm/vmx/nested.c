@@ -6,7 +6,9 @@
 
 #include <asm/debugreg.h>
 #include <asm/mmu_context.h>
+#include <asm/msr.h>
 
+#include "x86.h"
 #include "cpuid.h"
 #include "hyperv.h"
 #include "mmu.h"
@@ -16,7 +18,6 @@
 #include "sgx.h"
 #include "trace.h"
 #include "vmx.h"
-#include "x86.h"
 #include "smm.h"
 
 static bool __read_mostly enable_shadow_vmcs = 1;
@@ -231,11 +232,8 @@ static inline void nested_release_evmcs(struct kvm_vcpu *vcpu)
 	struct kvm_vcpu_hv *hv_vcpu = to_hv_vcpu(vcpu);
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 
-	if (nested_vmx_is_evmptr12_valid(vmx)) {
-		kvm_vcpu_unmap(vcpu, &vmx->nested.hv_evmcs_map, true);
-		vmx->nested.hv_evmcs = NULL;
-	}
-
+	kvm_vcpu_unmap(vcpu, &vmx->nested.hv_evmcs_map);
+	vmx->nested.hv_evmcs = NULL;
 	vmx->nested.hv_evmcs_vmptr = EVMPTR_INVALID;
 
 	if (hv_vcpu) {
@@ -260,7 +258,7 @@ static bool nested_evmcs_handle_vmclear(struct kvm_vcpu *vcpu, gpa_t vmptr)
 	 * state. It is possible that the area will stay mapped as
 	 * vmx->nested.hv_evmcs but this shouldn't be a problem.
 	 */
-	if (!guest_cpuid_has_evmcs(vcpu) ||
+	if (!guest_cpu_cap_has_evmcs(vcpu) ||
 	    !evmptr_is_valid(nested_get_evmptr(vcpu)))
 		return false;
 
@@ -278,7 +276,7 @@ static void vmx_sync_vmcs_host_state(struct vcpu_vmx *vmx,
 {
 	struct vmcs_host_state *dest, *src;
 
-	if (unlikely(!vmx->guest_state_loaded))
+	if (unlikely(!vmx->vt.guest_state_loaded))
 		return;
 
 	src = &prev->host_state;
@@ -304,7 +302,7 @@ static void vmx_switch_vmcs(struct kvm_vcpu *vcpu, struct loaded_vmcs *vmcs)
 	cpu = get_cpu();
 	prev = vmx->loaded_vmcs;
 	vmx->loaded_vmcs = vmcs;
-	vmx_vcpu_load_vmcs(vcpu, cpu, prev);
+	vmx_vcpu_load_vmcs(vcpu, cpu);
 	vmx_sync_vmcs_host_state(vmx, prev);
 	put_cpu();
 
@@ -315,6 +313,16 @@ static void vmx_switch_vmcs(struct kvm_vcpu *vcpu, struct loaded_vmcs *vmcs)
 	 * vmentry and vmexit.
 	 */
 	vcpu->arch.regs_dirty = 0;
+}
+
+static void nested_put_vmcs12_pages(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+
+	kvm_vcpu_unmap(vcpu, &vmx->nested.apic_access_page_map);
+	kvm_vcpu_unmap(vcpu, &vmx->nested.virtual_apic_map);
+	kvm_vcpu_unmap(vcpu, &vmx->nested.pi_desc_map);
+	vmx->nested.pi_desc = NULL;
 }
 
 /*
@@ -349,15 +357,8 @@ static void free_nested(struct kvm_vcpu *vcpu)
 	vmx->nested.cached_vmcs12 = NULL;
 	kfree(vmx->nested.cached_shadow_vmcs12);
 	vmx->nested.cached_shadow_vmcs12 = NULL;
-	/*
-	 * Unpin physical memory we referred to in the vmcs02.  The APIC access
-	 * page's backing page (yeah, confusing) shouldn't actually be accessed,
-	 * and if it is written, the contents are irrelevant.
-	 */
-	kvm_vcpu_unmap(vcpu, &vmx->nested.apic_access_page_map, false);
-	kvm_vcpu_unmap(vcpu, &vmx->nested.virtual_apic_map, true);
-	kvm_vcpu_unmap(vcpu, &vmx->nested.pi_desc_map, true);
-	vmx->nested.pi_desc = NULL;
+
+	nested_put_vmcs12_pages(vcpu);
 
 	kvm_mmu_free_roots(vcpu->kvm, &vcpu->arch.guest_mmu, KVM_MMU_ROOTS_ALL);
 
@@ -425,7 +426,7 @@ static void nested_ept_inject_page_fault(struct kvm_vcpu *vcpu,
 		 * tables also changed, but KVM should not treat EPT Misconfig
 		 * VM-Exits as writes.
 		 */
-		WARN_ON_ONCE(vmx->exit_reason.basic != EXIT_REASON_EPT_VIOLATION);
+		WARN_ON_ONCE(vmx->vt.exit_reason.basic != EXIT_REASON_EPT_VIOLATION);
 
 		/*
 		 * PML Full and EPT Violation VM-Exits both use bit 12 to report
@@ -624,7 +625,7 @@ static inline bool nested_vmx_prepare_msr_bitmap(struct kvm_vcpu *vcpu,
 	int msr;
 	unsigned long *msr_bitmap_l1;
 	unsigned long *msr_bitmap_l0 = vmx->nested.vmcs02.msr_bitmap;
-	struct kvm_host_map *map = &vmx->nested.msr_bitmap_map;
+	struct kvm_host_map map;
 
 	/* Nothing to do if the MSR bitmap is not in use.  */
 	if (!cpu_has_vmx_msr_bitmap() ||
@@ -647,10 +648,10 @@ static inline bool nested_vmx_prepare_msr_bitmap(struct kvm_vcpu *vcpu,
 			return true;
 	}
 
-	if (kvm_vcpu_map(vcpu, gpa_to_gfn(vmcs12->msr_bitmap), map))
+	if (kvm_vcpu_map_readonly(vcpu, gpa_to_gfn(vmcs12->msr_bitmap), &map))
 		return false;
 
-	msr_bitmap_l1 = (unsigned long *)map->hva;
+	msr_bitmap_l1 = (unsigned long *)map.hva;
 
 	/*
 	 * To keep the control flow simple, pay eight 8-byte writes (sixteen
@@ -714,7 +715,13 @@ static inline bool nested_vmx_prepare_msr_bitmap(struct kvm_vcpu *vcpu,
 	nested_vmx_set_intercept_for_msr(vmx, msr_bitmap_l1, msr_bitmap_l0,
 					 MSR_IA32_FLUSH_CMD, MSR_TYPE_W);
 
-	kvm_vcpu_unmap(vcpu, &vmx->nested.msr_bitmap_map, false);
+	nested_vmx_set_intercept_for_msr(vmx, msr_bitmap_l1, msr_bitmap_l0,
+					 MSR_IA32_APERF, MSR_TYPE_R);
+
+	nested_vmx_set_intercept_for_msr(vmx, msr_bitmap_l1, msr_bitmap_l0,
+					 MSR_IA32_MPERF, MSR_TYPE_R);
+
+	kvm_vcpu_unmap(vcpu, &map);
 
 	vmx->nested.force_msr_bitmap_recalc = false;
 
@@ -824,11 +831,29 @@ static int nested_vmx_check_apicv_controls(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+static u32 nested_vmx_max_atomic_switch_msrs(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	u64 vmx_misc = vmx_control_msr(vmx->nested.msrs.misc_low,
+				       vmx->nested.msrs.misc_high);
+
+	return (vmx_misc_max_msr(vmx_misc) + 1) * VMX_MISC_MSR_LIST_MULTIPLIER;
+}
+
 static int nested_vmx_check_msr_switch(struct kvm_vcpu *vcpu,
 				       u32 count, u64 addr)
 {
 	if (count == 0)
 		return 0;
+
+	/*
+	 * Exceeding the limit results in architecturally _undefined_ behavior,
+	 * i.e. KVM is allowed to do literally anything in response to a bad
+	 * limit.  Immediately generate a consistency check so that code that
+	 * consumes the count doesn't need to worry about extreme edge cases.
+	 */
+	if (count > nested_vmx_max_atomic_switch_msrs(vcpu))
+		return -EINVAL;
 
 	if (!kvm_vcpu_is_legal_aligned_gpa(vcpu, addr, 16) ||
 	    !kvm_vcpu_is_legal_gpa(vcpu, (addr + count * sizeof(struct vmx_msr_entry) - 1)))
@@ -940,15 +965,6 @@ static int nested_vmx_store_msr_check(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
-static u32 nested_vmx_max_atomic_switch_msrs(struct kvm_vcpu *vcpu)
-{
-	struct vcpu_vmx *vmx = to_vmx(vcpu);
-	u64 vmx_misc = vmx_control_msr(vmx->nested.msrs.misc_low,
-				       vmx->nested.msrs.misc_high);
-
-	return (vmx_misc_max_msr(vmx_misc) + 1) * VMX_MISC_MSR_LIST_MULTIPLIER;
-}
-
 /*
  * Load guest's/host's msr at nested entry/exit.
  * return 0 for success, entry index for failure.
@@ -965,7 +981,7 @@ static u32 nested_vmx_load_msr(struct kvm_vcpu *vcpu, u64 gpa, u32 count)
 	u32 max_msr_list_size = nested_vmx_max_atomic_switch_msrs(vcpu);
 
 	for (i = 0; i < count; i++) {
-		if (unlikely(i >= max_msr_list_size))
+		if (WARN_ON_ONCE(i >= max_msr_list_size))
 			goto fail;
 
 		if (kvm_vcpu_read_guest(vcpu, gpa + i * sizeof(e),
@@ -1053,7 +1069,7 @@ static int nested_vmx_store_msr(struct kvm_vcpu *vcpu, u64 gpa, u32 count)
 	u32 max_msr_list_size = nested_vmx_max_atomic_switch_msrs(vcpu);
 
 	for (i = 0; i < count; i++) {
-		if (unlikely(i >= max_msr_list_size))
+		if (WARN_ON_ONCE(i >= max_msr_list_size))
 			return -EINVAL;
 
 		if (!read_and_check_msr_entry(vcpu, gpa, i, &e))
@@ -2089,7 +2105,7 @@ static enum nested_evmptrld_status nested_vmx_handle_enlightened_vmptrld(
 	bool evmcs_gpa_changed = false;
 	u64 evmcs_gpa;
 
-	if (likely(!guest_cpuid_has_evmcs(vcpu)))
+	if (likely(!guest_cpu_cap_has_evmcs(vcpu)))
 		return EVMPTRLD_DISABLED;
 
 	evmcs_gpa = nested_get_evmptr(vcpu);
@@ -2653,10 +2669,11 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 	if (vmx->nested.nested_run_pending &&
 	    (vmcs12->vm_entry_controls & VM_ENTRY_LOAD_DEBUG_CONTROLS)) {
 		kvm_set_dr(vcpu, 7, vmcs12->guest_dr7);
-		vmcs_write64(GUEST_IA32_DEBUGCTL, vmcs12->guest_ia32_debugctl);
+		vmx_guest_debugctl_write(vcpu, vmcs12->guest_ia32_debugctl &
+					       vmx_get_supported_debugctl(vcpu, false));
 	} else {
 		kvm_set_dr(vcpu, 7, vcpu->arch.dr7);
-		vmcs_write64(GUEST_IA32_DEBUGCTL, vmx->nested.pre_vmenter_debugctl);
+		vmx_guest_debugctl_write(vcpu, vmx->nested.pre_vmenter_debugctl);
 	}
 	if (kvm_mpx_supported() && (!vmx->nested.nested_run_pending ||
 	    !(vmcs12->vm_entry_controls & VM_ENTRY_LOAD_BNDCFGS)))
@@ -2970,7 +2987,7 @@ static int nested_check_vm_entry_controls(struct kvm_vcpu *vcpu,
 		case INTR_TYPE_SOFT_EXCEPTION:
 		case INTR_TYPE_SOFT_INTR:
 		case INTR_TYPE_PRIV_SW_EXCEPTION:
-			if (CC(vmcs12->vm_entry_instruction_len > 15) ||
+			if (CC(vmcs12->vm_entry_instruction_len > X86_MAX_INSTRUCTION_LENGTH) ||
 			    CC(vmcs12->vm_entry_instruction_len == 0 &&
 			    CC(!nested_cpu_has_zero_length_injection(vcpu))))
 				return -EINVAL;
@@ -2992,7 +3009,7 @@ static int nested_vmx_check_controls(struct kvm_vcpu *vcpu,
 		return -EINVAL;
 
 #ifdef CONFIG_KVM_HYPERV
-	if (guest_cpuid_has_evmcs(vcpu))
+	if (guest_cpu_cap_has_evmcs(vcpu))
 		return nested_evmcs_check_controls(vmcs12);
 #endif
 
@@ -3010,6 +3027,17 @@ static int nested_vmx_check_address_space_size(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
+static bool is_l1_noncanonical_address_on_vmexit(u64 la, struct vmcs12 *vmcs12)
+{
+	/*
+	 * Check that the given linear address is canonical after a VM exit
+	 * from L2, based on HOST_CR4.LA57 value that will be loaded for L1.
+	 */
+	u8 l1_address_bits_on_exit = (vmcs12->host_cr4 & X86_CR4_LA57) ? 57 : 48;
+
+	return !__is_canonical_address(la, l1_address_bits_on_exit);
+}
+
 static int nested_vmx_check_host_state(struct kvm_vcpu *vcpu,
 				       struct vmcs12 *vmcs12)
 {
@@ -3020,8 +3048,8 @@ static int nested_vmx_check_host_state(struct kvm_vcpu *vcpu,
 	    CC(!kvm_vcpu_is_legal_cr3(vcpu, vmcs12->host_cr3)))
 		return -EINVAL;
 
-	if (CC(is_noncanonical_address(vmcs12->host_ia32_sysenter_esp, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_ia32_sysenter_eip, vcpu)))
+	if (CC(is_noncanonical_msr_address(vmcs12->host_ia32_sysenter_esp, vcpu)) ||
+	    CC(is_noncanonical_msr_address(vmcs12->host_ia32_sysenter_eip, vcpu)))
 		return -EINVAL;
 
 	if ((vmcs12->vm_exit_controls & VM_EXIT_LOAD_IA32_PAT) &&
@@ -3055,12 +3083,12 @@ static int nested_vmx_check_host_state(struct kvm_vcpu *vcpu,
 	    CC(vmcs12->host_ss_selector == 0 && !ia32e))
 		return -EINVAL;
 
-	if (CC(is_noncanonical_address(vmcs12->host_fs_base, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_gs_base, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_gdtr_base, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_idtr_base, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_tr_base, vcpu)) ||
-	    CC(is_noncanonical_address(vmcs12->host_rip, vcpu)))
+	if (CC(is_noncanonical_base_address(vmcs12->host_fs_base, vcpu)) ||
+	    CC(is_noncanonical_base_address(vmcs12->host_gs_base, vcpu)) ||
+	    CC(is_noncanonical_base_address(vmcs12->host_gdtr_base, vcpu)) ||
+	    CC(is_noncanonical_base_address(vmcs12->host_idtr_base, vcpu)) ||
+	    CC(is_noncanonical_base_address(vmcs12->host_tr_base, vcpu)) ||
+	    CC(is_l1_noncanonical_address_on_vmexit(vmcs12->host_rip, vmcs12)))
 		return -EINVAL;
 
 	/*
@@ -3135,7 +3163,8 @@ static int nested_vmx_check_guest_state(struct kvm_vcpu *vcpu,
 		return -EINVAL;
 
 	if ((vmcs12->vm_entry_controls & VM_ENTRY_LOAD_DEBUG_CONTROLS) &&
-	    CC(!kvm_dr7_valid(vmcs12->guest_dr7)))
+	    (CC(!kvm_dr7_valid(vmcs12->guest_dr7)) ||
+	     CC(!vmx_is_valid_debugctl(vcpu, vmcs12->guest_ia32_debugctl, false))))
 		return -EINVAL;
 
 	if ((vmcs12->vm_entry_controls & VM_ENTRY_LOAD_IA32_PAT) &&
@@ -3178,7 +3207,7 @@ static int nested_vmx_check_guest_state(struct kvm_vcpu *vcpu,
 	}
 
 	if ((vmcs12->vm_entry_controls & VM_ENTRY_LOAD_BNDCFGS) &&
-	    (CC(is_noncanonical_address(vmcs12->guest_bndcfgs & PAGE_MASK, vcpu)) ||
+	    (CC(is_noncanonical_msr_address(vmcs12->guest_bndcfgs & PAGE_MASK, vcpu)) ||
 	     CC((vmcs12->guest_bndcfgs & MSR_IA32_BNDCFGS_RSVD))))
 		return -EINVAL;
 
@@ -3276,7 +3305,7 @@ static bool nested_get_evmcs_page(struct kvm_vcpu *vcpu)
 	 * L2 was running), map it here to make sure vmcs12 changes are
 	 * properly reflected.
 	 */
-	if (guest_cpuid_has_evmcs(vcpu) &&
+	if (guest_cpu_cap_has_evmcs(vcpu) &&
 	    vmx->nested.hv_evmcs_vmptr == EVMPTR_MAP_PENDING) {
 		enum nested_evmptrld_status evmptrld_status =
 			nested_vmx_handle_enlightened_vmptrld(vcpu, false);
@@ -3431,7 +3460,7 @@ static int nested_vmx_write_pml_buffer(struct kvm_vcpu *vcpu, gpa_t gpa)
 	if (!nested_cpu_has_pml(vmcs12))
 		return 0;
 
-	if (vmcs12->guest_pml_index >= PML_ENTITY_NUM) {
+	if (vmcs12->guest_pml_index >= PML_LOG_NR_ENTRIES) {
 		vmx->nested.pml_full = true;
 		return 1;
 	}
@@ -3470,14 +3499,6 @@ static int nested_vmx_check_permission(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
-static u8 vmx_has_apicv_interrupt(struct kvm_vcpu *vcpu)
-{
-	u8 rvi = vmx_get_rvi();
-	u8 vppr = kvm_lapic_get_reg(vcpu->arch.apic, APIC_PROCPRI);
-
-	return ((rvi & 0xf0) > (vppr & 0xf0));
-}
-
 static void load_vmcs12_host_state(struct kvm_vcpu *vcpu,
 				   struct vmcs12 *vmcs12);
 
@@ -3497,7 +3518,6 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
 	enum vm_entry_failure_code entry_failure_code;
-	bool evaluate_pending_interrupts;
 	union vmx_exit_reason exit_reason = {
 		.basic = EXIT_REASON_INVALID_STATE,
 		.failed_vmentry = 1,
@@ -3516,16 +3536,9 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
 
 	kvm_service_local_tlb_flush_requests(vcpu);
 
-	evaluate_pending_interrupts = exec_controls_get(vmx) &
-		(CPU_BASED_INTR_WINDOW_EXITING | CPU_BASED_NMI_WINDOW_EXITING);
-	if (likely(!evaluate_pending_interrupts) && kvm_vcpu_apicv_active(vcpu))
-		evaluate_pending_interrupts |= vmx_has_apicv_interrupt(vcpu);
-	if (!evaluate_pending_interrupts)
-		evaluate_pending_interrupts |= kvm_apic_has_pending_init_or_sipi(vcpu);
-
 	if (!vmx->nested.nested_run_pending ||
 	    !(vmcs12->vm_entry_controls & VM_ENTRY_LOAD_DEBUG_CONTROLS))
-		vmx->nested.pre_vmenter_debugctl = vmcs_read64(GUEST_IA32_DEBUGCTL);
+		vmx->nested.pre_vmenter_debugctl = vmx_guest_debugctl_read();
 	if (kvm_mpx_supported() &&
 	    (!vmx->nested.nested_run_pending ||
 	     !(vmcs12->vm_entry_controls & VM_ENTRY_LOAD_BNDCFGS)))
@@ -3605,9 +3618,13 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
 	 * Re-evaluate pending events if L1 had a pending IRQ/NMI/INIT/SIPI
 	 * when it executed VMLAUNCH/VMRESUME, as entering non-root mode can
 	 * effectively unblock various events, e.g. INIT/SIPI cause VM-Exit
-	 * unconditionally.
+	 * unconditionally.  Take care to pull data from vmcs01 as appropriate,
+	 * e.g. when checking for interrupt windows, as vmcs02 is now loaded.
 	 */
-	if (unlikely(evaluate_pending_interrupts))
+	if ((__exec_controls_get(&vmx->vmcs01) & (CPU_BASED_INTR_WINDOW_EXITING |
+						  CPU_BASED_NMI_WINDOW_EXITING)) ||
+	    kvm_apic_has_pending_init_or_sipi(vcpu) ||
+	    kvm_apic_has_interrupt(vcpu))
 		kvm_make_request(KVM_REQ_EVENT, vcpu);
 
 	/*
@@ -3740,14 +3757,6 @@ static int nested_vmx_run(struct kvm_vcpu *vcpu, bool launch)
 	if (unlikely(status != NVMX_VMENTRY_SUCCESS))
 		goto vmentry_failed;
 
-	/* Emulate processing of posted interrupts on VM-Enter. */
-	if (nested_cpu_has_posted_intr(vmcs12) &&
-	    kvm_apic_has_interrupt(vcpu) == vmx->nested.posted_intr_nv) {
-		vmx->nested.pi_pending = true;
-		kvm_make_request(KVM_REQ_EVENT, vcpu);
-		kvm_apic_clear_irr(vcpu, vmx->nested.posted_intr_nv);
-	}
-
 	/* Hide L1D cache contents from the nested guest.  */
 	vmx->vcpu.arch.l1tf_flush_l1d = true;
 
@@ -3780,7 +3789,7 @@ static int nested_vmx_run(struct kvm_vcpu *vcpu, bool launch)
 		break;
 	case GUEST_ACTIVITY_WAIT_SIPI:
 		vmx->nested.nested_run_pending = 0;
-		vcpu->arch.mp_state = KVM_MP_STATE_INIT_RECEIVED;
+		kvm_set_mp_state(vcpu, KVM_MP_STATE_INIT_RECEIVED);
 		break;
 	default:
 		break;
@@ -4209,13 +4218,25 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
 	 */
 	bool block_nested_exceptions = vmx->nested.nested_run_pending;
 	/*
-	 * New events (not exceptions) are only recognized at instruction
+	 * Events that don't require injection, i.e. that are virtualized by
+	 * hardware, aren't blocked by a pending VM-Enter as KVM doesn't need
+	 * to regain control in order to deliver the event, and hardware will
+	 * handle event ordering, e.g. with respect to injected exceptions.
+	 *
+	 * But, new events (not exceptions) are only recognized at instruction
 	 * boundaries.  If an event needs reinjection, then KVM is handling a
-	 * VM-Exit that occurred _during_ instruction execution; new events are
-	 * blocked until the instruction completes.
+	 * VM-Exit that occurred _during_ instruction execution; new events,
+	 * irrespective of whether or not they're injected, are blocked until
+	 * the instruction completes.
+	 */
+	bool block_non_injected_events = kvm_event_needs_reinjection(vcpu);
+	/*
+	 * Inject events are blocked by nested VM-Enter, as KVM is responsible
+	 * for managing priority between concurrent events, i.e. KVM needs to
+	 * wait until after VM-Enter completes to deliver injected events.
 	 */
 	bool block_nested_events = block_nested_exceptions ||
-				   kvm_event_needs_reinjection(vcpu);
+				   block_non_injected_events;
 
 	if (lapic_in_kernel(vcpu) &&
 		test_bit(KVM_APIC_INIT, &apic->pending_events)) {
@@ -4327,18 +4348,26 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
 	if (kvm_cpu_has_interrupt(vcpu) && !vmx_interrupt_blocked(vcpu)) {
 		int irq;
 
-		if (block_nested_events)
-			return -EBUSY;
-		if (!nested_exit_on_intr(vcpu))
+		if (!nested_exit_on_intr(vcpu)) {
+			if (block_nested_events)
+				return -EBUSY;
+
 			goto no_vmexit;
+		}
 
 		if (!nested_exit_intr_ack_set(vcpu)) {
+			if (block_nested_events)
+				return -EBUSY;
+
 			nested_vmx_vmexit(vcpu, EXIT_REASON_EXTERNAL_INTERRUPT, 0, 0);
 			return 0;
 		}
 
 		irq = kvm_cpu_get_extint(vcpu);
 		if (irq != -1) {
+			if (block_nested_events)
+				return -EBUSY;
+
 			nested_vmx_vmexit(vcpu, EXIT_REASON_EXTERNAL_INTERRUPT,
 					  INTR_INFO_VALID_MASK | INTR_TYPE_EXT_INTR | irq, 0);
 			return 0;
@@ -4357,10 +4386,21 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
 		 * and enabling posted interrupts requires ACK-on-exit.
 		 */
 		if (irq == vmx->nested.posted_intr_nv) {
+			/*
+			 * Nested posted interrupts are delivered via RVI, i.e.
+			 * aren't injected by KVM, and so can be queued even if
+			 * manual event injection is disallowed.
+			 */
+			if (block_non_injected_events)
+				return -EBUSY;
+
 			vmx->nested.pi_pending = true;
 			kvm_apic_clear_irr(vcpu, irq);
 			goto no_vmexit;
 		}
+
+		if (block_nested_events)
+			return -EBUSY;
 
 		nested_vmx_vmexit(vcpu, EXIT_REASON_EXTERNAL_INTERRUPT,
 				  INTR_INFO_VALID_MASK | INTR_TYPE_EXT_INTR | irq, 0);
@@ -4498,12 +4538,12 @@ static void copy_vmcs02_to_vmcs12_rare(struct kvm_vcpu *vcpu,
 
 	cpu = get_cpu();
 	vmx->loaded_vmcs = &vmx->nested.vmcs02;
-	vmx_vcpu_load_vmcs(vcpu, cpu, &vmx->vmcs01);
+	vmx_vcpu_load_vmcs(vcpu, cpu);
 
 	sync_vmcs02_to_vmcs12_rare(vcpu, vmcs12);
 
 	vmx->loaded_vmcs = &vmx->vmcs01;
-	vmx_vcpu_load_vmcs(vcpu, cpu, &vmx->nested.vmcs02);
+	vmx_vcpu_load_vmcs(vcpu, cpu);
 	put_cpu();
 }
 
@@ -4576,6 +4616,12 @@ static void sync_vmcs02_to_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
 		(vmcs12->vm_entry_controls & ~VM_ENTRY_IA32E_MODE) |
 		(vm_entry_controls_get(to_vmx(vcpu)) & VM_ENTRY_IA32E_MODE);
 
+	/*
+	 * Note!  Save DR7, but intentionally don't grab DEBUGCTL from vmcs02.
+	 * Writes to DEBUGCTL that aren't intercepted by L1 are immediately
+	 * propagated to vmcs12 (see vmx_set_msr()), as the value loaded into
+	 * vmcs02 doesn't strictly track vmcs12.
+	 */
 	if (vmcs12->vm_exit_controls & VM_EXIT_SAVE_DEBUG_CONTROLS)
 		vmcs12->guest_dr7 = vcpu->arch.dr7;
 
@@ -4596,11 +4642,11 @@ static void sync_vmcs02_to_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
  */
 static void prepare_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 			   u32 vm_exit_reason, u32 exit_intr_info,
-			   unsigned long exit_qualification)
+			   unsigned long exit_qualification, u32 exit_insn_len)
 {
 	/* update exit information fields: */
 	vmcs12->vm_exit_reason = vm_exit_reason;
-	if (to_vmx(vcpu)->exit_reason.enclave_mode)
+	if (vmx_get_exit_reason(vcpu).enclave_mode)
 		vmcs12->vm_exit_reason |= VMX_EXIT_REASONS_SGX_ENCLAVE_MODE;
 	vmcs12->exit_qualification = exit_qualification;
 
@@ -4624,7 +4670,7 @@ static void prepare_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 					  vm_exit_reason, exit_intr_info);
 
 		vmcs12->vm_exit_intr_info = exit_intr_info;
-		vmcs12->vm_exit_instruction_len = vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+		vmcs12->vm_exit_instruction_len = exit_insn_len;
 		vmcs12->vmx_instruction_info = vmcs_read32(VMX_INSTRUCTION_INFO);
 
 		/*
@@ -4766,13 +4812,13 @@ static void load_vmcs12_host_state(struct kvm_vcpu *vcpu,
 	__vmx_set_segment(vcpu, &seg, VCPU_SREG_LDTR);
 
 	kvm_set_dr(vcpu, 7, 0x400);
-	vmcs_write64(GUEST_IA32_DEBUGCTL, 0);
+	vmx_guest_debugctl_write(vcpu, 0);
 
 	if (nested_vmx_load_msr(vcpu, vmcs12->vm_exit_msr_load_addr,
 				vmcs12->vm_exit_msr_load_count))
 		nested_vmx_abort(vcpu, VMX_ABORT_LOAD_HOST_MSR_FAIL);
 
-	to_vmx(vcpu)->emulation_required = vmx_emulation_required(vcpu);
+	to_vt(vcpu)->emulation_required = vmx_emulation_required(vcpu);
 }
 
 static inline u64 nested_vmx_get_vmcs01_guest_efer(struct vcpu_vmx *vmx)
@@ -4820,6 +4866,9 @@ static void nested_vmx_restore_host_state(struct kvm_vcpu *vcpu)
 		else
 			WARN_ON(kvm_set_dr(vcpu, 7, vmcs_readl(GUEST_DR7)));
 	}
+
+	/* Reload DEBUGCTL to ensure vmcs01 has a fresh FREEZE_IN_SMM value. */
+	vmx_reload_guest_debugctl(vcpu);
 
 	/*
 	 * Note that calling vmx_set_{efer,cr0,cr4} is important as they
@@ -4908,8 +4957,9 @@ vmabort:
  * and modify vmcs12 to make it see what it would expect to see there if
  * L2 was its real guest. Must only be called when in L2 (is_guest_mode())
  */
-void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
-		       u32 exit_intr_info, unsigned long exit_qualification)
+void __nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
+			 u32 exit_intr_info, unsigned long exit_qualification,
+			 u32 exit_insn_len)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
@@ -4959,7 +5009,8 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 
 		if (vm_exit_reason != -1)
 			prepare_vmcs12(vcpu, vmcs12, vm_exit_reason,
-				       exit_intr_info, exit_qualification);
+				       exit_intr_info, exit_qualification,
+				       exit_insn_len);
 
 		/*
 		 * Must happen outside of sync_vmcs02_to_vmcs12() as it will
@@ -4996,16 +5047,7 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 
 	vmx_switch_vmcs(vcpu, &vmx->vmcs01);
 
-	/*
-	 * If IBRS is advertised to the vCPU, KVM must flush the indirect
-	 * branch predictors when transitioning from L2 to L1, as L1 expects
-	 * hardware (KVM in this case) to provide separate predictor modes.
-	 * Bare metal isolates VMX root (host) from VMX non-root (guest), but
-	 * doesn't isolate different VMCSs, i.e. in this case, doesn't provide
-	 * separate modes for L2 vs L1.
-	 */
-	if (guest_cpuid_has(vcpu, X86_FEATURE_SPEC_CTRL))
-		indirect_branch_prediction_barrier();
+	kvm_nested_vmexit_handle_ibrs(vcpu);
 
 	/* Update any VMCS fields that might have changed while L2 ran */
 	vmcs_write32(VM_EXIT_MSR_LOAD_COUNT, vmx->msr_autoload.host.nr);
@@ -5027,11 +5069,7 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 		vmx_update_cpu_dirty_logging(vcpu);
 	}
 
-	/* Unpin physical memory we referred to in vmcs02 */
-	kvm_vcpu_unmap(vcpu, &vmx->nested.apic_access_page_map, false);
-	kvm_vcpu_unmap(vcpu, &vmx->nested.virtual_apic_map, true);
-	kvm_vcpu_unmap(vcpu, &vmx->nested.pi_desc_map, true);
-	vmx->nested.pi_desc = NULL;
+	nested_put_vmcs12_pages(vcpu);
 
 	if (vmx->nested.reload_vmcs01_apic_access_page) {
 		vmx->nested.reload_vmcs01_apic_access_page = false;
@@ -5053,7 +5091,7 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 		vmx->nested.need_vmcs12_to_shadow_sync = true;
 
 	/* in case we halted in L2 */
-	vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
+	kvm_set_mp_state(vcpu, KVM_MP_STATE_RUNNABLE);
 
 	if (likely(!vmx->fail)) {
 		if (vm_exit_reason != -1)
@@ -5066,6 +5104,17 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 
 		load_vmcs12_host_state(vcpu, vmcs12);
 
+		/*
+		 * Process events if an injectable IRQ or NMI is pending, even
+		 * if the event is blocked (RFLAGS.IF is cleared on VM-Exit).
+		 * If an event became pending while L2 was active, KVM needs to
+		 * either inject the event or request an IRQ/NMI window.  SMIs
+		 * don't need to be processed as SMM is mutually exclusive with
+		 * non-root mode.  INIT/SIPI don't need to be checked as INIT
+		 * is blocked post-VMXON, and SIPIs are ignored.
+		 */
+		if (kvm_cpu_has_injectable_intr(vcpu) || vcpu->arch.nmi_pending)
+			kvm_make_request(KVM_REQ_EVENT, vcpu);
 		return;
 	}
 
@@ -5172,7 +5221,7 @@ int get_vmx_mem_address(struct kvm_vcpu *vcpu, unsigned long exit_qualification,
 		 * non-canonical form. This is the only check on the memory
 		 * destination for long mode!
 		 */
-		exn = is_noncanonical_address(*ret, vcpu);
+		exn = is_noncanonical_address(*ret, vcpu, 0);
 	} else {
 		/*
 		 * When not in long mode, the virtual/linear address is
@@ -5298,9 +5347,8 @@ static int enter_vmx_operation(struct kvm_vcpu *vcpu)
 	if (enable_shadow_vmcs && !alloc_shadow_vmcs(vcpu))
 		goto out_shadow_vmcs;
 
-	hrtimer_init(&vmx->nested.preemption_timer, CLOCK_MONOTONIC,
-		     HRTIMER_MODE_ABS_PINNED);
-	vmx->nested.preemption_timer.function = vmx_preemption_timer_fn;
+	hrtimer_setup(&vmx->nested.preemption_timer, vmx_preemption_timer_fn, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_ABS_PINNED);
 
 	vmx->nested.vpid02 = allocate_vpid();
 
@@ -5983,7 +6031,7 @@ static int handle_invvpid(struct kvm_vcpu *vcpu)
 		 * invalidation.
 		 */
 		if (!operand.vpid ||
-		    is_noncanonical_address(operand.gla, vcpu))
+		    is_noncanonical_invlpg_address(operand.gla, vcpu))
 			return nested_vmx_fail(vcpu,
 				VMXERR_INVALID_OPERAND_TO_INVEPT_INVVPID);
 		vpid_sync_vcpu_addr(vpid02, operand.gla);
@@ -6097,7 +6145,7 @@ fail:
 	 * nested VM-Exit.  Pass the original exit reason, i.e. don't hardcode
 	 * EXIT_REASON_VMFUNC as the exit reason.
 	 */
-	nested_vmx_vmexit(vcpu, vmx->exit_reason.full,
+	nested_vmx_vmexit(vcpu, vmx->vt.exit_reason.full,
 			  vmx_get_intr_info(vcpu),
 			  vmx_get_exit_qual(vcpu));
 	return 1;
@@ -6168,11 +6216,17 @@ static bool nested_vmx_exit_handled_msr(struct kvm_vcpu *vcpu,
 					struct vmcs12 *vmcs12,
 					union vmx_exit_reason exit_reason)
 {
-	u32 msr_index = kvm_rcx_read(vcpu);
+	u32 msr_index;
 	gpa_t bitmap;
 
 	if (!nested_cpu_has(vmcs12, CPU_BASED_USE_MSR_BITMAPS))
 		return true;
+
+	if (exit_reason.basic == EXIT_REASON_MSR_READ_IMM ||
+	    exit_reason.basic == EXIT_REASON_MSR_WRITE_IMM)
+		msr_index = vmx_get_exit_qual(vcpu);
+	else
+		msr_index = kvm_rcx_read(vcpu);
 
 	/*
 	 * The MSR_BITMAP page is divided into four 1024-byte bitmaps,
@@ -6180,7 +6234,8 @@ static bool nested_vmx_exit_handled_msr(struct kvm_vcpu *vcpu,
 	 * First we need to figure out which of the four to use:
 	 */
 	bitmap = vmcs12->msr_bitmap;
-	if (exit_reason.basic == EXIT_REASON_MSR_WRITE)
+	if (exit_reason.basic == EXIT_REASON_MSR_WRITE ||
+	    exit_reason.basic == EXIT_REASON_MSR_WRITE_IMM)
 		bitmap += 2048;
 	if (msr_index >= 0xc0000000) {
 		msr_index -= 0xc0000000;
@@ -6277,7 +6332,7 @@ static bool nested_vmx_exit_handled_encls(struct kvm_vcpu *vcpu,
 {
 	u32 encls_leaf;
 
-	if (!guest_cpuid_has(vcpu, X86_FEATURE_SGX) ||
+	if (!guest_cpu_cap_has(vcpu, X86_FEATURE_SGX) ||
 	    !nested_cpu_has2(vmcs12, SECONDARY_EXEC_ENCLS_EXITING))
 		return false;
 
@@ -6479,6 +6534,8 @@ static bool nested_vmx_l1_wants_exit(struct kvm_vcpu *vcpu,
 		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_DESC);
 	case EXIT_REASON_MSR_READ:
 	case EXIT_REASON_MSR_WRITE:
+	case EXIT_REASON_MSR_READ_IMM:
+	case EXIT_REASON_MSR_WRITE_IMM:
 		return nested_vmx_exit_handled_msr(vcpu, vmcs12, exit_reason);
 	case EXIT_REASON_INVALID_STATE:
 		return true;
@@ -6530,6 +6587,14 @@ static bool nested_vmx_l1_wants_exit(struct kvm_vcpu *vcpu,
 	case EXIT_REASON_NOTIFY:
 		/* Notify VM exit is not exposed to L1 */
 		return false;
+	case EXIT_REASON_SEAMCALL:
+	case EXIT_REASON_TDCALL:
+		/*
+		 * SEAMCALL and TDCALL unconditionally VM-Exit, but aren't
+		 * virtualized by KVM for L1 hypervisors, i.e. L1 should
+		 * never want or expect such an exit.
+		 */
+		return false;
 	default:
 		return true;
 	}
@@ -6542,7 +6607,7 @@ static bool nested_vmx_l1_wants_exit(struct kvm_vcpu *vcpu,
 bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
-	union vmx_exit_reason exit_reason = vmx->exit_reason;
+	union vmx_exit_reason exit_reason = vmx->vt.exit_reason;
 	unsigned long exit_qual;
 	u32 exit_intr_info;
 
@@ -6615,7 +6680,7 @@ static int vmx_get_nested_state(struct kvm_vcpu *vcpu,
 	vmx = to_vmx(vcpu);
 	vmcs12 = get_vmcs12(vcpu);
 
-	if (guest_can_use(vcpu, X86_FEATURE_VMX) &&
+	if (guest_cpu_cap_has(vcpu, X86_FEATURE_VMX) &&
 	    (vmx->nested.vmxon || vmx->nested.smm.vmxon)) {
 		kvm_state.hdr.vmx.vmxon_pa = vmx->nested.vmxon_ptr;
 		kvm_state.hdr.vmx.vmcs12_pa = vmx->nested.current_vmptr;
@@ -6756,7 +6821,7 @@ static int vmx_set_nested_state(struct kvm_vcpu *vcpu,
 		if (kvm_state->flags & ~KVM_STATE_NESTED_EVMCS)
 			return -EINVAL;
 	} else {
-		if (!guest_can_use(vcpu, X86_FEATURE_VMX))
+		if (!guest_cpu_cap_has(vcpu, X86_FEATURE_VMX))
 			return -EINVAL;
 
 		if (!page_address_valid(vcpu, kvm_state->hdr.vmx.vmxon_pa))
@@ -6790,7 +6855,7 @@ static int vmx_set_nested_state(struct kvm_vcpu *vcpu,
 		return -EINVAL;
 
 	if ((kvm_state->flags & KVM_STATE_NESTED_EVMCS) &&
-	    (!guest_can_use(vcpu, X86_FEATURE_VMX) ||
+	    (!guest_cpu_cap_has(vcpu, X86_FEATURE_VMX) ||
 	     !vmx->nested.enlightened_vmcs_enabled))
 			return -EINVAL;
 
@@ -7172,8 +7237,8 @@ static void nested_vmx_setup_cr_fixed(struct nested_vmx_msrs *msrs)
 	msrs->cr4_fixed0 = VMXON_CR4_ALWAYSON;
 
 	/* These MSRs specify bits which the guest must keep fixed off. */
-	rdmsrl(MSR_IA32_VMX_CR0_FIXED1, msrs->cr0_fixed1);
-	rdmsrl(MSR_IA32_VMX_CR4_FIXED1, msrs->cr4_fixed1);
+	rdmsrq(MSR_IA32_VMX_CR0_FIXED1, msrs->cr0_fixed1);
+	rdmsrq(MSR_IA32_VMX_CR4_FIXED1, msrs->cr4_fixed1);
 
 	if (vmx_umip_emulated())
 		msrs->cr4_fixed1 |= X86_CR4_UMIP;

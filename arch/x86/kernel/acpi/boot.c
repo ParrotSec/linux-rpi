@@ -934,11 +934,8 @@ static int __init acpi_parse_hpet(struct acpi_table_header *table)
 	 * the resource tree during the lateinit timeframe.
 	 */
 #define HPET_RESOURCE_NAME_SIZE 9
-	hpet_res = memblock_alloc(sizeof(*hpet_res) + HPET_RESOURCE_NAME_SIZE,
+	hpet_res = memblock_alloc_or_panic(sizeof(*hpet_res) + HPET_RESOURCE_NAME_SIZE,
 				  SMP_CACHE_BYTES);
-	if (!hpet_res)
-		panic("%s: Failed to allocate %zu bytes\n", __func__,
-		      sizeof(*hpet_res) + HPET_RESOURCE_NAME_SIZE);
 
 	hpet_res->name = (void *)&hpet_res[1];
 	hpet_res->flags = IORESOURCE_MEM;
@@ -1213,7 +1210,8 @@ static int __init acpi_parse_madt_ioapic_entries(void)
 	}
 
 	count = acpi_table_parse_madt(ACPI_MADT_TYPE_INTERRUPT_OVERRIDE,
-				      acpi_parse_int_src_ovr, nr_irqs);
+				      acpi_parse_int_src_ovr,
+				      irq_get_nr_irqs());
 	if (count < 0) {
 		pr_err("Error parsing interrupt source overrides entry\n");
 		/* TBD: Cleanup to allow fallback to MPS */
@@ -1233,7 +1231,8 @@ static int __init acpi_parse_madt_ioapic_entries(void)
 	mp_config_acpi_legacy_irqs();
 
 	count = acpi_table_parse_madt(ACPI_MADT_TYPE_NMI_SOURCE,
-				      acpi_parse_nmi_src, nr_irqs);
+				      acpi_parse_nmi_src,
+				      irq_get_nr_irqs());
 	if (count < 0) {
 		pr_err("Error parsing NMI SRC entry\n");
 		/* TBD: Cleanup to allow fallback to MPS */

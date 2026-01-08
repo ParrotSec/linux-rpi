@@ -12,6 +12,7 @@
 #include <linux/pci.h>
 #include <linux/vfio.h>
 #include <linux/irqbypass.h>
+#include <linux/rcupdate.h>
 #include <linux/types.h>
 #include <linux/uuid.h>
 #include <linux/notifier.h>
@@ -26,6 +27,11 @@
 
 struct vfio_pci_core_device;
 struct vfio_pci_region;
+
+struct vfio_pci_eventfd {
+	struct eventfd_ctx	*ctx;
+	struct rcu_head		rcu;
+};
 
 struct vfio_pci_regops {
 	ssize_t (*rw)(struct vfio_pci_core_device *vdev, char __user *buf,
@@ -83,8 +89,8 @@ struct vfio_pci_core_device {
 	struct pci_saved_state	*pci_saved_state;
 	struct pci_saved_state	*pm_save;
 	int			ioeventfds_nr;
-	struct eventfd_ctx	*err_trigger;
-	struct eventfd_ctx	*req_trigger;
+	struct vfio_pci_eventfd __rcu *err_trigger;
+	struct vfio_pci_eventfd __rcu *req_trigger;
 	struct eventfd_ctx	*pm_wake_eventfd_ctx;
 	struct list_head	dummy_resources_list;
 	struct mutex		ioeventfds_lock;
@@ -122,6 +128,8 @@ ssize_t vfio_pci_core_write(struct vfio_device *core_vdev, const char __user *bu
 int vfio_pci_core_mmap(struct vfio_device *core_vdev, struct vm_area_struct *vma);
 void vfio_pci_core_request(struct vfio_device *core_vdev, unsigned int count);
 int vfio_pci_core_match(struct vfio_device *core_vdev, char *buf);
+int vfio_pci_core_match_token_uuid(struct vfio_device *core_vdev,
+				   const uuid_t *uuid);
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_finish_enable(struct vfio_pci_core_device *vdev);

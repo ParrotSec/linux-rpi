@@ -24,7 +24,6 @@
 #include <linux/gfp.h>
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
-#include <linux/sched/coredump.h>
 #include <linux/sched/task.h>
 #include <linux/sched/debug.h>
 #include <linux/swap.h>
@@ -564,7 +563,7 @@ static bool __oom_reap_task_mm(struct mm_struct *mm)
 }
 
 /*
- * Reaps the address space of the give task.
+ * Reaps the address space of the given task.
  *
  * Returns true on success and false if none or part of the address space
  * has been reclaimed and the caller should retry later.
@@ -706,7 +705,7 @@ static void queue_oom_reaper(struct task_struct *tsk)
 }
 
 #ifdef CONFIG_SYSCTL
-static struct ctl_table vm_oom_kill_table[] = {
+static const struct ctl_table vm_oom_kill_table[] = {
 	{
 		.procname	= "panic_on_oom",
 		.data		= &sysctl_panic_on_oom,

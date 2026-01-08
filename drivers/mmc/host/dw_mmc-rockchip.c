@@ -43,7 +43,7 @@ struct dw_mci_rockchip_priv_data {
  */
 static int rockchip_mmc_get_internal_phase(struct dw_mci *host, bool sample)
 {
-	unsigned long rate = clk_get_rate(host->ciu_clk);
+	unsigned long rate = clk_get_rate(host->ciu_clk) / RK3288_CLKGEN_DIV;
 	u32 raw_value;
 	u16 degrees;
 	u32 delay_num = 0;
@@ -86,7 +86,7 @@ static int rockchip_mmc_get_phase(struct dw_mci *host, bool sample)
 
 static int rockchip_mmc_set_internal_phase(struct dw_mci *host, bool sample, int degrees)
 {
-	unsigned long rate = clk_get_rate(host->ciu_clk);
+	unsigned long rate = clk_get_rate(host->ciu_clk) / RK3288_CLKGEN_DIV;
 	u8 nineties, remainder;
 	u8 delay_num;
 	u32 raw_value;
@@ -577,7 +577,7 @@ static const struct dev_pm_ops dw_mci_rockchip_dev_pm_ops = {
 
 static struct platform_driver dw_mci_rockchip_pltfm_driver = {
 	.probe		= dw_mci_rockchip_probe,
-	.remove_new	= dw_mci_rockchip_remove,
+	.remove		= dw_mci_rockchip_remove,
 	.driver		= {
 		.name		= "dwmmc_rockchip",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,

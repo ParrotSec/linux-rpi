@@ -51,6 +51,7 @@
 #include <net/dsfield.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
+#include <net/netdev_lock.h>
 #include <net/inet_dscp.h>
 
 /*
@@ -201,8 +202,7 @@ static void ipip6_tunnel_clone_6rd(struct net_device *dev, struct sit_net *sitn)
 static int ipip6_tunnel_create(struct net_device *dev)
 {
 	struct ip_tunnel *t = netdev_priv(dev);
-	struct net *net = dev_net(dev);
-	struct sit_net *sitn = net_generic(net, sit_net_id);
+	struct sit_net *sitn = net_generic(t->net, sit_net_id);
 	int err;
 
 	__dev_addr_set(dev, &t->parms.iph.saddr, 4);
@@ -1035,7 +1035,7 @@ static netdev_tx_t ipip6_tunnel_xmit(struct sk_buff *skb,
 	skb_set_inner_ipproto(skb, IPPROTO_IPV6);
 
 	iptunnel_xmit(NULL, rt, skb, fl4.saddr, fl4.daddr, protocol, tos, ttl,
-		      df, !net_eq(tunnel->net, dev_net(dev)));
+		      df, !net_eq(tunnel->net, dev_net(dev)), 0);
 	return NETDEV_TX_OK;
 
 tx_error_icmp:
@@ -1550,18 +1550,21 @@ static bool ipip6_netlink_6rd_parms(struct nlattr *data[],
 }
 #endif
 
-static int ipip6_newlink(struct net *src_net, struct net_device *dev,
-			 struct nlattr *tb[], struct nlattr *data[],
+static int ipip6_newlink(struct net_device *dev,
+			 struct rtnl_newlink_params *params,
 			 struct netlink_ext_ack *extack)
 {
-	struct net *net = dev_net(dev);
+	struct nlattr **data = params->data;
+	struct nlattr **tb = params->tb;
 	struct ip_tunnel *nt;
 	struct ip_tunnel_encap ipencap;
 #ifdef CONFIG_IPV6_SIT_6RD
 	struct ip_tunnel_6rd ip6rd;
 #endif
+	struct net *net;
 	int err;
 
+	net = params->link_net ? : dev_net(dev);
 	nt = netdev_priv(dev);
 	nt->net = net;
 
@@ -1801,8 +1804,7 @@ static struct xfrm_tunnel mplsip_handler __read_mostly = {
 };
 #endif
 
-static void __net_exit sit_destroy_tunnels(struct net *net,
-					   struct list_head *head)
+static void __net_exit sit_exit_rtnl_net(struct net *net, struct list_head *head)
 {
 	struct sit_net *sitn = net_generic(net, sit_net_id);
 	struct net_device *dev, *aux;
@@ -1817,15 +1819,15 @@ static void __net_exit sit_destroy_tunnels(struct net *net,
 		for (h = 0; h < (prio ? IP6_SIT_HASH_SIZE : 1); h++) {
 			struct ip_tunnel *t;
 
-			t = rtnl_dereference(sitn->tunnels[prio][h]);
+			t = rtnl_net_dereference(net, sitn->tunnels[prio][h]);
 			while (t) {
 				/* If dev is in the same netns, it has already
 				 * been added to the list by the previous loop.
 				 */
 				if (!net_eq(dev_net(t->dev), net))
-					unregister_netdevice_queue(t->dev,
-								   head);
-				t = rtnl_dereference(t->next);
+					unregister_netdevice_queue(t->dev, head);
+
+				t = rtnl_net_dereference(net, t->next);
 			}
 		}
 	}
@@ -1857,7 +1859,7 @@ static int __net_init sit_init_net(struct net *net)
 	/* FB netdevice is special: we have one, and only one per netns.
 	 * Allowing to move it to another netns is clearly unsafe.
 	 */
-	sitn->fb_tunnel_dev->netns_local = true;
+	sitn->fb_tunnel_dev->netns_immutable = true;
 
 	t = netdev_priv(sitn->fb_tunnel_dev);
 	t->net = net;
@@ -1878,19 +1880,9 @@ err_alloc_dev:
 	return err;
 }
 
-static void __net_exit sit_exit_batch_rtnl(struct list_head *net_list,
-					   struct list_head *dev_to_kill)
-{
-	struct net *net;
-
-	ASSERT_RTNL();
-	list_for_each_entry(net, net_list, exit_list)
-		sit_destroy_tunnels(net, dev_to_kill);
-}
-
 static struct pernet_operations sit_net_ops = {
 	.init = sit_init_net,
-	.exit_batch_rtnl = sit_exit_batch_rtnl,
+	.exit_rtnl = sit_exit_rtnl_net,
 	.id   = &sit_net_id,
 	.size = sizeof(struct sit_net),
 };

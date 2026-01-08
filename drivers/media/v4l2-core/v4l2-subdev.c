@@ -334,6 +334,11 @@ static int call_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
 	unsigned int i;
 	int ret;
 
+#if defined(CONFIG_MEDIA_CONTROLLER)
+	if (!(sd->entity.pads[pad].flags & MEDIA_PAD_FL_SOURCE))
+		return -EOPNOTSUPP;
+#endif
+
 	memset(fd, 0, sizeof(*fd));
 
 	ret = sd->ops->pad->get_frame_desc(sd, pad, fd);
@@ -693,10 +698,25 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg,
 		return v4l2_event_dequeue(vfh, arg, file->f_flags & O_NONBLOCK);
 
 	case VIDIOC_SUBSCRIBE_EVENT:
-		return v4l2_subdev_call(sd, core, subscribe_event, vfh, arg);
+		if (v4l2_subdev_has_op(sd, core, subscribe_event))
+			return v4l2_subdev_call(sd, core, subscribe_event,
+						vfh, arg);
+
+		if ((sd->flags & V4L2_SUBDEV_FL_HAS_EVENTS) &&
+		    vfh->ctrl_handler)
+			return v4l2_ctrl_subdev_subscribe_event(sd, vfh, arg);
+
+		return -ENOIOCTLCMD;
 
 	case VIDIOC_UNSUBSCRIBE_EVENT:
-		return v4l2_subdev_call(sd, core, unsubscribe_event, vfh, arg);
+		if (v4l2_subdev_has_op(sd, core, unsubscribe_event))
+			return v4l2_subdev_call(sd, core, unsubscribe_event,
+						vfh, arg);
+
+		if (sd->flags & V4L2_SUBDEV_FL_HAS_EVENTS)
+			return v4l2_event_subdev_unsubscribe(sd, vfh, arg);
+
+		return -ENOIOCTLCMD;
 
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	case VIDIOC_DBG_G_REGISTER:
@@ -984,6 +1004,7 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg,
 		struct v4l2_subdev_route *routes =
 			(struct v4l2_subdev_route *)(uintptr_t)routing->routes;
 		struct v4l2_subdev_krouting krouting = {};
+		unsigned int num_active_routes = 0;
 		unsigned int i;
 
 		if (!v4l2_subdev_enable_streams_api)
@@ -1021,7 +1042,20 @@ static long subdev_do_ioctl(struct file *file, unsigned int cmd, void *arg,
 			if (!(pads[route->source_pad].flags &
 			      MEDIA_PAD_FL_SOURCE))
 				return -EINVAL;
+
+			if (route->flags & V4L2_SUBDEV_ROUTE_FL_ACTIVE)
+				num_active_routes++;
 		}
+
+		/*
+		 * Drivers that implement routing need to report a frame
+		 * descriptor accordingly, with up to one entry per route. Until
+		 * the frame descriptors entries get allocated dynamically,
+		 * limit the number of active routes to
+		 * V4L2_FRAME_DESC_ENTRY_MAX.
+		 */
+		if (num_active_routes > V4L2_FRAME_DESC_ENTRY_MAX)
+			return -E2BIG;
 
 		/*
 		 * If the driver doesn't support setting routing, just return
@@ -1643,6 +1677,9 @@ int __v4l2_subdev_init_finalize(struct v4l2_subdev *sd, const char *name,
 		}
 	}
 
+	if (sd->ctrl_handler)
+		sd->flags |= V4L2_SUBDEV_FL_HAS_EVENTS;
+
 	state = __v4l2_subdev_state_alloc(sd, name, key);
 	if (IS_ERR(state))
 		return PTR_ERR(state);
@@ -2196,6 +2233,9 @@ static void v4l2_subdev_collect_streams(struct v4l2_subdev *sd,
 		*found_streams = BIT_ULL(0);
 		*enabled_streams =
 			(sd->enabled_pads & BIT_ULL(pad)) ? BIT_ULL(0) : 0;
+		dev_dbg(sd->dev,
+			"collect_streams: sub-device \"%s\" does not support streams\n",
+			sd->entity.name);
 		return;
 	}
 
@@ -2213,6 +2253,10 @@ static void v4l2_subdev_collect_streams(struct v4l2_subdev *sd,
 		if (cfg->enabled)
 			*enabled_streams |= BIT_ULL(cfg->stream);
 	}
+
+	dev_dbg(sd->dev,
+		"collect_streams: \"%s\":%u: found %#llx enabled %#llx\n",
+		sd->entity.name, pad, *found_streams, *enabled_streams);
 }
 
 static void v4l2_subdev_set_streams_enabled(struct v4l2_subdev *sd,
@@ -2247,6 +2291,9 @@ int v4l2_subdev_enable_streams(struct v4l2_subdev *sd, u32 pad,
 	u64 found_streams;
 	bool use_s_stream;
 	int ret;
+
+	dev_dbg(dev, "enable streams \"%s\":%u/%#llx\n", sd->entity.name, pad,
+		streams_mask);
 
 	/* A few basic sanity checks first. */
 	if (pad >= sd->entity.num_pads)
@@ -2294,8 +2341,6 @@ int v4l2_subdev_enable_streams(struct v4l2_subdev *sd, u32 pad,
 		ret = -EALREADY;
 		goto done;
 	}
-
-	dev_dbg(dev, "enable streams %u:%#llx\n", pad, streams_mask);
 
 	already_streaming = v4l2_subdev_is_streaming(sd);
 
@@ -2348,6 +2393,9 @@ int v4l2_subdev_disable_streams(struct v4l2_subdev *sd, u32 pad,
 	bool use_s_stream;
 	int ret;
 
+	dev_dbg(dev, "disable streams \"%s\":%u/%#llx\n", sd->entity.name, pad,
+		streams_mask);
+
 	/* A few basic sanity checks first. */
 	if (pad >= sd->entity.num_pads)
 		return -EINVAL;
@@ -2394,8 +2442,6 @@ int v4l2_subdev_disable_streams(struct v4l2_subdev *sd, u32 pad,
 		ret = -EALREADY;
 		goto done;
 	}
-
-	dev_dbg(dev, "disable streams %u:%#llx\n", pad, streams_mask);
 
 	if (!use_s_stream) {
 		/* Call the .disable_streams() operation. */

@@ -9,6 +9,8 @@
 #include <linux/pci.h>
 #include <linux/msi.h>
 #include <linux/of_pci.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/pci_hotplug.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -165,40 +167,66 @@ static inline unsigned long decode_bar(struct pci_dev *dev, u32 bar)
 #define PCI_COMMAND_DECODE_ENABLE	(PCI_COMMAND_MEMORY | PCI_COMMAND_IO)
 
 /**
+ * __pci_size_bars - Read the raw BAR mask for a range of PCI BARs
+ * @dev: the PCI device
+ * @count: number of BARs to size
+ * @pos: starting config space position
+ * @sizes: array to store mask values
+ * @rom: indicate whether to use ROM mask, which avoids enabling ROM BARs
+ *
+ * Provided @sizes array must be sufficiently sized to store results for
+ * @count u32 BARs.  Caller is responsible for disabling decode to specified
+ * BAR range around calling this function.  This function is intended to avoid
+ * disabling decode around sizing each BAR individually, which can result in
+ * non-trivial overhead in virtualized environments with very large PCI BARs.
+ */
+static void __pci_size_bars(struct pci_dev *dev, int count,
+			    unsigned int pos, u32 *sizes, bool rom)
+{
+	u32 orig, mask = rom ? PCI_ROM_ADDRESS_MASK : ~0;
+	int i;
+
+	for (i = 0; i < count; i++, pos += 4, sizes++) {
+		pci_read_config_dword(dev, pos, &orig);
+		pci_write_config_dword(dev, pos, mask);
+		pci_read_config_dword(dev, pos, sizes);
+		pci_write_config_dword(dev, pos, orig);
+	}
+}
+
+void __pci_size_stdbars(struct pci_dev *dev, int count,
+			unsigned int pos, u32 *sizes)
+{
+	__pci_size_bars(dev, count, pos, sizes, false);
+}
+
+static void __pci_size_rom(struct pci_dev *dev, unsigned int pos, u32 *sizes)
+{
+	__pci_size_bars(dev, 1, pos, sizes, true);
+}
+
+/**
  * __pci_read_base - Read a PCI BAR
  * @dev: the PCI device
  * @type: type of the BAR
  * @res: resource buffer to be filled in
  * @pos: BAR position in the config space
+ * @sizes: array of one or more pre-read BAR masks
  *
  * Returns 1 if the BAR is 64-bit, or 0 if 32-bit.
  */
 int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
-		    struct resource *res, unsigned int pos)
+		    struct resource *res, unsigned int pos, u32 *sizes)
 {
-	u32 l = 0, sz = 0, mask;
+	u32 l = 0, sz;
 	u64 l64, sz64, mask64;
-	u16 orig_cmd;
 	struct pci_bus_region region, inverted_region;
 	const char *res_name = pci_resource_name(dev, res - dev->resource);
-
-	mask = type ? PCI_ROM_ADDRESS_MASK : ~0;
-
-	/* No printks while decoding is disabled! */
-	if (!dev->mmio_always_on) {
-		pci_read_config_word(dev, PCI_COMMAND, &orig_cmd);
-		if (orig_cmd & PCI_COMMAND_DECODE_ENABLE) {
-			pci_write_config_word(dev, PCI_COMMAND,
-				orig_cmd & ~PCI_COMMAND_DECODE_ENABLE);
-		}
-	}
 
 	res->name = pci_name(dev);
 
 	pci_read_config_dword(dev, pos, &l);
-	pci_write_config_dword(dev, pos, l | mask);
-	pci_read_config_dword(dev, pos, &sz);
-	pci_write_config_dword(dev, pos, l);
+	sz = sizes[0];
 
 	/*
 	 * All bits set in sz means the device isn't working properly.
@@ -238,17 +266,12 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 
 	if (res->flags & IORESOURCE_MEM_64) {
 		pci_read_config_dword(dev, pos + 4, &l);
-		pci_write_config_dword(dev, pos + 4, ~0);
-		pci_read_config_dword(dev, pos + 4, &sz);
-		pci_write_config_dword(dev, pos + 4, l);
+		sz = sizes[1];
 
 		l64 |= ((u64)l << 32);
 		sz64 |= ((u64)sz << 32);
 		mask64 |= ((u64)~0 << 32);
 	}
-
-	if (!dev->mmio_always_on && (orig_cmd & PCI_COMMAND_DECODE_ENABLE))
-		pci_write_config_word(dev, PCI_COMMAND, orig_cmd);
 
 	if (!sz64)
 		goto fail;
@@ -318,9 +341,14 @@ out:
 	return (res->flags & IORESOURCE_MEM_64) ? 1 : 0;
 }
 
-static void pci_read_bases(struct pci_dev *dev, unsigned int howmany, int rom)
+static __always_inline void pci_read_bases(struct pci_dev *dev,
+					   unsigned int howmany, int rom)
 {
+	u32 rombar, stdbars[PCI_STD_NUM_BARS];
 	unsigned int pos, reg;
+	u16 orig_cmd;
+
+	BUILD_BUG_ON(statically_true(howmany > PCI_STD_NUM_BARS));
 
 	if (dev->non_compliant_bars)
 		return;
@@ -329,10 +357,28 @@ static void pci_read_bases(struct pci_dev *dev, unsigned int howmany, int rom)
 	if (dev->is_virtfn)
 		return;
 
+	/* No printks while decoding is disabled! */
+	if (!dev->mmio_always_on) {
+		pci_read_config_word(dev, PCI_COMMAND, &orig_cmd);
+		if (orig_cmd & PCI_COMMAND_DECODE_ENABLE) {
+			pci_write_config_word(dev, PCI_COMMAND,
+				orig_cmd & ~PCI_COMMAND_DECODE_ENABLE);
+		}
+	}
+
+	__pci_size_stdbars(dev, howmany, PCI_BASE_ADDRESS_0, stdbars);
+	if (rom)
+		__pci_size_rom(dev, rom, &rombar);
+
+	if (!dev->mmio_always_on &&
+	    (orig_cmd & PCI_COMMAND_DECODE_ENABLE))
+		pci_write_config_word(dev, PCI_COMMAND, orig_cmd);
+
 	for (pos = 0; pos < howmany; pos++) {
 		struct resource *res = &dev->resource[pos];
 		reg = PCI_BASE_ADDRESS_0 + (pos << 2);
-		pos += __pci_read_base(dev, pci_bar_unknown, res, reg);
+		pos += __pci_read_base(dev, pci_bar_unknown,
+				       res, reg, &stdbars[pos]);
 	}
 
 	if (rom) {
@@ -340,7 +386,7 @@ static void pci_read_bases(struct pci_dev *dev, unsigned int howmany, int rom)
 		dev->rom_base_reg = rom;
 		res->flags = IORESOURCE_MEM | IORESOURCE_PREFETCH |
 				IORESOURCE_READONLY | IORESOURCE_SIZEALIGN;
-		__pci_read_base(dev, pci_bar_mem32, res, rom);
+		__pci_read_base(dev, pci_bar_mem32, res, rom, &rombar);
 	}
 }
 
@@ -543,15 +589,15 @@ void pci_read_bridge_bases(struct pci_bus *child)
 	pci_read_bridge_mmio(child->self, child->resource[1], false);
 	pci_read_bridge_mmio_pref(child->self, child->resource[2], false);
 
-	if (dev->transparent) {
-		pci_bus_for_each_resource(child->parent, res) {
-			if (res && res->flags) {
-				pci_bus_add_resource(child, res,
-						     PCI_SUBTRACTIVE_DECODE);
-				pci_info(dev, "  bridge window %pR (subtractive decode)\n",
-					   res);
-			}
-		}
+	if (!dev->transparent)
+		return;
+
+	pci_bus_for_each_resource(child->parent, res) {
+		if (!res || !res->flags)
+			continue;
+
+		pci_bus_add_resource(child, res);
+		pci_info(dev, "  bridge window %pR (subtractive decode)\n", res);
 	}
 }
 
@@ -742,9 +788,14 @@ const char *pci_speed_string(enum pci_bus_speed speed)
 }
 EXPORT_SYMBOL_GPL(pci_speed_string);
 
-void pcie_update_link_speed(struct pci_bus *bus, u16 linksta)
+void pcie_update_link_speed(struct pci_bus *bus)
 {
-	bus->cur_bus_speed = pcie_link_speed[linksta & PCI_EXP_LNKSTA_CLS];
+	struct pci_dev *bridge = bus->self;
+	u16 linksta, linksta2;
+
+	pcie_capability_read_word(bridge, PCI_EXP_LNKSTA, &linksta);
+	pcie_capability_read_word(bridge, PCI_EXP_LNKSTA2, &linksta2);
+	__pcie_update_link_speed(bus, linksta, linksta2);
 }
 EXPORT_SYMBOL_GPL(pcie_update_link_speed);
 
@@ -827,13 +878,11 @@ static void pci_set_bus_speed(struct pci_bus *bus)
 
 	if (pci_is_pcie(bridge)) {
 		u32 linkcap;
-		u16 linksta;
 
 		pcie_capability_read_dword(bridge, PCI_EXP_LNKCAP, &linkcap);
 		bus->max_bus_speed = pcie_link_speed[linkcap & PCI_EXP_LNKCAP_SLS];
 
-		pcie_capability_read_word(bridge, PCI_EXP_LNKSTA, &linksta);
-		pcie_update_link_speed(bus, linksta);
+		pcie_update_link_speed(bus);
 	}
 }
 
@@ -1033,7 +1082,7 @@ static int pci_register_host_bridge(struct pci_host_bridge *bridge)
 		if (res->flags & IORESOURCE_BUS)
 			pci_bus_insert_busn_res(bus, bus->number, res->end);
 		else
-			pci_bus_add_resource(bus, res, 0);
+			pci_bus_add_resource(bus, res);
 
 		if (offset) {
 			if (resource_type(res) == IORESOURCE_IO)
@@ -1049,6 +1098,8 @@ static int pci_register_host_bridge(struct pci_host_bridge *bridge)
 
 		dev_info(&bus->dev, "root bus resource %pR%s\n", res, addr);
 	}
+
+	of_pci_make_host_bridge_node(bridge);
 
 	down_write(&pci_bus_sem);
 	list_add_tail(&bus->node, &pci_root_buses);
@@ -1627,7 +1678,7 @@ void set_pcie_hotplug_bridge(struct pci_dev *pdev)
 
 	pcie_capability_read_dword(pdev, PCI_EXP_SLTCAP, &reg32);
 	if (reg32 & PCI_EXP_SLTCAP_HPC)
-		pdev->is_hotplug_bridge = 1;
+		pdev->is_hotplug_bridge = pdev->is_pciehp = 1;
 }
 
 static void set_pcie_thunderbolt(struct pci_dev *dev)
@@ -1972,6 +2023,9 @@ int pci_setup_device(struct pci_dev *dev)
 
 	set_pcie_untrusted(dev);
 
+	if (pci_is_pcie(dev))
+		dev->supported_speeds = pcie_get_supported_speeds(dev);
+
 	/* "Unknown power state" */
 	dev->current_state = PCI_UNKNOWN;
 
@@ -2004,7 +2058,7 @@ int pci_setup_device(struct pci_dev *dev)
 		if (class == PCI_CLASS_BRIDGE_PCI)
 			goto bad;
 		pci_read_irq(dev);
-		pci_read_bases(dev, 6, PCI_ROM_ADDRESS);
+		pci_read_bases(dev, PCI_STD_NUM_BARS, PCI_ROM_ADDRESS);
 
 		pci_subsystem_ids(dev, &dev->subsystem_vendor, &dev->subsystem_device);
 
@@ -2255,8 +2309,8 @@ static void pci_configure_relaxed_ordering(struct pci_dev *dev)
 
 static void pci_configure_eetlp_prefix(struct pci_dev *dev)
 {
-#ifdef CONFIG_PCI_PASID
 	struct pci_dev *bridge;
+	unsigned int eetlp_max;
 	int pcie_type;
 	u32 cap;
 
@@ -2268,15 +2322,19 @@ static void pci_configure_eetlp_prefix(struct pci_dev *dev)
 		return;
 
 	pcie_type = pci_pcie_type(dev);
+
+	eetlp_max = FIELD_GET(PCI_EXP_DEVCAP2_EE_PREFIX_MAX, cap);
+	/* 00b means 4 */
+	eetlp_max = eetlp_max ?: 4;
+
 	if (pcie_type == PCI_EXP_TYPE_ROOT_PORT ||
 	    pcie_type == PCI_EXP_TYPE_RC_END)
-		dev->eetlp_prefix_path = 1;
+		dev->eetlp_prefix_max = eetlp_max;
 	else {
 		bridge = pci_upstream_bridge(dev);
-		if (bridge && bridge->eetlp_prefix_path)
-			dev->eetlp_prefix_path = 1;
+		if (bridge && bridge->eetlp_prefix_max)
+			dev->eetlp_prefix_max = eetlp_max;
 	}
-#endif
 }
 
 static void pci_configure_serr(struct pci_dev *dev)
@@ -2450,6 +2508,56 @@ bool pci_bus_read_dev_vendor_id(struct pci_bus *bus, int devfn, u32 *l,
 }
 EXPORT_SYMBOL(pci_bus_read_dev_vendor_id);
 
+#if IS_ENABLED(CONFIG_PCI_PWRCTRL)
+static struct platform_device *pci_pwrctrl_create_device(struct pci_bus *bus, int devfn)
+{
+	struct pci_host_bridge *host = pci_find_host_bridge(bus);
+	struct platform_device *pdev;
+	struct device_node *np;
+
+	np = of_pci_find_child_device(dev_of_node(&bus->dev), devfn);
+	if (!np)
+		return NULL;
+
+	pdev = of_find_device_by_node(np);
+	if (pdev) {
+		put_device(&pdev->dev);
+		goto err_put_of_node;
+	}
+
+	/*
+	 * First check whether the pwrctrl device really needs to be created or
+	 * not. This is decided based on at least one of the power supplies
+	 * being defined in the devicetree node of the device.
+	 */
+	if (!of_pci_supply_present(np)) {
+		pr_debug("PCI/pwrctrl: Skipping OF node: %s\n", np->name);
+		goto err_put_of_node;
+	}
+
+	/* Now create the pwrctrl device */
+	pdev = of_platform_device_create(np, NULL, &host->dev);
+	if (!pdev) {
+		pr_err("PCI/pwrctrl: Failed to create pwrctrl device for node: %s\n", np->name);
+		goto err_put_of_node;
+	}
+
+	of_node_put(np);
+
+	return pdev;
+
+err_put_of_node:
+	of_node_put(np);
+
+	return NULL;
+}
+#else
+static struct platform_device *pci_pwrctrl_create_device(struct pci_bus *bus, int devfn)
+{
+	return NULL;
+}
+#endif
+
 /*
  * Read the config data for a PCI device, sanity-check it,
  * and fill in the dev structure.
@@ -2458,6 +2566,15 @@ static struct pci_dev *pci_scan_device(struct pci_bus *bus, int devfn)
 {
 	struct pci_dev *dev;
 	u32 l;
+
+	/*
+	 * Create pwrctrl device (if required) for the PCI device to handle the
+	 * power state. If the pwrctrl device is created, then skip scanning
+	 * further as the pwrctrl core will rescan the bus after powering on
+	 * the device.
+	 */
+	if (pci_pwrctrl_create_device(bus, devfn))
+		return NULL;
 
 	if (!pci_bus_read_dev_vendor_id(bus, devfn, &l, 60*1000))
 		return NULL;
@@ -2498,6 +2615,15 @@ void pcie_report_downtraining(struct pci_dev *dev)
 	__pcie_print_link_status(dev, false);
 }
 
+static void pci_imm_ready_init(struct pci_dev *dev)
+{
+	u16 status;
+
+	pci_read_config_word(dev, PCI_STATUS, &status);
+	if (status & PCI_STATUS_IMM_READY)
+		dev->imm_ready = 1;
+}
+
 static void pci_init_capabilities(struct pci_dev *dev)
 {
 	pci_ea_init(dev);		/* Enhanced Allocation */
@@ -2507,6 +2633,7 @@ static void pci_init_capabilities(struct pci_dev *dev)
 	/* Buffers for saving PCIe and PCI-X capabilities */
 	pci_allocate_cap_save_buffers(dev);
 
+	pci_imm_ready_init(dev);	/* Immediate Readiness */
 	pci_pm_init(dev);		/* Power Management */
 	pci_vpd_init(dev);		/* Vital Product Data */
 	pci_configure_ari(dev);		/* Alternative Routing-ID Forwarding */
@@ -2520,6 +2647,8 @@ static void pci_init_capabilities(struct pci_dev *dev)
 	pci_dpc_init(dev);		/* Downstream Port Containment */
 	pci_rcec_init(dev);		/* Root Complex Event Collector */
 	pci_doe_init(dev);		/* Data Object Exchange */
+	pci_tph_init(dev);		/* TLP Processing Hints */
+	pci_rebar_init(dev);		/* Resizable BAR */
 
 	pcie_report_downtraining(dev);
 	pci_init_reset_methods(dev);
@@ -2612,11 +2741,12 @@ void pci_device_add(struct pci_dev *dev, struct pci_bus *bus)
 	pci_set_msi_domain(dev);
 
 	/* Notifier could use PCI capabilities */
-	dev->match_driver = false;
 	ret = device_add(&dev->dev);
 	WARN_ON(ret < 0);
 
 	pci_npem_create(dev);
+
+	pci_doe_sysfs_init(dev);
 }
 
 struct pci_dev *pci_scan_single_device(struct pci_bus *bus, int devfn)
@@ -3133,6 +3263,17 @@ int pci_host_probe(struct pci_host_bridge *bridge)
 	pci_lock_rescan_remove();
 	pci_bus_add_devices(bus);
 	pci_unlock_rescan_remove();
+
+	/*
+	 * Ensure pm_runtime_enable() is called for the controller drivers
+	 * before calling pci_host_probe(). The PM framework expects that
+	 * if the parent device supports runtime PM, it will be enabled
+	 * before child runtime PM is enabled.
+	 */
+	pm_runtime_set_active(&bridge->dev);
+	pm_runtime_no_callbacks(&bridge->dev);
+	devm_pm_runtime_enable(&bridge->dev);
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(pci_host_probe);

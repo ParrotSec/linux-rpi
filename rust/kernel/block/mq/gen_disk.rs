@@ -3,7 +3,7 @@
 //! Generic disk abstraction.
 //!
 //! C header: [`include/linux/blkdev.h`](srctree/include/linux/blkdev.h)
-//! C header: [`include/linux/blk_mq.h`](srctree/include/linux/blk_mq.h)
+//! C header: [`include/linux/blk-mq.h`](srctree/include/linux/blk-mq.h)
 
 use crate::block::mq::{raw_writer::RawWriter, Operations, TagSet};
 use crate::{bindings, error::from_err_ptr, error::Result, sync::Arc};
@@ -45,7 +45,7 @@ impl GenDiskBuilder {
 
     /// Validate block size by verifying that it is between 512 and `PAGE_SIZE`,
     /// and that it is a power of two.
-    fn validate_block_size(size: u32) -> Result<()> {
+    fn validate_block_size(size: u32) -> Result {
         if !(512..=bindings::PAGE_SIZE as u32).contains(&size) || !size.is_power_of_two() {
             Err(error::code::EINVAL)
         } else {
@@ -129,7 +129,7 @@ impl GenDiskBuilder {
             get_unique_id: None,
             // TODO: Set to THIS_MODULE. Waiting for const_refs_to_static feature to
             // be merged (unstable in rustc 1.78 which is staged for linux 6.10)
-            // https://github.com/rust-lang/rust/issues/119618
+            // <https://github.com/rust-lang/rust/issues/119618>
             owner: core::ptr::null_mut(),
             pr_ops: core::ptr::null_mut(),
             free_disk: None,

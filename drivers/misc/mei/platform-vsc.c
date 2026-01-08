@@ -256,7 +256,8 @@ static int mei_vsc_hw_reset(struct mei_device *mei_dev, bool intr_enable)
 
 	vsc_tp_reset(hw->tp);
 
-	vsc_tp_intr_disable(hw->tp);
+	if (!intr_enable)
+		return 0;
 
 	return vsc_tp_init(hw->tp, mei_dev->dev);
 }
@@ -379,6 +380,8 @@ err_stop:
 err_cancel:
 	mei_cancel_work(mei_dev);
 
+	vsc_tp_register_event_cb(tp, NULL, NULL);
+
 	mei_disable_interrupts(mei_dev);
 
 	return ret;
@@ -387,10 +390,13 @@ err_cancel:
 static void mei_vsc_remove(struct platform_device *pdev)
 {
 	struct mei_device *mei_dev = platform_get_drvdata(pdev);
+	struct mei_vsc_hw *hw = mei_dev_to_vsc_hw(mei_dev);
 
 	pm_runtime_disable(mei_dev->dev);
 
 	mei_stop(mei_dev);
+
+	vsc_tp_register_event_cb(hw->tp, NULL, NULL);
 
 	mei_disable_interrupts(mei_dev);
 
@@ -437,7 +443,7 @@ MODULE_DEVICE_TABLE(platform, mei_vsc_id_table);
 
 static struct platform_driver mei_vsc_drv = {
 	.probe = mei_vsc_probe,
-	.remove_new = mei_vsc_remove,
+	.remove = mei_vsc_remove,
 	.id_table = mei_vsc_id_table,
 	.driver = {
 		.name = MEI_VSC_DRV_NAME,
@@ -451,4 +457,4 @@ MODULE_AUTHOR("Wentong Wu <wentong.wu@intel.com>");
 MODULE_AUTHOR("Zhifeng Wang <zhifeng.wang@intel.com>");
 MODULE_DESCRIPTION("Intel Visual Sensing Controller Interface");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(VSC_TP);
+MODULE_IMPORT_NS("VSC_TP");

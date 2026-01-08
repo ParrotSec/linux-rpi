@@ -5,7 +5,6 @@
  */
 
 #include <linux/blkdev.h>
-#include <linux/raid/md_u.h>
 #include <linux/seq_file.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -74,6 +73,7 @@ static int linear_set_limits(struct mddev *mddev)
 	md_init_stacking_limits(&lim);
 	lim.max_hw_sectors = mddev->chunk_sectors;
 	lim.max_write_zeroes_sectors = mddev->chunk_sectors;
+	lim.max_hw_wzeroes_unmap_sectors = mddev->chunk_sectors;
 	lim.io_min = mddev->chunk_sectors << 9;
 	err = mddev_stack_rdev_limits(mddev, &lim, MDDEV_STACK_INTEGRITY);
 	if (err)
@@ -267,6 +267,7 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 		}
 
 		bio_chain(split, bio);
+		trace_block_split(split, bio->bi_iter.bi_sector);
 		submit_bio_noacct(bio);
 		bio = split;
 	}
@@ -320,9 +321,13 @@ static void linear_quiesce(struct mddev *mddev, int state)
 }
 
 static struct md_personality linear_personality = {
-	.name		= "linear",
-	.level		= LEVEL_LINEAR,
-	.owner		= THIS_MODULE,
+	.head = {
+		.type	= MD_PERSONALITY,
+		.id	= ID_LINEAR,
+		.name	= "linear",
+		.owner	= THIS_MODULE,
+	},
+
 	.make_request	= linear_make_request,
 	.run		= linear_run,
 	.free		= linear_free,
@@ -335,12 +340,12 @@ static struct md_personality linear_personality = {
 
 static int __init linear_init(void)
 {
-	return register_md_personality(&linear_personality);
+	return register_md_submodule(&linear_personality.head);
 }
 
 static void linear_exit(void)
 {
-	unregister_md_personality(&linear_personality);
+	unregister_md_submodule(&linear_personality.head);
 }
 
 module_init(linear_init);

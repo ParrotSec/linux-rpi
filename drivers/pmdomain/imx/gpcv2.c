@@ -1356,7 +1356,7 @@ static int imx_pgc_domain_probe(struct platform_device *pdev)
 
 	ret = pm_genpd_init(&domain->genpd, NULL, true);
 	if (ret) {
-		dev_err(domain->dev, "Failed to init power domain\n");
+		dev_err_probe(domain->dev, ret, "Failed to init power domain\n");
 		goto out_domain_unmap;
 	}
 
@@ -1367,7 +1367,7 @@ static int imx_pgc_domain_probe(struct platform_device *pdev)
 	ret = of_genpd_add_provider_simple(domain->dev->of_node,
 					   &domain->genpd);
 	if (ret) {
-		dev_err(domain->dev, "Failed to add genpd provider\n");
+		dev_err_probe(domain->dev, ret, "Failed to add genpd provider\n");
 		goto out_genpd_remove;
 	}
 
@@ -1437,9 +1437,10 @@ static struct platform_driver imx_pgc_domain_driver = {
 	.driver = {
 		.name = "imx-pgc",
 		.pm = &imx_pgc_domain_pm_ops,
+		.suppress_bind_attrs = true,
 	},
 	.probe    = imx_pgc_domain_probe,
-	.remove_new = imx_pgc_domain_remove,
+	.remove = imx_pgc_domain_remove,
 	.id_table = imx_pgc_domain_id,
 };
 builtin_platform_driver(imx_pgc_domain_driver)
@@ -1549,6 +1550,7 @@ static struct platform_driver imx_gpc_driver = {
 	.driver = {
 		.name = "imx-gpcv2",
 		.of_match_table = imx_gpcv2_dt_ids,
+		.suppress_bind_attrs = true,
 	},
 	.probe = imx_gpcv2_probe,
 };

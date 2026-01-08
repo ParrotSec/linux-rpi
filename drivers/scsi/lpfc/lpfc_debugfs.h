@@ -44,6 +44,9 @@
 /* hbqinfo output buffer size */
 #define LPFC_HBQINFO_SIZE 8192
 
+/* hdwqinfo output buffer size */
+#define LPFC_HDWQINFO_SIZE 8192
+
 /* nvmestat output buffer size */
 #define LPFC_NVMESTAT_SIZE 8192
 #define LPFC_IOKTIME_SIZE 8192
@@ -322,6 +325,17 @@ enum {
 						 * discovery */
 #endif /* H_LPFC_DEBUG_FS */
 
+enum {
+	writeGuard = 1,
+	writeApp,
+	writeRef,
+	readGuard,
+	readApp,
+	readRef,
+	InjErrLBA,
+	InjErrNPortID,
+	InjErrWWPN,
+};
 
 /*
  * Driver debug utility routines outside of debugfs. The debug utility

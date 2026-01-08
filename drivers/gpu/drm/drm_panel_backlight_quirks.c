@@ -2,6 +2,7 @@
 
 #include <linux/array_size.h>
 #include <linux/dmi.h>
+#include <linux/export.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <drm/drm_edid.h>
@@ -49,7 +50,7 @@ static bool drm_panel_min_backlight_quirk_matches(const struct drm_panel_min_bac
 	if (!dmi_match(quirk->dmi_match.field, quirk->dmi_match.value))
 		return false;
 
-	if (!drm_edid_match(edid, &quirk->ident))
+	if (quirk->ident.panel_id && !drm_edid_match(edid, &quirk->ident))
 		return false;
 
 	return true;

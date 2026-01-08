@@ -585,7 +585,7 @@
 	};
 };
 
-&dispcc {
+&iris {
 	status = "okay";
 };
 

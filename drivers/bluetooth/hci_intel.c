@@ -660,7 +660,7 @@ static int intel_setup(struct hci_uart *hu)
 	 */
 	if (!bacmp(&params.otp_bdaddr, BDADDR_ANY)) {
 		bt_dev_info(hdev, "No device address configured");
-		set_bit(HCI_QUIRK_INVALID_BDADDR, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_INVALID_BDADDR);
 	}
 
 	/* With this Intel bootloader only the hardware variant and device
@@ -1029,12 +1029,12 @@ static struct sk_buff *intel_dequeue(struct hci_uart *hu)
 		struct hci_command_hdr *cmd = (void *)skb->data;
 		__u16 opcode = le16_to_cpu(cmd->opcode);
 
-		/* When the 0xfc01 command is issued to boot into
-		 * the operational firmware, it will actually not
-		 * send a command complete event. To keep the flow
-		 * control working inject that event here.
+		/* When the BTINTEL_HCI_OP_RESET command is issued to boot into
+		 * the operational firmware, it will actually not send a command
+		 * complete event. To keep the flow control working inject that
+		 * event here.
 		 */
-		if (opcode == 0xfc01)
+		if (opcode == BTINTEL_HCI_OP_RESET)
 			inject_cmd_complete(hu->hdev, opcode);
 	}
 
@@ -1206,7 +1206,7 @@ static void intel_remove(struct platform_device *pdev)
 
 static struct platform_driver intel_driver = {
 	.probe = intel_probe,
-	.remove_new = intel_remove,
+	.remove = intel_remove,
 	.driver = {
 		.name = "hci_intel",
 		.acpi_match_table = ACPI_PTR(intel_acpi_match),

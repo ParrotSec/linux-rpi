@@ -56,8 +56,8 @@ extern struct list_head mrioc_list;
 extern int prot_mask;
 extern atomic64_t event_counter;
 
-#define MPI3MR_DRIVER_VERSION	"8.12.0.0.50"
-#define MPI3MR_DRIVER_RELDATE	"05-Sept-2024"
+#define MPI3MR_DRIVER_VERSION	"8.14.0.5.50"
+#define MPI3MR_DRIVER_RELDATE	"27-June-2025"
 
 #define MPI3MR_DRIVER_NAME	"mpi3mr"
 #define MPI3MR_DRIVER_LICENSE	"GPL"
@@ -934,6 +934,8 @@ struct trigger_event_data {
  * @size: Buffer size
  * @addr: Virtual address
  * @dma_addr: Buffer DMA address
+ * @is_segmented: The buffer is segmented or not
+ * @disabled_after_reset: The buffer is disabled after reset
  */
 struct diag_buffer_desc {
 	u8 type;
@@ -943,6 +945,8 @@ struct diag_buffer_desc {
 	u32 size;
 	void *addr;
 	dma_addr_t dma_addr;
+	bool is_segmented;
+	bool disabled_after_reset;
 };
 
 /**
@@ -1028,6 +1032,8 @@ struct scmd_priv {
  * @admin_reply_base: Admin reply queue base virtual address
  * @admin_reply_dma: Admin reply queue base dma address
  * @admin_reply_q_in_use: Queue is handled by poll/ISR
+ * @admin_pend_isr: Count of unprocessed admin ISR/poll calls
+ * due to another thread processing replies
  * @ready_timeout: Controller ready timeout
  * @intr_info: Interrupt cookie pointer
  * @intr_info_count: Number of interrupt cookies
@@ -1131,6 +1137,8 @@ struct scmd_priv {
  * @logdata_buf: Circular buffer to store log data entries
  * @logdata_buf_idx: Index of entry in buffer to store
  * @logdata_entry_sz: log data entry size
+ * @adm_req_q_bar_writeq_lock: Admin request queue lock
+ * @adm_reply_q_bar_writeq_lock: Admin reply queue lock
  * @pend_large_data_sz: Counter to track pending large data
  * @io_throttle_data_length: I/O size to track in 512b blocks
  * @io_throttle_high: I/O size to start throttle in 512b blocks
@@ -1162,6 +1170,10 @@ struct scmd_priv {
  * @block_on_pci_err: Block IO during PCI error recovery
  * @reply_qfull_count: Occurences of reply queue full avoidance kicking-in
  * @prevent_reply_qfull: Enable reply queue prevention
+ * @seg_tb_support: Segmented trace buffer support
+ * @num_tb_segs: Number of Segments in Trace buffer
+ * @trace_buf_pool: DMA pool for Segmented trace buffer segments
+ * @trace_buf: Trace buffer segments memory descriptor
  */
 struct mpi3mr_ioc {
 	struct list_head list;
@@ -1175,7 +1187,7 @@ struct mpi3mr_ioc {
 	char name[MPI3MR_NAME_LENGTH];
 	char driver_name[MPI3MR_NAME_LENGTH];
 
-	volatile struct mpi3_sysif_registers __iomem *sysif_regs;
+	struct mpi3_sysif_registers __iomem *sysif_regs;
 	resource_size_t sysif_regs_phys;
 	int bars;
 	u64 dma_mask;
@@ -1198,6 +1210,7 @@ struct mpi3mr_ioc {
 	void *admin_reply_base;
 	dma_addr_t admin_reply_dma;
 	atomic_t admin_reply_q_in_use;
+	atomic_t admin_pend_isr;
 
 	u32 ready_timeout;
 
@@ -1328,6 +1341,8 @@ struct mpi3mr_ioc {
 	u8 *logdata_buf;
 	u16 logdata_buf_idx;
 	u16 logdata_entry_sz;
+	spinlock_t adm_req_q_bar_writeq_lock;
+	spinlock_t adm_reply_q_bar_writeq_lock;
 
 	atomic_t pend_large_data_sz;
 	u32 io_throttle_data_length;
@@ -1363,6 +1378,11 @@ struct mpi3mr_ioc {
 	bool block_on_pci_err;
 	atomic_t reply_qfull_count;
 	bool prevent_reply_qfull;
+	bool seg_tb_support;
+	u32 num_tb_segs;
+	struct dma_pool *trace_buf_pool;
+	struct segments *trace_buf;
+
 };
 
 /**

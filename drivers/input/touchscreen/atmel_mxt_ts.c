@@ -2535,8 +2535,6 @@ fault:
 static const struct vb2_ops mxt_queue_ops = {
 	.queue_setup		= mxt_queue_setup,
 	.buf_queue		= mxt_buffer_queue,
-	.wait_prepare		= vb2_ops_wait_prepare,
-	.wait_finish		= vb2_ops_wait_finish,
 };
 
 static const struct vb2_queue mxt_queue = {
@@ -3319,7 +3317,7 @@ static int mxt_probe(struct i2c_client *client)
 	if (data->reset_gpio) {
 		/* Wait a while and then de-assert the RESET GPIO line */
 		msleep(MXT_RESET_GPIO_TIME);
-		gpiod_set_value(data->reset_gpio, 0);
+		gpiod_set_value_cansleep(data->reset_gpio, 0);
 		msleep(MXT_RESET_INVALID_CHG);
 	}
 

@@ -60,7 +60,7 @@
 
 /* max size of osd read request, limited by libceph */
 #define CEPH_MAX_READ_SIZE              CEPH_MSG_MAX_DATA_LEN
-/* osd has a configurable limitaion of max write size.
+/* osd has a configurable limitation of max write size.
  * CEPH_MSG_MAX_DATA_LEN should be small enough. */
 #define CEPH_MAX_WRITE_SIZE		CEPH_MSG_MAX_DATA_LEN
 #define CEPH_RASIZE_DEFAULT             (8192*1024)    /* max readahead */
@@ -103,6 +103,20 @@ struct ceph_mount_options {
 	char *mon_addr;
 	struct fscrypt_dummy_policy dummy_enc_policy;
 };
+
+/*
+ * Check if the mds namespace in ceph_mount_options matches
+ * the passed in namespace string. First time match (when
+ * ->mds_namespace is NULL) is treated specially, since
+ * ->mds_namespace needs to be initialized by the caller.
+ */
+static inline int namespace_equals(struct ceph_mount_options *fsopt,
+				   const char *namespace, size_t len)
+{
+	return !(fsopt->mds_namespace &&
+		 (strlen(fsopt->mds_namespace) != len ||
+		  strncmp(fsopt->mds_namespace, namespace, len)));
+}
 
 /* mount state */
 enum {
@@ -796,7 +810,6 @@ extern int __ceph_mark_dirty_caps(struct ceph_inode_info *ci, int mask,
 
 extern int __ceph_caps_revoking_other(struct ceph_inode_info *ci,
 				      struct ceph_cap *ocap, int mask);
-extern int ceph_caps_revoking(struct ceph_inode_info *ci, int mask);
 extern int __ceph_caps_used(struct ceph_inode_info *ci);
 
 static inline bool __ceph_is_file_opened(struct ceph_inode_info *ci)
@@ -904,7 +917,7 @@ ceph_find_rw_context(struct ceph_file_info *cf)
 }
 
 struct ceph_readdir_cache_control {
-	struct page  *page;
+	struct folio *folio;
 	struct dentry **dentries;
 	int index;
 };
@@ -1133,8 +1146,7 @@ struct ceph_acl_sec_ctx {
 	void *acl;
 #endif
 #ifdef CONFIG_CEPH_FS_SECURITY_LABEL
-	void *sec_ctx;
-	u32 sec_ctxlen;
+	struct lsm_context lsmctx;
 #endif
 #ifdef CONFIG_FS_ENCRYPTION
 	struct ceph_fscrypt_auth *fscrypt_auth;
@@ -1288,7 +1300,7 @@ extern void __ceph_touch_fmode(struct ceph_inode_info *ci,
 /* addr.c */
 extern const struct address_space_operations ceph_aops;
 extern const struct netfs_request_ops ceph_netfs_ops;
-extern int ceph_mmap(struct file *file, struct vm_area_struct *vma);
+int ceph_mmap_prepare(struct vm_area_desc *desc);
 extern int ceph_uninline_data(struct file *file);
 extern int ceph_pool_perm_check(struct inode *inode, int need);
 extern void ceph_pool_perm_destroy(struct ceph_mds_client* mdsc);

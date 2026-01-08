@@ -368,8 +368,6 @@ int ceph_open(struct inode *inode, struct file *file)
 	int flags, fmode, wanted;
 	struct dentry *dentry;
 	char *path;
-	int pathlen;
-	u64 pathbase;
 	bool do_sync = false;
 	int mask = MAY_READ;
 
@@ -399,14 +397,15 @@ int ceph_open(struct inode *inode, struct file *file)
 	if (!dentry) {
 		do_sync = true;
 	} else {
-		path = ceph_mdsc_build_path(mdsc, dentry, &pathlen, &pathbase, 0);
+		struct ceph_path_info path_info;
+		path = ceph_mdsc_build_path(mdsc, dentry, &path_info, 0);
 		if (IS_ERR(path)) {
 			do_sync = true;
 			err = 0;
 		} else {
 			err = ceph_mds_check_access(mdsc, path, mask);
 		}
-		ceph_mdsc_free_path(path, pathlen);
+		ceph_mdsc_free_path_info(&path_info);
 		dput(dentry);
 
 		/* For none EACCES cases will let the MDS do the mds auth check */
@@ -580,8 +579,7 @@ static void wake_async_create_waiters(struct inode *inode,
 
 	spin_lock(&ci->i_ceph_lock);
 	if (ci->i_ceph_flags & CEPH_I_ASYNC_CREATE) {
-		ci->i_ceph_flags &= ~CEPH_I_ASYNC_CREATE;
-		wake_up_bit(&ci->i_ceph_flags, CEPH_ASYNC_CREATE_BIT);
+		clear_and_wake_up_bit(CEPH_ASYNC_CREATE_BIT, &ci->i_ceph_flags);
 
 		if (ci->i_ceph_flags & CEPH_I_ASYNC_CHECK_CAPS) {
 			ci->i_ceph_flags &= ~CEPH_I_ASYNC_CHECK_CAPS;
@@ -614,15 +612,13 @@ static void ceph_async_create_cb(struct ceph_mds_client *mdsc,
 	mapping_set_error(req->r_parent->i_mapping, result);
 
 	if (result) {
-		int pathlen = 0;
-		u64 base = 0;
-		char *path = ceph_mdsc_build_path(mdsc, req->r_dentry, &pathlen,
-						  &base, 0);
+		struct ceph_path_info path_info = {0};
+		char *path = ceph_mdsc_build_path(mdsc, req->r_dentry, &path_info, 0);
 
 		pr_warn_client(cl,
 			"async create failure path=(%llx)%s result=%d!\n",
-			base, IS_ERR(path) ? "<<bad>>" : path, result);
-		ceph_mdsc_free_path(path, pathlen);
+			path_info.vino.ino, IS_ERR(path) ? "<<bad>>" : path, result);
+		ceph_mdsc_free_path_info(&path_info);
 
 		ceph_dir_clear_complete(req->r_parent);
 		if (!d_unhashed(dentry))
@@ -765,8 +761,7 @@ static int ceph_finish_async_create(struct inode *dir, struct inode *inode,
 	}
 
 	spin_lock(&dentry->d_lock);
-	di->flags &= ~CEPH_DENTRY_ASYNC_CREATE;
-	wake_up_bit(&di->flags, CEPH_DENTRY_ASYNC_CREATE_BIT);
+	clear_and_wake_up_bit(CEPH_DENTRY_ASYNC_CREATE_BIT, &di->flags);
 	spin_unlock(&dentry->d_lock);
 
 	return ret;
@@ -791,8 +786,6 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 	int mask;
 	int err;
 	char *path;
-	int pathlen;
-	u64 pathbase;
 
 	doutc(cl, "%p %llx.%llx dentry %p '%pd' %s flags %d mode 0%o\n",
 	      dir, ceph_vinop(dir), dentry, dentry,
@@ -814,7 +807,8 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 	if (!dn) {
 		try_async = false;
 	} else {
-		path = ceph_mdsc_build_path(mdsc, dn, &pathlen, &pathbase, 0);
+		struct ceph_path_info path_info;
+		path = ceph_mdsc_build_path(mdsc, dn, &path_info, 0);
 		if (IS_ERR(path)) {
 			try_async = false;
 			err = 0;
@@ -826,7 +820,7 @@ int ceph_atomic_open(struct inode *dir, struct dentry *dentry,
 				mask |= MAY_WRITE;
 			err = ceph_mds_check_access(mdsc, path, mask);
 		}
-		ceph_mdsc_free_path(path, pathlen);
+		ceph_mdsc_free_path_info(&path_info);
 		dput(dn);
 
 		/* For none EACCES cases will let the MDS do the mds auth check */
@@ -1992,8 +1986,7 @@ ceph_sync_write(struct kiocb *iocb, struct iov_iter *from, loff_t pos,
 
 		if (IS_ENCRYPTED(inode)) {
 			ret = ceph_fscrypt_encrypt_pages(inode, pages,
-							 write_pos, write_len,
-							 GFP_KERNEL);
+							 write_pos, write_len);
 			if (ret < 0) {
 				doutc(cl, "encryption failed with %d\n", ret);
 				ceph_release_page_vector(pages, num_pages);
@@ -2530,19 +2523,19 @@ static loff_t ceph_llseek(struct file *file, loff_t offset, int whence)
 	return generic_file_llseek(file, offset, whence);
 }
 
-static inline void ceph_zero_partial_page(
-	struct inode *inode, loff_t offset, unsigned size)
+static inline void ceph_zero_partial_page(struct inode *inode,
+		loff_t offset, size_t size)
 {
-	struct page *page;
-	pgoff_t index = offset >> PAGE_SHIFT;
+	struct folio *folio;
 
-	page = find_lock_page(inode->i_mapping, index);
-	if (page) {
-		wait_on_page_writeback(page);
-		zero_user(page, offset & (PAGE_SIZE - 1), size);
-		unlock_page(page);
-		put_page(page);
-	}
+	folio = filemap_lock_folio(inode->i_mapping, offset >> PAGE_SHIFT);
+	if (IS_ERR(folio))
+		return;
+
+	folio_wait_writeback(folio);
+	folio_zero_range(folio, offset_in_folio(folio, offset), size);
+	folio_unlock(folio);
+	folio_put(folio);
 }
 
 static void ceph_zero_pagecache_range(struct inode *inode, loff_t offset,
@@ -2616,7 +2609,7 @@ static int ceph_zero_objects(struct inode *inode, loff_t offset, loff_t length)
 	s32 stripe_unit = ci->i_layout.stripe_unit;
 	s32 stripe_count = ci->i_layout.stripe_count;
 	s32 object_size = ci->i_layout.object_size;
-	u64 object_set_size = object_size * stripe_count;
+	u64 object_set_size = (u64) object_size * stripe_count;
 	u64 nearly, t;
 
 	/* round offset up to next period boundary */
@@ -3171,7 +3164,7 @@ const struct file_operations ceph_file_fops = {
 	.llseek = ceph_llseek,
 	.read_iter = ceph_read_iter,
 	.write_iter = ceph_write_iter,
-	.mmap = ceph_mmap,
+	.mmap_prepare = ceph_mmap_prepare,
 	.fsync = ceph_fsync,
 	.lock = ceph_lock,
 	.setlease = simple_nosetlease,

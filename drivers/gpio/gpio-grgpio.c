@@ -16,20 +16,21 @@
  * Contributors: Andreas Larsson <andreas@gaisler.com>
  */
 
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/platform_device.h>
-#include <linux/spinlock.h>
-#include <linux/io.h>
-#include <linux/of.h>
-#include <linux/gpio/driver.h>
-#include <linux/slab.h>
+#include <linux/bitops.h>
 #include <linux/err.h>
+#include <linux/gpio/driver.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
-#include <linux/bitops.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/string_choices.h>
 
 #define GRGPIO_MAX_NGPIO 32
 
@@ -169,6 +170,8 @@ static void grgpio_irq_mask(struct irq_data *d)
 	grgpio_set_imask(priv, offset, 0);
 
 	raw_spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
+
+	gpiochip_disable_irq(&priv->gc, d->hwirq);
 }
 
 static void grgpio_irq_unmask(struct irq_data *d)
@@ -177,6 +180,7 @@ static void grgpio_irq_unmask(struct irq_data *d)
 	int offset = d->hwirq;
 	unsigned long flags;
 
+	gpiochip_enable_irq(&priv->gc, d->hwirq);
 	raw_spin_lock_irqsave(&priv->gc.bgpio_lock, flags);
 
 	grgpio_set_imask(priv, offset, 1);
@@ -184,11 +188,13 @@ static void grgpio_irq_unmask(struct irq_data *d)
 	raw_spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
 }
 
-static struct irq_chip grgpio_irq_chip = {
+static const struct irq_chip grgpio_irq_chip = {
 	.name			= "grgpio",
 	.irq_mask		= grgpio_irq_mask,
 	.irq_unmask		= grgpio_irq_unmask,
 	.irq_set_type		= grgpio_irq_set_type,
+	.flags = IRQCHIP_IMMUTABLE,
+	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
 static irqreturn_t grgpio_irq_handler(int irq, void *dev)
@@ -318,6 +324,13 @@ static void grgpio_irq_unmap(struct irq_domain *d, unsigned int irq)
 	raw_spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
 }
 
+static void grgpio_irq_domain_remove(void *data)
+{
+	struct irq_domain *domain = data;
+
+	irq_domain_remove(domain);
+}
+
 static const struct irq_domain_ops grgpio_irq_domain_ops = {
 	.map	= grgpio_irq_map,
 	.unmap	= grgpio_irq_unmap,
@@ -389,13 +402,17 @@ static int grgpio_probe(struct platform_device *ofdev)
 			return -EINVAL;
 		}
 
-		priv->domain = irq_domain_add_linear(np, gc->ngpio,
-						     &grgpio_irq_domain_ops,
-						     priv);
+		priv->domain = irq_domain_create_linear(dev_fwnode(&ofdev->dev), gc->ngpio,
+							&grgpio_irq_domain_ops, priv);
 		if (!priv->domain) {
 			dev_err(dev, "Could not add irq domain\n");
 			return -EINVAL;
 		}
+
+		err = devm_add_action_or_reset(dev, grgpio_irq_domain_remove,
+					       priv->domain);
+		if (err)
+			return err;
 
 		for (i = 0; i < gc->ngpio; i++) {
 			struct grgpio_lirq *lirq;
@@ -419,30 +436,16 @@ static int grgpio_probe(struct platform_device *ofdev)
 		}
 	}
 
-	platform_set_drvdata(ofdev, priv);
-
-	err = gpiochip_add_data(gc, priv);
+	err = devm_gpiochip_add_data(dev, gc, priv);
 	if (err) {
 		dev_err(dev, "Could not add gpiochip\n");
-		if (priv->domain)
-			irq_domain_remove(priv->domain);
 		return err;
 	}
 
 	dev_info(dev, "regs=0x%p, base=%d, ngpio=%d, irqs=%s\n",
-		 priv->regs, gc->base, gc->ngpio, priv->domain ? "on" : "off");
+		 priv->regs, gc->base, gc->ngpio, str_on_off(priv->domain));
 
 	return 0;
-}
-
-static void grgpio_remove(struct platform_device *ofdev)
-{
-	struct grgpio_priv *priv = platform_get_drvdata(ofdev);
-
-	gpiochip_remove(&priv->gc);
-
-	if (priv->domain)
-		irq_domain_remove(priv->domain);
 }
 
 static const struct of_device_id grgpio_match[] = {
@@ -459,7 +462,6 @@ static struct platform_driver grgpio_driver = {
 		.of_match_table = grgpio_match,
 	},
 	.probe = grgpio_probe,
-	.remove_new = grgpio_remove,
 };
 module_platform_driver(grgpio_driver);
 

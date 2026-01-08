@@ -53,55 +53,67 @@
 			no-map;
 		};
 
-		main_r5fss0_core0_dma_memory_region: r5f-dma-memory@a0000000 {
+		main_r5fss0_core0_dma_memory_region: memory@a0000000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa0000000 0x00 0x100000>;
 			no-map;
 		};
 
-		main_r5fss0_core0_memory_region: r5f-memory@a0100000 {
+		main_r5fss0_core0_memory_region: memory@a0100000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa0100000 0x00 0xf00000>;
 			no-map;
 		};
 
-		main_r5fss0_core1_dma_memory_region: r5f-dma-memory@a1000000 {
+		main_r5fss0_core1_dma_memory_region: memory@a1000000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa1000000 0x00 0x100000>;
 			no-map;
 		};
 
-		main_r5fss0_core1_memory_region: r5f-memory@a1100000 {
+		main_r5fss0_core1_memory_region: memory@a1100000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa1100000 0x00 0xf00000>;
 			no-map;
 		};
 
-		main_r5fss1_core0_dma_memory_region: r5f-dma-memory@a2000000 {
+		main_r5fss1_core0_dma_memory_region: memory@a2000000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa2000000 0x00 0x100000>;
 			no-map;
 		};
 
-		main_r5fss1_core0_memory_region: r5f-memory@a2100000 {
+		main_r5fss1_core0_memory_region: memory@a2100000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa2100000 0x00 0xf00000>;
 			no-map;
 		};
 
-		main_r5fss1_core1_dma_memory_region: r5f-dma-memory@a3000000 {
+		main_r5fss1_core1_dma_memory_region: memory@a3000000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa3000000 0x00 0x100000>;
 			no-map;
 		};
 
-		main_r5fss1_core1_memory_region: r5f-memory@a3100000 {
+		main_r5fss1_core1_memory_region: memory@a3100000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0xa3100000 0x00 0xf00000>;
 			no-map;
 		};
 
-		rtos_ipc_memory_region: ipc-memories@a5000000 {
+		mcu_m4fss_dma_memory_region: memory@a4000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x00 0xa4000000 0x00 0x100000>;
+			no-map;
+		};
+
+		mcu_m4fss_memory_region: memory@a4100000 {
+			compatible = "shared-dma-pool";
+			reg = <0x00 0xa4100000 0x00 0xf00000>;
+			no-map;
+		};
+
+		rtos_ipc_memory_region: memory@a5000000 {
 			reg = <0x00 0xa5000000 0x00 0x00800000>;
 			alignment = <0x1000>;
 			no-map;
@@ -253,6 +265,7 @@
 		ti,mii-g-rt = <&icssg1_mii_g_rt>;
 		ti,mii-rt = <&icssg1_mii_rt>;
 		ti,iep = <&icssg1_iep0>,  <&icssg1_iep1>;
+		ti,pa-stats = <&icssg1_pa_stats>;
 		interrupt-parent = <&icssg1_intc>;
 		interrupts = <24 0 2>, <25 1 3>;
 		interrupt-names = "tx_ts0", "tx_ts1";
@@ -450,7 +463,7 @@
 		>;
 	};
 
-	icssg1_rgmii1_pins_default: icssg1-rgmii1-default-pins{
+	icssg1_rgmii1_pins_default: icssg1-rgmii1-default-pins {
 		pinctrl-single,pins = <
 			AM64X_IOPAD(0x00b8, PIN_INPUT, 2) /* (Y7) PRG1_PRU0_GPO0.PRG1_RGMII1_RD0 */
 			AM64X_IOPAD(0x00bc, PIN_INPUT, 2) /* (U8) PRG1_PRU0_GPO1.PRG1_RGMII1_RD1 */
@@ -584,7 +597,6 @@
 	status = "okay";
 	non-removable;
 	ti,driver-strength-ohm = <50>;
-	disable-wp;
 	bootph-all;
 };
 
@@ -774,6 +786,33 @@
 	mboxes = <&mailbox0_cluster4 &mbox_main_r5fss1_core1>;
 	memory-region = <&main_r5fss1_core1_dma_memory_region>,
 			<&main_r5fss1_core1_memory_region>;
+};
+
+&mcu_m4fss {
+	mboxes = <&mailbox0_cluster6 &mbox_m4_0>;
+	memory-region = <&mcu_m4fss_dma_memory_region>,
+			<&mcu_m4fss_memory_region>;
+	status = "okay";
+};
+
+/* main_timer8 is used by r5f0-0 */
+&main_timer8 {
+	status = "reserved";
+};
+
+/* main_timer9 is used by r5f0-1 */
+&main_timer9 {
+	status = "reserved";
+};
+
+/* main_timer10 is used by r5f1-0 */
+&main_timer10 {
+	status = "reserved";
+};
+
+/* main_timer11 is used by r5f1-1 */
+&main_timer11 {
+	status = "reserved";
 };
 
 &serdes_ln_ctrl {

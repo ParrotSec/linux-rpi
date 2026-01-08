@@ -67,7 +67,7 @@ enum kunit_status {
 
 /*
  * Speed Attribute is stored as an enum and separated into categories of
- * speed: very_slowm, slow, and normal. These speeds are relative to
+ * speed: very_slow, slow, and normal. These speeds are relative to
  * other KUnit tests.
  *
  * Note: unset speed attribute acts as default of KUNIT_SPEED_NORMAL.
@@ -312,6 +312,7 @@ static inline void kunit_set_failure(struct kunit *test)
 }
 
 bool kunit_enabled(void);
+bool kunit_autorun(void);
 const char *kunit_action(void);
 const char *kunit_filter_glob(void);
 char *kunit_filter(void);
@@ -334,7 +335,8 @@ kunit_filter_suites(const struct kunit_suite_set *suite_set,
 		    int *err);
 void kunit_free_suite_set(struct kunit_suite_set suite_set);
 
-int __kunit_test_suites_init(struct kunit_suite * const * const suites, int num_suites);
+int __kunit_test_suites_init(struct kunit_suite * const * const suites, int num_suites,
+			     bool run_tests);
 
 void __kunit_test_suites_exit(struct kunit_suite **suites, int num_suites);
 
@@ -530,6 +532,18 @@ static inline char *kunit_kstrdup(struct kunit *test, const char *str, gfp_t gfp
 const char *kunit_kstrdup_const(struct kunit *test, const char *str, gfp_t gfp);
 
 /**
+ * kunit_attach_mm() - Create and attach a new mm if it doesn't already exist.
+ *
+ * Allocates a &struct mm_struct and attaches it to @current. In most cases, call
+ * kunit_vm_mmap() without calling kunit_attach_mm() directly. Only necessary when
+ * code under test accesses the mm before executing the mmap (e.g., to perform
+ * additional initialization beforehand).
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+int kunit_attach_mm(void);
+
+/**
  * kunit_vm_mmap() - Allocate KUnit-tracked vm_mmap() area
  * @test: The test context object.
  * @file: struct file pointer to map from, if any
@@ -551,9 +565,9 @@ void kunit_cleanup(struct kunit *test);
 void __printf(2, 3) kunit_log_append(struct string_stream *log, const char *fmt, ...);
 
 /**
- * kunit_mark_skipped() - Marks @test_or_suite as skipped
+ * kunit_mark_skipped() - Marks @test as skipped
  *
- * @test_or_suite: The test context object.
+ * @test: The test context object.
  * @fmt:  A printk() style format string.
  *
  * Marks the test as skipped. @fmt is given output as the test status
@@ -561,18 +575,18 @@ void __printf(2, 3) kunit_log_append(struct string_stream *log, const char *fmt,
  *
  * Test execution continues after kunit_mark_skipped() is called.
  */
-#define kunit_mark_skipped(test_or_suite, fmt, ...)			\
+#define kunit_mark_skipped(test, fmt, ...)				\
 	do {								\
-		WRITE_ONCE((test_or_suite)->status, KUNIT_SKIPPED);	\
-		scnprintf((test_or_suite)->status_comment,		\
+		WRITE_ONCE((test)->status, KUNIT_SKIPPED);		\
+		scnprintf((test)->status_comment,			\
 			  KUNIT_STATUS_COMMENT_SIZE,			\
 			  fmt, ##__VA_ARGS__);				\
 	} while (0)
 
 /**
- * kunit_skip() - Marks @test_or_suite as skipped
+ * kunit_skip() - Marks @test as skipped
  *
- * @test_or_suite: The test context object.
+ * @test: The test context object.
  * @fmt:  A printk() style format string.
  *
  * Skips the test. @fmt is given output as the test status
@@ -580,10 +594,10 @@ void __printf(2, 3) kunit_log_append(struct string_stream *log, const char *fmt,
  *
  * Test execution is halted after kunit_skip() is called.
  */
-#define kunit_skip(test_or_suite, fmt, ...)				\
+#define kunit_skip(test, fmt, ...)					\
 	do {								\
-		kunit_mark_skipped((test_or_suite), fmt, ##__VA_ARGS__);\
-		kunit_try_catch_throw(&((test_or_suite)->try_catch));	\
+		kunit_mark_skipped((test), fmt, ##__VA_ARGS__);		\
+		kunit_try_catch_throw(&((test)->try_catch));		\
 	} while (0)
 
 /*

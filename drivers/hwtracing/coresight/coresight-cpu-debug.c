@@ -699,7 +699,7 @@ static int debug_platform_probe(struct platform_device *pdev)
 
 	drvdata->pclk = coresight_get_enable_apb_pclk(&pdev->dev);
 	if (IS_ERR(drvdata->pclk))
-		return -ENODEV;
+		return PTR_ERR(drvdata->pclk);
 
 	dev_set_drvdata(&pdev->dev, drvdata);
 	pm_runtime_get_noresume(&pdev->dev);
@@ -710,8 +710,6 @@ static int debug_platform_probe(struct platform_device *pdev)
 	if (ret) {
 		pm_runtime_put_noidle(&pdev->dev);
 		pm_runtime_disable(&pdev->dev);
-		if (!IS_ERR_OR_NULL(drvdata->pclk))
-			clk_put(drvdata->pclk);
 	}
 	return ret;
 }
@@ -725,8 +723,6 @@ static void debug_platform_remove(struct platform_device *pdev)
 
 	__debug_remove(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
-	if (!IS_ERR_OR_NULL(drvdata->pclk))
-		clk_put(drvdata->pclk);
 }
 
 #ifdef CONFIG_ACPI
@@ -763,7 +759,7 @@ static const struct dev_pm_ops debug_dev_pm_ops = {
 
 static struct platform_driver debug_platform_driver = {
 	.probe	= debug_platform_probe,
-	.remove_new = debug_platform_remove,
+	.remove = debug_platform_remove,
 	.driver	= {
 		.name			= "coresight-debug-platform",
 		.acpi_match_table	= ACPI_PTR(debug_platform_ids),
@@ -774,7 +770,8 @@ static struct platform_driver debug_platform_driver = {
 
 static int __init debug_init(void)
 {
-	return coresight_init_driver("debug", &debug_driver, &debug_platform_driver);
+	return coresight_init_driver("debug", &debug_driver, &debug_platform_driver,
+				     THIS_MODULE);
 }
 
 static void __exit debug_exit(void)

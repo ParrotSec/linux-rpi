@@ -231,7 +231,7 @@ static int vb2_fill_vb2_v4l2_buffer(struct vb2_buffer *vb, struct v4l2_buffer *b
 			break;
 		}
 
-		/* Fill in driver-provided information for OUTPUT types */
+		/* Fill in user-provided information for OUTPUT types */
 		if (V4L2_TYPE_IS_OUTPUT(b->type)) {
 			/*
 			 * Will have to go up to b->length when API starts
@@ -903,6 +903,11 @@ EXPORT_SYMBOL_GPL(vb2_expbuf);
 
 int vb2_queue_init_name(struct vb2_queue *q, const char *name)
 {
+	/* vb2_memory should match with v4l2_memory */
+	BUILD_BUG_ON(VB2_MEMORY_MMAP != (int)V4L2_MEMORY_MMAP);
+	BUILD_BUG_ON(VB2_MEMORY_USERPTR != (int)V4L2_MEMORY_USERPTR);
+	BUILD_BUG_ON(VB2_MEMORY_DMABUF != (int)V4L2_MEMORY_DMABUF);
+
 	/*
 	 * Sanity check
 	 */
@@ -915,12 +920,6 @@ int vb2_queue_init_name(struct vb2_queue *q, const char *name)
 	/* Warn that the driver should choose an appropriate timestamp type */
 	WARN_ON((q->timestamp_flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) ==
 		V4L2_BUF_FLAG_TIMESTAMP_UNKNOWN);
-
-	/* Warn that vb2_memory should match with v4l2_memory */
-	if (WARN_ON(VB2_MEMORY_MMAP != (int)V4L2_MEMORY_MMAP)
-		|| WARN_ON(VB2_MEMORY_USERPTR != (int)V4L2_MEMORY_USERPTR)
-		|| WARN_ON(VB2_MEMORY_DMABUF != (int)V4L2_MEMORY_DMABUF))
-		return -EINVAL;
 
 	if (q->buf_struct_size == 0)
 		q->buf_struct_size = sizeof(struct vb2_v4l2_buffer);
@@ -1014,6 +1013,11 @@ int vb2_ioctl_remove_bufs(struct file *file, void *priv,
 
 	if (vb2_queue_is_busy(vdev->queue, file))
 		return -EBUSY;
+
+	if (vb2_fileio_is_active(vdev->queue)) {
+		dprintk(vdev->queue, 1, "file io in progress\n");
+		return -EBUSY;
+	}
 
 	return vb2_core_remove_bufs(vdev->queue, d->index, d->count);
 }

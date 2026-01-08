@@ -23,7 +23,7 @@ if [ $# -ne 1 ]; then
 	ktap_exit_fail_msg "usage: $0 <script>"
 	exit "$KSFT_FAIL"
 fi
-script="$1"
+script="$(basename $1)"
 
 if [ -z "$(which packetdrill)" ]; then
 	ktap_skip_all "packetdrill not found in PATH"
@@ -31,16 +31,19 @@ if [ -z "$(which packetdrill)" ]; then
 fi
 
 declare -a optargs
+failfunc=ktap_test_fail
+
 if [[ -n "${KSFT_MACHINE_SLOW}" ]]; then
 	optargs+=('--tolerance_usecs=14000')
+	failfunc=ktap_test_xfail
 fi
 
 ktap_print_header
 ktap_set_plan 2
 
-unshare -n packetdrill ${ipv4_args[@]} ${optargs[@]} $(basename $script) > /dev/null \
-	&& ktap_test_pass "ipv4" || ktap_test_fail "ipv4"
-unshare -n packetdrill ${ipv6_args[@]} ${optargs[@]} $(basename $script) > /dev/null \
-	&& ktap_test_pass "ipv6" || ktap_test_fail "ipv6"
+unshare -n packetdrill ${ipv4_args[@]} ${optargs[@]} $script > /dev/null \
+	&& ktap_test_pass "ipv4" || $failfunc "ipv4"
+unshare -n packetdrill ${ipv6_args[@]} ${optargs[@]} $script > /dev/null \
+	&& ktap_test_pass "ipv6" || $failfunc "ipv6"
 
 ktap_finished

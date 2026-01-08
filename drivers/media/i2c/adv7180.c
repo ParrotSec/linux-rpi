@@ -357,32 +357,27 @@ static inline struct adv7180_state *to_state(struct v4l2_subdev *sd)
 static int adv7180_querystd(struct v4l2_subdev *sd, v4l2_std_id *std)
 {
 	struct adv7180_state *state = to_state(sd);
-	int err = mutex_lock_interruptible(&state->mutex);
-	if (err)
-		return err;
+	int ret;
 
-	if (state->streaming) {
-		err = -EBUSY;
-		goto unlock;
-	}
+	guard(mutex)(&state->mutex);
 
-	err = adv7180_set_video_standard(state,
-			ADV7180_STD_AD_PAL_BG_NTSC_J_SECAM);
-	if (err)
-		goto unlock;
+	/*
+	 * We can't sample the standard if the device is streaming as that would
+	 * interfere with the capture session as the VID_SEL reg is touched.
+	 */
+	if (state->streaming)
+		return -EBUSY;
 
+	/* Set the standard to autodetect PAL B/G/H/I/D, NTSC J or SECAM */
+	ret = adv7180_set_video_standard(state,
+					 ADV7180_STD_AD_PAL_BG_NTSC_J_SECAM);
+	if (ret)
+		return ret;
+
+	/* Allow some time for the autodetection to run. */
 	msleep(100);
-	__adv7180_status(state, NULL, std);
 
-	err = v4l2_std_to_adv7180(state->curr_norm);
-	if (err < 0)
-		goto unlock;
-
-	err = adv7180_set_video_standard(state, err);
-
-unlock:
-	mutex_unlock(&state->mutex);
-	return err;
+	return __adv7180_status(state, NULL, std);
 }
 
 static int adv7180_s_routing(struct v4l2_subdev *sd, u32 input,
@@ -812,12 +807,7 @@ static int adv7180_set_pad_format(struct v4l2_subdev *sd,
 	ret = adv7180_mbus_fmt(sd,  &format->format);
 
 	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
-		if (state->field != format->format.field) {
-			state->field = format->format.field;
-			adv7180_set_power(state, false);
-			adv7180_set_field_mode(state);
-			adv7180_set_power(state, true);
-		}
+		state->field = format->format.field;
 	} else {
 		framefmt = v4l2_subdev_state_get_format(sd_state, 0);
 		*framefmt = format->format;
@@ -868,21 +858,6 @@ static int adv7180_get_skip_frames(struct v4l2_subdev *sd, u32 *frames)
 	return 0;
 }
 
-static int adv7180_g_pixelaspect(struct v4l2_subdev *sd, struct v4l2_fract *aspect)
-{
-	struct adv7180_state *state = to_state(sd);
-
-	if (state->curr_norm & V4L2_STD_525_60) {
-		aspect->numerator = 11;
-		aspect->denominator = 10;
-	} else {
-		aspect->numerator = 54;
-		aspect->denominator = 59;
-	}
-
-	return 0;
-}
-
 static int adv7180_g_tvnorms(struct v4l2_subdev *sd, v4l2_std_id *norm)
 {
 	*norm = V4L2_STD_ALL;
@@ -929,7 +904,6 @@ static const struct v4l2_subdev_video_ops adv7180_video_ops = {
 	.querystd = adv7180_querystd,
 	.g_input_status = adv7180_g_input_status,
 	.s_routing = adv7180_s_routing,
-	.g_pixelaspect = adv7180_g_pixelaspect,
 	.g_tvnorms = adv7180_g_tvnorms,
 	.s_stream = adv7180_s_stream,
 };
@@ -1450,7 +1424,8 @@ static int adv7180_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	if (of_property_read_bool(np, "adv,force-bt656-4"))
+	if (of_property_read_bool(np, "adv,force-bt656-4") ||
+	    of_property_read_bool(np, "adi,force-bt656-4"))
 		state->force_bt656_4 = true;
 
 	if (state->chip_info->flags & ADV7180_FLAG_MIPI_CSI2) {
@@ -1564,6 +1539,8 @@ static int adv7180_suspend(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct adv7180_state *state = to_state(sd);
 
+	guard(mutex)(&state->mutex);
+
 	return adv7180_set_power(state, false);
 }
 
@@ -1576,6 +1553,8 @@ static int adv7180_resume(struct device *dev)
 	ret = init_device(state);
 	if (ret < 0)
 		return ret;
+
+	guard(mutex)(&state->mutex);
 
 	ret = adv7180_set_power(state, state->powered);
 	if (ret)

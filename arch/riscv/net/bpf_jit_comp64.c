@@ -10,7 +10,7 @@
 #include <linux/filter.h>
 #include <linux/memory.h>
 #include <linux/stop_machine.h>
-#include <asm/patch.h>
+#include <asm/text-patching.h>
 #include <asm/cfi.h>
 #include <asm/percpu.h>
 #include "bpf_jit.h"
@@ -473,11 +473,212 @@ static inline void emit_kcfi(u32 hash, struct rv_jit_context *ctx)
 		emit(hash, ctx);
 }
 
-static void emit_atomic(u8 rd, u8 rs, s16 off, s32 imm, bool is64,
-			struct rv_jit_context *ctx)
+static int emit_load_8(bool sign_ext, u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
 {
-	u8 r0;
+	int insns_start;
+
+	if (is_12b_int(off)) {
+		insns_start = ctx->ninsns;
+		if (sign_ext)
+			emit(rv_lb(rd, off, rs), ctx);
+		else
+			emit(rv_lbu(rd, off, rs), ctx);
+		return ctx->ninsns - insns_start;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
+	insns_start = ctx->ninsns;
+	if (sign_ext)
+		emit(rv_lb(rd, 0, RV_REG_T1), ctx);
+	else
+		emit(rv_lbu(rd, 0, RV_REG_T1), ctx);
+	return ctx->ninsns - insns_start;
+}
+
+static int emit_load_16(bool sign_ext, u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	int insns_start;
+
+	if (is_12b_int(off)) {
+		insns_start = ctx->ninsns;
+		if (sign_ext)
+			emit(rv_lh(rd, off, rs), ctx);
+		else
+			emit(rv_lhu(rd, off, rs), ctx);
+		return ctx->ninsns - insns_start;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
+	insns_start = ctx->ninsns;
+	if (sign_ext)
+		emit(rv_lh(rd, 0, RV_REG_T1), ctx);
+	else
+		emit(rv_lhu(rd, 0, RV_REG_T1), ctx);
+	return ctx->ninsns - insns_start;
+}
+
+static int emit_load_32(bool sign_ext, u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	int insns_start;
+
+	if (is_12b_int(off)) {
+		insns_start = ctx->ninsns;
+		if (sign_ext)
+			emit(rv_lw(rd, off, rs), ctx);
+		else
+			emit(rv_lwu(rd, off, rs), ctx);
+		return ctx->ninsns - insns_start;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
+	insns_start = ctx->ninsns;
+	if (sign_ext)
+		emit(rv_lw(rd, 0, RV_REG_T1), ctx);
+	else
+		emit(rv_lwu(rd, 0, RV_REG_T1), ctx);
+	return ctx->ninsns - insns_start;
+}
+
+static int emit_load_64(bool sign_ext, u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	int insns_start;
+
+	if (is_12b_int(off)) {
+		insns_start = ctx->ninsns;
+		emit_ld(rd, off, rs, ctx);
+		return ctx->ninsns - insns_start;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
+	insns_start = ctx->ninsns;
+	emit_ld(rd, 0, RV_REG_T1, ctx);
+	return ctx->ninsns - insns_start;
+}
+
+static void emit_store_8(u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	if (is_12b_int(off)) {
+		emit(rv_sb(rd, off, rs), ctx);
+		return;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
+	emit(rv_sb(RV_REG_T1, 0, rs), ctx);
+}
+
+static void emit_store_16(u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	if (is_12b_int(off)) {
+		emit(rv_sh(rd, off, rs), ctx);
+		return;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
+	emit(rv_sh(RV_REG_T1, 0, rs), ctx);
+}
+
+static void emit_store_32(u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	if (is_12b_int(off)) {
+		emit_sw(rd, off, rs, ctx);
+		return;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
+	emit_sw(RV_REG_T1, 0, rs, ctx);
+}
+
+static void emit_store_64(u8 rd, s32 off, u8 rs, struct rv_jit_context *ctx)
+{
+	if (is_12b_int(off)) {
+		emit_sd(rd, off, rs, ctx);
+		return;
+	}
+
+	emit_imm(RV_REG_T1, off, ctx);
+	emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
+	emit_sd(RV_REG_T1, 0, rs, ctx);
+}
+
+static int emit_atomic_ld_st(u8 rd, u8 rs, const struct bpf_insn *insn,
+			     struct rv_jit_context *ctx)
+{
+	u8 code = insn->code;
+	s32 imm = insn->imm;
+	s16 off = insn->off;
+
+	switch (imm) {
+	/* dst_reg = load_acquire(src_reg + off16) */
+	case BPF_LOAD_ACQ:
+		switch (BPF_SIZE(code)) {
+		case BPF_B:
+			emit_load_8(false, rd, off, rs, ctx);
+			break;
+		case BPF_H:
+			emit_load_16(false, rd, off, rs, ctx);
+			break;
+		case BPF_W:
+			emit_load_32(false, rd, off, rs, ctx);
+			break;
+		case BPF_DW:
+			emit_load_64(false, rd, off, rs, ctx);
+			break;
+		}
+		emit_fence_r_rw(ctx);
+
+		/* If our next insn is a redundant zext, return 1 to tell
+		 * build_body() to skip it.
+		 */
+		if (BPF_SIZE(code) != BPF_DW && insn_is_zext(&insn[1]))
+			return 1;
+		break;
+	/* store_release(dst_reg + off16, src_reg) */
+	case BPF_STORE_REL:
+		emit_fence_rw_w(ctx);
+		switch (BPF_SIZE(code)) {
+		case BPF_B:
+			emit_store_8(rd, off, rs, ctx);
+			break;
+		case BPF_H:
+			emit_store_16(rd, off, rs, ctx);
+			break;
+		case BPF_W:
+			emit_store_32(rd, off, rs, ctx);
+			break;
+		case BPF_DW:
+			emit_store_64(rd, off, rs, ctx);
+			break;
+		}
+		break;
+	default:
+		pr_err_once("bpf-jit: invalid atomic load/store opcode %02x\n", imm);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int emit_atomic_rmw(u8 rd, u8 rs, const struct bpf_insn *insn,
+			   struct rv_jit_context *ctx)
+{
+	u8 r0, code = insn->code;
+	s16 off = insn->off;
+	s32 imm = insn->imm;
 	int jmp_offset;
+	bool is64;
+
+	if (BPF_SIZE(code) != BPF_W && BPF_SIZE(code) != BPF_DW) {
+		pr_err_once("bpf-jit: 1- and 2-byte RMW atomics are not supported\n");
+		return -EINVAL;
+	}
+	is64 = BPF_SIZE(code) == BPF_DW;
 
 	if (off) {
 		if (is_12b_int(off)) {
@@ -554,9 +755,47 @@ static void emit_atomic(u8 rd, u8 rs, s16 off, s32 imm, bool is64,
 		     rv_sc_w(RV_REG_T3, rs, rd, 0, 1), ctx);
 		jmp_offset = ninsns_rvoff(-6);
 		emit(rv_bne(RV_REG_T3, 0, jmp_offset >> 1), ctx);
-		emit(rv_fence(0x3, 0x3), ctx);
+		emit_fence_rw_rw(ctx);
 		break;
+	default:
+		pr_err_once("bpf-jit: invalid atomic RMW opcode %02x\n", imm);
+		return -EINVAL;
 	}
+
+	return 0;
+}
+
+/*
+ * Sign-extend the register if necessary
+ */
+static int sign_extend(u8 rd, u8 rs, u8 sz, bool sign, struct rv_jit_context *ctx)
+{
+	if (!sign && (sz == 1 || sz == 2)) {
+		if (rd != rs)
+			emit_mv(rd, rs, ctx);
+		return 0;
+	}
+
+	switch (sz) {
+	case 1:
+		emit_sextb(rd, rs, ctx);
+		break;
+	case 2:
+		emit_sexth(rd, rs, ctx);
+		break;
+	case 4:
+		emit_sextw(rd, rs, ctx);
+		break;
+	case 8:
+		if (rd != rs)
+			emit_mv(rd, rs, ctx);
+		break;
+	default:
+		pr_err("bpf-jit: invalid size %d for sign_extend\n", sz);
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 #define BPF_FIXUP_OFFSET_MASK   GENMASK(26, 0)
@@ -873,10 +1112,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	stack_size += 16;
 
 	save_ret = flags & (BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_RET_FENTRY_RET);
-	if (save_ret) {
+	if (save_ret)
 		stack_size += 16; /* Save both A5 (BPF R0) and A0 */
-		retval_off = stack_size;
-	}
+	retval_off = stack_size;
 
 	stack_size += nr_arg_slots * 8;
 	args_off = stack_size;
@@ -1020,8 +1258,15 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 		restore_args(min_t(int, nr_arg_slots, RV_MAX_REG_ARGS), args_off, ctx);
 
 	if (save_ret) {
-		emit_ld(RV_REG_A0, -retval_off, RV_REG_FP, ctx);
 		emit_ld(regmap[BPF_REG_0], -(retval_off - 8), RV_REG_FP, ctx);
+		if (is_struct_ops) {
+			ret = sign_extend(RV_REG_A0, regmap[BPF_REG_0], m->ret_size,
+					  m->ret_flags & BTF_FMODEL_SIGNED_ARG, ctx);
+			if (ret)
+				goto out;
+		} else {
+			emit_ld(RV_REG_A0, -retval_off, RV_REG_FP, ctx);
+		}
 	}
 
 	emit_ld(RV_REG_S1, -sreg_off, RV_REG_FP, ctx);
@@ -1150,7 +1395,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 				emit_mv(rd, rs, ctx);
 #ifdef CONFIG_SMP
 			/* Load current CPU number in T1 */
-			emit_ld(RV_REG_T1, offsetof(struct thread_info, cpu),
+			emit_lw(RV_REG_T1, offsetof(struct thread_info, cpu),
 				RV_REG_TP, ctx);
 			/* Load address of __per_cpu_offset array in T2 */
 			emit_addr(RV_REG_T2, (u64)&__per_cpu_offset, extra_pass, ctx);
@@ -1557,7 +1802,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		 */
 		if (insn->src_reg == 0 && insn->imm == BPF_FUNC_get_smp_processor_id) {
 			/* Load current CPU number in R0 */
-			emit_ld(bpf_to_rv_reg(BPF_REG_0, ctx), offsetof(struct thread_info, cpu),
+			emit_lw(bpf_to_rv_reg(BPF_REG_0, ctx), offsetof(struct thread_info, cpu),
 				RV_REG_TP, ctx);
 			break;
 		}
@@ -1650,8 +1895,8 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_LDX | BPF_PROBE_MEM32 | BPF_W:
 	case BPF_LDX | BPF_PROBE_MEM32 | BPF_DW:
 	{
-		int insn_len, insns_start;
 		bool sign_ext;
+		int insn_len;
 
 		sign_ext = BPF_MODE(insn->code) == BPF_MEMSX ||
 			   BPF_MODE(insn->code) == BPF_PROBE_MEMSX;
@@ -1663,78 +1908,16 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 		switch (BPF_SIZE(code)) {
 		case BPF_B:
-			if (is_12b_int(off)) {
-				insns_start = ctx->ninsns;
-				if (sign_ext)
-					emit(rv_lb(rd, off, rs), ctx);
-				else
-					emit(rv_lbu(rd, off, rs), ctx);
-				insn_len = ctx->ninsns - insns_start;
-				break;
-			}
-
-			emit_imm(RV_REG_T1, off, ctx);
-			emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
-			insns_start = ctx->ninsns;
-			if (sign_ext)
-				emit(rv_lb(rd, 0, RV_REG_T1), ctx);
-			else
-				emit(rv_lbu(rd, 0, RV_REG_T1), ctx);
-			insn_len = ctx->ninsns - insns_start;
+			insn_len = emit_load_8(sign_ext, rd, off, rs, ctx);
 			break;
 		case BPF_H:
-			if (is_12b_int(off)) {
-				insns_start = ctx->ninsns;
-				if (sign_ext)
-					emit(rv_lh(rd, off, rs), ctx);
-				else
-					emit(rv_lhu(rd, off, rs), ctx);
-				insn_len = ctx->ninsns - insns_start;
-				break;
-			}
-
-			emit_imm(RV_REG_T1, off, ctx);
-			emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
-			insns_start = ctx->ninsns;
-			if (sign_ext)
-				emit(rv_lh(rd, 0, RV_REG_T1), ctx);
-			else
-				emit(rv_lhu(rd, 0, RV_REG_T1), ctx);
-			insn_len = ctx->ninsns - insns_start;
+			insn_len = emit_load_16(sign_ext, rd, off, rs, ctx);
 			break;
 		case BPF_W:
-			if (is_12b_int(off)) {
-				insns_start = ctx->ninsns;
-				if (sign_ext)
-					emit(rv_lw(rd, off, rs), ctx);
-				else
-					emit(rv_lwu(rd, off, rs), ctx);
-				insn_len = ctx->ninsns - insns_start;
-				break;
-			}
-
-			emit_imm(RV_REG_T1, off, ctx);
-			emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
-			insns_start = ctx->ninsns;
-			if (sign_ext)
-				emit(rv_lw(rd, 0, RV_REG_T1), ctx);
-			else
-				emit(rv_lwu(rd, 0, RV_REG_T1), ctx);
-			insn_len = ctx->ninsns - insns_start;
+			insn_len = emit_load_32(sign_ext, rd, off, rs, ctx);
 			break;
 		case BPF_DW:
-			if (is_12b_int(off)) {
-				insns_start = ctx->ninsns;
-				emit_ld(rd, off, rs, ctx);
-				insn_len = ctx->ninsns - insns_start;
-				break;
-			}
-
-			emit_imm(RV_REG_T1, off, ctx);
-			emit_add(RV_REG_T1, RV_REG_T1, rs, ctx);
-			insns_start = ctx->ninsns;
-			emit_ld(rd, 0, RV_REG_T1, ctx);
-			insn_len = ctx->ninsns - insns_start;
+			insn_len = emit_load_64(sign_ext, rd, off, rs, ctx);
 			break;
 		}
 
@@ -1879,49 +2062,27 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 	/* STX: *(size *)(dst + off) = src */
 	case BPF_STX | BPF_MEM | BPF_B:
-		if (is_12b_int(off)) {
-			emit(rv_sb(rd, off, rs), ctx);
-			break;
-		}
-
-		emit_imm(RV_REG_T1, off, ctx);
-		emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
-		emit(rv_sb(RV_REG_T1, 0, rs), ctx);
+		emit_store_8(rd, off, rs, ctx);
 		break;
 	case BPF_STX | BPF_MEM | BPF_H:
-		if (is_12b_int(off)) {
-			emit(rv_sh(rd, off, rs), ctx);
-			break;
-		}
-
-		emit_imm(RV_REG_T1, off, ctx);
-		emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
-		emit(rv_sh(RV_REG_T1, 0, rs), ctx);
+		emit_store_16(rd, off, rs, ctx);
 		break;
 	case BPF_STX | BPF_MEM | BPF_W:
-		if (is_12b_int(off)) {
-			emit_sw(rd, off, rs, ctx);
-			break;
-		}
-
-		emit_imm(RV_REG_T1, off, ctx);
-		emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
-		emit_sw(RV_REG_T1, 0, rs, ctx);
+		emit_store_32(rd, off, rs, ctx);
 		break;
 	case BPF_STX | BPF_MEM | BPF_DW:
-		if (is_12b_int(off)) {
-			emit_sd(rd, off, rs, ctx);
-			break;
-		}
-
-		emit_imm(RV_REG_T1, off, ctx);
-		emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
-		emit_sd(RV_REG_T1, 0, rs, ctx);
+		emit_store_64(rd, off, rs, ctx);
 		break;
+	case BPF_STX | BPF_ATOMIC | BPF_B:
+	case BPF_STX | BPF_ATOMIC | BPF_H:
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		emit_atomic(rd, rs, off, imm,
-			    BPF_SIZE(code) == BPF_DW, ctx);
+		if (bpf_atomic_is_load_store(insn))
+			ret = emit_atomic_ld_st(rd, rs, insn, ctx);
+		else
+			ret = emit_atomic_rmw(rd, rs, insn, ctx);
+		if (ret)
+			return ret;
 		break;
 
 	case BPF_STX | BPF_PROBE_MEM32 | BPF_B:

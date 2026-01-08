@@ -33,7 +33,7 @@ static inline int xfrm4_rcv_encap_finish(struct net *net, struct sock *sk,
 		const struct iphdr *iph = ip_hdr(skb);
 
 		if (ip_route_input_noref(skb, iph->daddr, iph->saddr,
-					 iph->tos, skb->dev))
+					 ip4h_dscp(iph), skb->dev))
 			goto drop;
 	}
 
@@ -201,6 +201,9 @@ struct sk_buff *xfrm4_gro_udp_encap_rcv(struct sock *sk, struct list_head *head,
 	/* check if it is a keepalive or IKE packet */
 	if (len <= sizeof(struct ip_esp_hdr) || udpdata32[0] == 0)
 		goto out;
+
+	/* set the transport header to ESP */
+	skb_set_transport_header(skb, offset);
 
 	NAPI_GRO_CB(skb)->proto = IPPROTO_UDP;
 

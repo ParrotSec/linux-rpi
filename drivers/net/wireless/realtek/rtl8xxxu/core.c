@@ -1163,7 +1163,7 @@ static void rtl8xxxu_start_tx_beacon(struct rtl8xxxu_priv *priv)
 
 
 /*
- * The rtl8723a has 3 channel groups for it's efuse settings. It only
+ * The rtl8723a has 3 channel groups for its efuse settings. It only
  * supports the 2.4GHz band, so channels 1 - 14:
  *  group 0: channels 1 - 3
  *  group 1: channels 4 - 9
@@ -4552,7 +4552,8 @@ static void rtl8xxxu_cam_write(struct rtl8xxxu_priv *priv,
 }
 
 static
-int rtl8xxxu_get_antenna(struct ieee80211_hw *hw, u32 *tx_ant, u32 *rx_ant)
+int rtl8xxxu_get_antenna(struct ieee80211_hw *hw, int radio_idx, u32 *tx_ant,
+			 u32 *rx_ant)
 {
 	struct rtl8xxxu_priv *priv = hw->priv;
 
@@ -6617,7 +6618,7 @@ static int rtl8xxxu_submit_rx_urb(struct rtl8xxxu_priv *priv,
 		skb_size = fops->rx_agg_buf_size;
 		skb_size += (rx_desc_sz + sizeof(struct rtl8723au_phy_stats));
 	} else {
-		skb_size = IEEE80211_MAX_FRAME_LEN;
+		skb_size = IEEE80211_MAX_FRAME_LEN + rx_desc_sz;
 	}
 
 	skb = __netdev_alloc_skb(NULL, skb_size, GFP_KERNEL);
@@ -6839,7 +6840,7 @@ static void rtl8xxxu_remove_interface(struct ieee80211_hw *hw,
 	priv->vifs[rtlvif->port_num] = NULL;
 }
 
-static int rtl8xxxu_config(struct ieee80211_hw *hw, u32 changed)
+static int rtl8xxxu_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 {
 	struct rtl8xxxu_priv *priv = hw->priv;
 	struct device *dev = &priv->udev->dev;
@@ -6988,7 +6989,8 @@ static void rtl8xxxu_configure_filter(struct ieee80211_hw *hw,
 			 FIF_PROBE_REQ);
 }
 
-static int rtl8xxxu_set_rts_threshold(struct ieee80211_hw *hw, u32 rts)
+static int rtl8xxxu_set_rts_threshold(struct ieee80211_hw *hw, int radio_idx,
+				      u32 rts)
 {
 	if (rts > 2347 && rts != (u32)-1)
 		return -EINVAL;
@@ -8111,6 +8113,9 @@ static const struct usb_device_id dev_table[] = {
 /* TP-Link TL-WN823N V2 */
 {USB_DEVICE_AND_INTERFACE_INFO(0x2357, 0x0135, 0xff, 0xff, 0xff),
 	.driver_info = (unsigned long)&rtl8192fu_fops},
+/* D-Link AN3U rev. A1 */
+{USB_DEVICE_AND_INTERFACE_INFO(0x2001, 0x3328, 0xff, 0xff, 0xff),
+	.driver_info = (unsigned long)&rtl8192fu_fops},
 #ifdef CONFIG_RTL8XXXU_UNTESTED
 /* Still supported by rtlwifi */
 {USB_DEVICE_AND_INTERFACE_INFO(USB_VENDOR_ID_REALTEK, 0x8176, 0xff, 0xff, 0xff),
@@ -8169,8 +8174,6 @@ static const struct usb_device_id dev_table[] = {
 {USB_DEVICE_AND_INTERFACE_INFO(0x050d, 0x11f2, 0xff, 0xff, 0xff),
 	.driver_info = (unsigned long)&rtl8192cu_fops},
 {USB_DEVICE_AND_INTERFACE_INFO(0x06f8, 0xe033, 0xff, 0xff, 0xff),
-	.driver_info = (unsigned long)&rtl8192cu_fops},
-{USB_DEVICE_AND_INTERFACE_INFO(0x07b8, 0x8188, 0xff, 0xff, 0xff),
 	.driver_info = (unsigned long)&rtl8192cu_fops},
 {USB_DEVICE_AND_INTERFACE_INFO(0x07b8, 0x8189, 0xff, 0xff, 0xff),
 	.driver_info = (unsigned long)&rtl8192cu_fops},

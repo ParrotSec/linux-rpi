@@ -18,6 +18,12 @@
 #include "annotate.h"
 #include "build-id.h"
 #include "cap.h"
+#include "cpumap.h"
+#include "debug.h"
+#include "demangle-cxx.h"
+#include "demangle-java.h"
+#include "demangle-ocaml.h"
+#include "demangle-rust-v0.h"
 #include "dso.h"
 #include "util.h" // lsdir()
 #include "debug.h"
@@ -35,6 +41,7 @@
 #include "header.h"
 #include "path.h"
 #include <linux/ctype.h>
+#include <linux/log2.h>
 #include <linux/zalloc.h>
 
 #include <elf.h>
@@ -84,6 +91,7 @@ static enum dso_binary_type binary_type_symtab[] = {
 	DSO_BINARY_TYPE__FEDORA_DEBUGINFO,
 	DSO_BINARY_TYPE__UBUNTU_DEBUGINFO,
 	DSO_BINARY_TYPE__BUILDID_DEBUGINFO,
+	DSO_BINARY_TYPE__GNU_DEBUGDATA,
 	DSO_BINARY_TYPE__SYSTEM_PATH_DSO,
 	DSO_BINARY_TYPE__GUEST_KMODULE,
 	DSO_BINARY_TYPE__GUEST_KMODULE_COMP,
@@ -96,10 +104,12 @@ static enum dso_binary_type binary_type_symtab[] = {
 
 #define DSO_BINARY_TYPE__SYMTAB_CNT ARRAY_SIZE(binary_type_symtab)
 
-static bool symbol_type__filter(char symbol_type)
+static bool symbol_type__filter(char __symbol_type)
 {
-	symbol_type = toupper(symbol_type);
-	return symbol_type == 'T' || symbol_type == 'W' || symbol_type == 'D' || symbol_type == 'B';
+	// Since 'U' == undefined and 'u' == unique global symbol, we can't use toupper there
+	char symbol_type = toupper(__symbol_type);
+	return symbol_type == 'T' || symbol_type == 'W' || symbol_type == 'D' || symbol_type == 'B' ||
+	       __symbol_type == 'u' || __symbol_type == 'l';
 }
 
 static int prefix_underscores_count(const char *str)
@@ -153,6 +163,13 @@ static int choose_best_symbol(struct symbol *syma, struct symbol *symb)
 		return SYMBOL_A;
 	else if ((a == 0) && (b > 0))
 		return SYMBOL_B;
+
+	if (syma->type != symb->type) {
+		if (syma->type == STT_NOTYPE)
+			return SYMBOL_B;
+		if (symb->type == STT_NOTYPE)
+			return SYMBOL_A;
+	}
 
 	/* Prefer a non weak symbol over a weak one */
 	a = syma->binding == STB_WEAK;
@@ -614,7 +631,7 @@ void dso__sort_by_name(struct dso *dso)
 {
 	mutex_lock(dso__lock(dso));
 	if (!dso__sorted_by_name(dso)) {
-		size_t len;
+		size_t len = 0;
 
 		dso__set_symbol_names(dso, symbols__sort_by_name(dso__symbols(dso), &len));
 		if (dso__symbol_names(dso)) {
@@ -938,11 +955,11 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 			if (dso__kernel(dso) == DSO_SPACE__KERNEL_GUEST)
 				snprintf(dso_name, sizeof(dso_name),
 					"[guest.kernel].%d",
-					kernel_range++);
+					kernel_range);
 			else
 				snprintf(dso_name, sizeof(dso_name),
 					"[kernel].%d",
-					kernel_range++);
+					kernel_range);
 
 			ndso = dso__new(dso_name);
 			map__zput(curr_map);
@@ -950,6 +967,7 @@ static int maps__split_kallsyms(struct maps *kmaps, struct dso *dso, u64 delta,
 				return -1;
 
 			dso__set_kernel(ndso, dso__kernel(dso));
+			dso__set_loaded(ndso);
 
 			curr_map = map__new2(pos->start, ndso);
 			if (curr_map == NULL) {
@@ -1405,6 +1423,7 @@ static int dso__load_kcore(struct dso *dso, struct map *map,
 				goto out_err;
 			}
 		}
+		map__zput(new_node->map);
 		free(new_node);
 	}
 
@@ -1709,6 +1728,7 @@ static bool dso__is_compatible_symtab_type(struct dso *dso, bool kmod,
 	case DSO_BINARY_TYPE__MIXEDUP_UBUNTU_DEBUGINFO:
 	case DSO_BINARY_TYPE__BUILDID_DEBUGINFO:
 	case DSO_BINARY_TYPE__OPENEMBEDDED_DEBUGINFO:
+	case DSO_BINARY_TYPE__GNU_DEBUGDATA:
 		return !kmod && dso__kernel(dso) == DSO_SPACE__USER;
 
 	case DSO_BINARY_TYPE__KALLSYMS:
@@ -1794,7 +1814,6 @@ int dso__load(struct dso *dso, struct map *map)
 	struct symsrc *syms_ss = NULL, *runtime_ss = NULL;
 	bool kmod;
 	bool perfmap;
-	struct build_id bid;
 	struct nscookie nsc;
 	char newmapname[PATH_MAX];
 	const char *map_path = dso__long_name(dso);
@@ -1851,12 +1870,14 @@ int dso__load(struct dso *dso, struct map *map)
 
 	/*
 	 * Read the build id if possible. This is required for
-	 * DSO_BINARY_TYPE__BUILDID_DEBUGINFO to work
+	 * DSO_BINARY_TYPE__BUILDID_DEBUGINFO to work. Don't block in case path
+	 * isn't for a regular file.
 	 */
-	if (!dso__has_build_id(dso) &&
-	    is_regular_file(dso__long_name(dso))) {
+	if (!dso__has_build_id(dso)) {
+		struct build_id bid = { .size = 0, };
+
 		__symbol__join_symfs(name, PATH_MAX, dso__long_name(dso));
-		if (filename__read_build_id(name, &bid) > 0)
+		if (filename__read_build_id(name, &bid, /*block=*/false) > 0)
 			dso__set_build_id(dso, &bid);
 	}
 
@@ -2103,7 +2124,7 @@ static bool filename__readable(const char *file)
 
 static char *dso__find_kallsyms(struct dso *dso, struct map *map)
 {
-	struct build_id bid;
+	struct build_id bid = { .size = 0, };
 	char sbuild_id[SBUILD_ID_SIZE];
 	bool is_host = false;
 	char path[PATH_MAX];
@@ -2133,7 +2154,7 @@ static char *dso__find_kallsyms(struct dso *dso, struct map *map)
 			goto proc_kallsyms;
 	}
 
-	build_id__sprintf(dso__bid(dso), sbuild_id);
+	build_id__snprintf(dso__bid(dso), sbuild_id, sizeof(sbuild_id));
 
 	/* Find kallsyms in build-id cache with kcore */
 	scnprintf(path, sizeof(path), "%s/%s/%s",
@@ -2464,6 +2485,36 @@ int symbol__annotation_init(void)
 	return 0;
 }
 
+static int setup_parallelism_bitmap(void)
+{
+	struct perf_cpu_map *map;
+	struct perf_cpu cpu;
+	int i, err = -1;
+
+	if (symbol_conf.parallelism_list_str == NULL)
+		return 0;
+
+	map = perf_cpu_map__new(symbol_conf.parallelism_list_str);
+	if (map == NULL) {
+		pr_err("failed to parse parallelism filter list\n");
+		return -1;
+	}
+
+	bitmap_fill(symbol_conf.parallelism_filter, MAX_NR_CPUS + 1);
+	perf_cpu_map__for_each_cpu(cpu, i, map) {
+		if (cpu.cpu <= 0 || cpu.cpu > MAX_NR_CPUS) {
+			pr_err("Requested parallelism level %d is invalid.\n", cpu.cpu);
+			goto out_delete_map;
+		}
+		__clear_bit(cpu.cpu, symbol_conf.parallelism_filter);
+	}
+
+	err = 0;
+out_delete_map:
+	perf_cpu_map__put(map);
+	return err;
+}
+
 int symbol__init(struct perf_env *env)
 {
 	const char *symfs;
@@ -2482,6 +2533,9 @@ int symbol__init(struct perf_env *env)
 		pr_err("'.' is the only non valid --field-separator argument\n");
 		return -1;
 	}
+
+	if (setup_parallelism_bitmap())
+		return -1;
 
 	if (setup_list(&symbol_conf.dso_list,
 		       symbol_conf.dso_list_str, "dso") < 0)
@@ -2602,4 +2656,80 @@ int symbol__validate_sym_arguments(void)
 		return -EINVAL;
 	}
 	return 0;
+}
+
+static bool want_demangle(bool is_kernel_sym)
+{
+	return is_kernel_sym ? symbol_conf.demangle_kernel : symbol_conf.demangle;
+}
+
+/*
+ * Demangle C++ function signature, typically replaced by demangle-cxx.cpp
+ * version.
+ */
+#ifndef HAVE_CXA_DEMANGLE_SUPPORT
+char *cxx_demangle_sym(const char *str __maybe_unused, bool params __maybe_unused,
+		       bool modifiers __maybe_unused)
+{
+#ifdef HAVE_LIBBFD_SUPPORT
+	int flags = (params ? DMGL_PARAMS : 0) | (modifiers ? DMGL_ANSI : 0);
+
+	return bfd_demangle(NULL, str, flags);
+#elif defined(HAVE_CPLUS_DEMANGLE_SUPPORT)
+	int flags = (params ? DMGL_PARAMS : 0) | (modifiers ? DMGL_ANSI : 0);
+
+	return cplus_demangle(str, flags);
+#else
+	return NULL;
+#endif
+}
+#endif /* !HAVE_CXA_DEMANGLE_SUPPORT */
+
+char *dso__demangle_sym(struct dso *dso, int kmodule, const char *elf_name)
+{
+	struct demangle rust_demangle = {
+		.style = DemangleStyleUnknown,
+	};
+	char *demangled = NULL;
+
+	/*
+	 * We need to figure out if the object was created from C++ sources
+	 * DWARF DW_compile_unit has this, but we don't always have access
+	 * to it...
+	 */
+	if (!want_demangle((dso && dso__kernel(dso)) || kmodule))
+		return demangled;
+
+	rust_demangle_demangle(elf_name, &rust_demangle);
+	if (rust_demangle_is_known(&rust_demangle)) {
+		/* A rust mangled name. */
+		if (rust_demangle.mangled_len == 0)
+			return demangled;
+
+		for (size_t buf_len = roundup_pow_of_two(rust_demangle.mangled_len * 2);
+		     buf_len < 1024 * 1024; buf_len += 32) {
+			char *tmp = realloc(demangled, buf_len);
+
+			if (!tmp) {
+				/* Failure to grow output buffer, return what is there. */
+				return demangled;
+			}
+			demangled = tmp;
+			if (rust_demangle_display_demangle(&rust_demangle, demangled, buf_len,
+							   /*alternate=*/true) == OverflowOk)
+				return demangled;
+		}
+		/* Buffer exceeded sensible bounds, return what is there. */
+		return demangled;
+	}
+
+	demangled = cxx_demangle_sym(elf_name, verbose > 0, verbose > 0);
+	if (demangled)
+		return demangled;
+
+	demangled = ocaml_demangle_sym(elf_name);
+	if (demangled)
+		return demangled;
+
+	return java_demangle_sym(elf_name, JAVA_DEMANGLE_NORET);
 }

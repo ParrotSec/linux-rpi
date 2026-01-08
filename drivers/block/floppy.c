@@ -937,7 +937,7 @@ static void floppy_off(unsigned int drive)
 	if (!(fdc_state[fdc].dor & (0x10 << UNIT(drive))))
 		return;
 
-	del_timer(motor_off_timer + drive);
+	timer_delete(motor_off_timer + drive);
 
 	/* make spindle stop in a position which minimizes spinup time
 	 * next time */
@@ -1918,7 +1918,7 @@ static int start_motor(void (*function)(void))
 		mask &= ~(0x10 << UNIT(current_drive));
 
 	/* starts motor and selects floppy */
-	del_timer(motor_off_timer + current_drive);
+	timer_delete(motor_off_timer + current_drive);
 	set_dor(current_fdc, mask, data);
 
 	/* wait_for_completion also schedules reset if needed. */
@@ -3411,7 +3411,7 @@ static int fd_locked_ioctl(struct block_device *bdev, blk_mode_t mode,
 		struct floppy_max_errors max_errors;
 		struct floppy_drive_params dp;
 	} inparam;		/* parameters coming from user space */
-	const void *outparam;	/* parameters passed back to user space */
+	const void *outparam = NULL;	/* parameters passed back to user space */
 
 	/* convert compatibility eject ioctls into floppy eject ioctl.
 	 * We do this in order to provide a means to eject floppy disks before
@@ -4596,7 +4596,6 @@ static int __init do_floppy_init(void)
 		tag_sets[drive].nr_maps = 1;
 		tag_sets[drive].queue_depth = 2;
 		tag_sets[drive].numa_node = NUMA_NO_NODE;
-		tag_sets[drive].flags = BLK_MQ_F_SHOULD_MERGE;
 		err = blk_mq_alloc_tag_set(&tag_sets[drive]);
 		if (err)
 			goto out_put_disk;
@@ -4763,7 +4762,7 @@ out_put_disk:
 	for (drive = 0; drive < N_DRIVE; drive++) {
 		if (!disks[drive][0])
 			break;
-		del_timer_sync(&motor_off_timer[drive]);
+		timer_delete_sync(&motor_off_timer[drive]);
 		put_disk(disks[drive][0]);
 		blk_mq_free_tag_set(&tag_sets[drive]);
 	}
@@ -4984,7 +4983,7 @@ static void __exit floppy_module_exit(void)
 	destroy_workqueue(floppy_wq);
 
 	for (drive = 0; drive < N_DRIVE; drive++) {
-		del_timer_sync(&motor_off_timer[drive]);
+		timer_delete_sync(&motor_off_timer[drive]);
 
 		if (floppy_available(drive)) {
 			for (i = 0; i < ARRAY_SIZE(floppy_type); i++) {

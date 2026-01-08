@@ -1002,6 +1002,7 @@ static bool CalculatePrefetchSchedule(
 
 	dst_y_prefetch_equ = VStartup - (Tsetup + dml_max(TWait + TCalc, *Tdmdl)) / LineTime
 			- (*DSTYAfterScaler + *DSTXAfterScaler / myPipe->HTotal);
+	dst_y_prefetch_equ = dml_min(dst_y_prefetch_equ, 63.75); // limit to the reg limit of U6.2 for DST_Y_PREFETCH
 
 	Lsw_oto = dml_max(PrefetchSourceLinesY, PrefetchSourceLinesC);
 	Tsw_oto = Lsw_oto * LineTime;
@@ -1280,12 +1281,9 @@ static bool CalculatePrefetchSchedule(
 
 	if (MyError) {
 		*PrefetchBandwidth = 0;
-		TimeForFetchingMetaPTE = 0;
-		TimeForFetchingRowInVBlank = 0;
 		*DestinationLinesToRequestVMInVBlank = 0;
 		*DestinationLinesToRequestRowInVBlank = 0;
 		*DestinationLinesForPrefetch = 0;
-		LinesToRequestPrefetchPixelData = 0;
 		*VRatioPrefetchY = 0;
 		*VRatioPrefetchC = 0;
 		*RequiredPrefetchPixDataBWLuma = 0;
@@ -1775,15 +1773,6 @@ static unsigned int CalculateVMAndRowBytes(
 		*PixelPTEReqWidth = 32768.0 / BytePerPixel;
 		*PTERequestSize = 64;
 		FractionOfPTEReturnDrop = 0;
-	} else if (MacroTileSizeBytes == 4096) {
-		PixelPTEReqHeightPTEs = 1;
-		*PixelPTEReqHeight = MacroTileHeight;
-		*PixelPTEReqWidth = 8 * *MacroTileWidth;
-		*PTERequestSize = 64;
-		if (ScanDirection != dm_vert)
-			FractionOfPTEReturnDrop = 0;
-		else
-			FractionOfPTEReturnDrop = 7.0 / 8;
 	} else if (GPUVMMinPageSize == 4 && MacroTileSizeBytes > 4096) {
 		PixelPTEReqHeightPTEs = 16;
 		*PixelPTEReqHeight = 16 * BlockHeight256Bytes;

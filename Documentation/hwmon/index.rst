@@ -53,11 +53,13 @@ Hardware Monitoring Kernel Drivers
    bel-pfe
    bpa-rs600
    bt1-pvt
+   cgbc-hwmon
    chipcap2
    coretemp
    corsair-cpro
    corsair-psu
    cros_ec_hwmon
+   crps
    da9052
    da9055
    dell-smm-hwmon
@@ -84,11 +86,13 @@ Hardware Monitoring Kernel Drivers
    hih6130
    hp-wmi-sensors
    hs3001
+   htu31
    ibmaem
    ibm-cffps
    ibmpowernv
    ina209
    ina2xx
+   ina233
    ina238
    ina3221
    inspur-ipsps1
@@ -96,11 +100,14 @@ Hardware Monitoring Kernel Drivers
    ir35221
    ir38064
    ir36021
+   isl28022
    isl68137
    it87
    jc42
    k10temp
    k8temp
+   kbatt
+   kfan
    lan966x
    lineage-pem
    lm25066
@@ -120,6 +127,7 @@ Hardware Monitoring Kernel Drivers
    lm95234
    lm95245
    lochnagar
+   lt3074
    lt7182s
    ltc2992
    ltc2945
@@ -156,8 +164,10 @@ Hardware Monitoring Kernel Drivers
    max6639
    max6650
    max6697
+   max77705
    max8688
    mc13783-adc
+   mc33xs2410_hwmon
    mc34vr500
    mcp3021
    menf21bmc
@@ -174,6 +184,7 @@ Hardware Monitoring Kernel Drivers
    mpq8785
    nct6683
    nct6775
+   nct7363
    nct7802
    nct7904
    npcm750-pwm-fan
@@ -183,7 +194,6 @@ Hardware Monitoring Kernel Drivers
    nzxt-kraken3
    nzxt-smart2
    occ
-   oxp-sensors
    pc87360
    pc87427
    pcf8591
@@ -199,6 +209,7 @@ Hardware Monitoring Kernel Drivers
    pxe1610
    pwm-fan
    q54sj108a2
+   qnap-mcu-hwmon
    raspberrypi-hwmon
    sbrmi
    sbtsi_temp
@@ -234,6 +245,7 @@ Hardware Monitoring Kernel Drivers
    tmp464
    tmp513
    tps23861
+   tps25990
    tps40422
    tps53679
    tps546d24

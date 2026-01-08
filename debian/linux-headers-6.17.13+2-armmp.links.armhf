@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.17.13+2/scripts                          usr/src/linux-headers-6.17.13+2-armmp/scripts
+usr/lib/linux-kbuild-6.17.13+2/tools                            usr/src/linux-headers-6.17.13+2-armmp/tools
+usr/src/linux-headers-6.17.13+2-armmp                                               usr/lib/modules/6.17.13+2-armmp/build
+usr/src/linux-headers-6.17.13+2-common  usr/lib/modules/6.17.13+2-armmp/source

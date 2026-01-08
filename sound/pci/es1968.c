@@ -1812,7 +1812,7 @@ snd_es1968_pcm(struct es1968 *chip, int device)
 
 	pcm->info_flags = 0;
 
-	strcpy(pcm->name, "ESS Maestro");
+	strscpy(pcm->name, "ESS Maestro");
 
 	chip->pcm = pcm;
 
@@ -2649,7 +2649,7 @@ static int snd_es1968_create(struct snd_card *card,
 	chip->playback_streams = play_streams;
 	chip->capture_streams = capt_streams;
 
-	err = pci_request_regions(pci, "ESS Maestro");
+	err = pcim_request_all_regions(pci, "ESS Maestro");
 	if (err < 0)
 		return err;
 	chip->io_port = pci_resource_start(pci, 0);
@@ -2761,16 +2761,16 @@ static int __snd_es1968_probe(struct pci_dev *pci,
 
 	switch (chip->type) {
 	case TYPE_MAESTRO2E:
-		strcpy(card->driver, "ES1978");
-		strcpy(card->shortname, "ESS ES1978 (Maestro 2E)");
+		strscpy(card->driver, "ES1978");
+		strscpy(card->shortname, "ESS ES1978 (Maestro 2E)");
 		break;
 	case TYPE_MAESTRO2:
-		strcpy(card->driver, "ES1968");
-		strcpy(card->shortname, "ESS ES1968 (Maestro 2)");
+		strscpy(card->driver, "ES1968");
+		strscpy(card->shortname, "ESS ES1968 (Maestro 2)");
 		break;
 	case TYPE_MAESTRO:
-		strcpy(card->driver, "ESM1");
-		strcpy(card->shortname, "ESS Maestro 1");
+		strscpy(card->driver, "ESM1");
+		strscpy(card->shortname, "ESS Maestro 1");
 		break;
 	}
 

@@ -370,7 +370,7 @@ static int smc_pnet_add_eth(struct smc_pnettable *pnettable, struct net *net,
 		goto out_put;
 	new_pe->type = SMC_PNET_ETH;
 	memcpy(new_pe->pnet_name, pnet_name, SMC_MAX_PNETID_LEN);
-	strncpy(new_pe->eth_name, eth_name, IFNAMSIZ);
+	strscpy(new_pe->eth_name, eth_name);
 	rc = -EEXIST;
 	new_netdev = true;
 	mutex_lock(&pnettable->lock);
@@ -1126,37 +1126,38 @@ static void smc_pnet_find_ism_by_pnetid(struct net_device *ndev,
  */
 void smc_pnet_find_roce_resource(struct sock *sk, struct smc_init_info *ini)
 {
-	struct dst_entry *dst = sk_dst_get(sk);
+	struct net_device *dev;
+	struct dst_entry *dst;
 
-	if (!dst)
-		goto out;
-	if (!dst->dev)
-		goto out_rel;
+	rcu_read_lock();
+	dst = __sk_dst_get(sk);
+	dev = dst ? dst_dev_rcu(dst) : NULL;
+	dev_hold(dev);
+	rcu_read_unlock();
 
-	smc_pnet_find_roce_by_pnetid(dst->dev, ini);
-
-out_rel:
-	dst_release(dst);
-out:
-	return;
+	if (dev) {
+		smc_pnet_find_roce_by_pnetid(dev, ini);
+		dev_put(dev);
+	}
 }
 
 void smc_pnet_find_ism_resource(struct sock *sk, struct smc_init_info *ini)
 {
-	struct dst_entry *dst = sk_dst_get(sk);
+	struct net_device *dev;
+	struct dst_entry *dst;
 
 	ini->ism_dev[0] = NULL;
-	if (!dst)
-		goto out;
-	if (!dst->dev)
-		goto out_rel;
 
-	smc_pnet_find_ism_by_pnetid(dst->dev, ini);
+	rcu_read_lock();
+	dst = __sk_dst_get(sk);
+	dev = dst ? dst_dev_rcu(dst) : NULL;
+	dev_hold(dev);
+	rcu_read_unlock();
 
-out_rel:
-	dst_release(dst);
-out:
-	return;
+	if (dev) {
+		smc_pnet_find_ism_by_pnetid(dev, ini);
+		dev_put(dev);
+	}
 }
 
 /* Lookup and apply a pnet table entry to the given ib device.

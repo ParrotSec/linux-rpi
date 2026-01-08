@@ -17,8 +17,8 @@ debian/arch-sh4-fix-uimage-build.patch
 debian/tools-perf-perf-read-vdso-in-libexec.patch
 debian/tools-perf-install-python-bindings.patch
 debian/wireless-add-debian-wireless-regdb-certificates.patch
-debian/export-symbols-needed-by-android-drivers.patch
-debian/android-enable-building-ashmem-and-binder-as-modules.patch
+debian/export-symbols-needed-by-binder.patch
+debian/android-enable-building-binder-as-module.patch
 debian/documentation-drop-sphinx-version-check.patch
 debian/perf-traceevent-support-asciidoctor-for-documentatio.patch
 debian/kbuild-look-for-module.lds-under-arch-directory-too.patch
@@ -34,15 +34,9 @@ debian/iwlwifi-do-not-request-unreleased-firmware.patch
 debian/firmware_loader-log-direct-loading-failures-as-info-for-d-i.patch
 bugfix/all/radeon-amdgpu-firmware-is-required-for-drm-and-kms-on-r600-onward.patch
 
-# Parrot patches
-features/all/wifi-injection.patch
-features/all/wireless-carl9170-Enable-sniffer-mode-promisc-flag-t.patch
-#features/all/dwav-usb-mt-driver.patch
-
 # Change some defaults for security reasons
 debian/af_802154-Disable-auto-loading-as-mitigation-against.patch
 debian/rds-Disable-auto-loading-as-mitigation-against-local.patch
-debian/dccp-disable-auto-loading-as-mitigation-against-local-exploits.patch
 debian/hamradio-disable-auto-loading-as-mitigation-against-local-exploits.patch
 debian/fs-enable-link-security-restrictions-by-default.patch
 
@@ -65,7 +59,6 @@ debian/btrfs-warn-about-raid5-6-being-experimental-at-mount.patch
 # Arch bug fixes
 bugfix/arm/arm-dts-kirkwood-fix-sata-pinmux-ing-for-ts419.patch
 bugfix/x86/perf-tools-fix-unwind-build-on-i386.patch
-bugfix/sh/sh-boot-do-not-use-hyphen-in-exported-variable-name.patch
 bugfix/arm/arm-mm-export-__sync_icache_dcache-for-xen-privcmd.patch
 bugfix/powerpc/powerpc-boot-fix-missing-crc32poly.h-when-building-with-kernel_xz.patch
 bugfix/arm64/arm64-acpi-Add-fixup-for-HPE-m400-quirks.patch
@@ -77,8 +70,6 @@ features/x86/x86-make-x32-syscall-support-conditional.patch
 # Miscellaneous bug fixes
 bugfix/all/disable-some-marvell-phys.patch
 bugfix/all/fs-add-module_softdep-declarations-for-hard-coded-cr.patch
-bugfix/all/documentation-use-relative-source-paths-in-abi-documentation.patch
-bugfix/all/Revert-drm-amd-display-more-liberal-vmin-vmax-update.patch
 
 # Miscellaneous features
 
@@ -89,9 +80,7 @@ features/all/lockdown/mtd-disable-slram-and-phram-when-locked-down.patch
 features/all/lockdown/arm64-add-kernel-config-option-to-lock-down-when.patch
 
 # Improve integrity platform keyring for kernel modules verification
-features/all/db-mok-keyring/0003-MODSIGN-checking-the-blacklisted-hash-before-loading-a-kernel-module.patch
 features/all/db-mok-keyring/KEYS-Make-use-of-platform-keyring-for-module-signature.patch
-features/all/db-mok-keyring/trust-machine-keyring-by-default.patch
 
 # Security fixes
 
@@ -102,7 +91,6 @@ bugfix/all/module-disable-matching-missing-version-crc.patch
 bugfix/all/usbip-document-tcp-wrappers.patch
 bugfix/all/kbuild-fix-recordmcount-dependency.patch
 bugfix/all/tools-perf-remove-shebangs.patch
-bugfix/x86/revert-perf-build-fix-libunwind-feature-detection-on.patch
 bugfix/all/tools-build-remove-bpf-run-time-check-at-build-time.patch
 bugfix/all/cpupower-fix-checks-for-cpu-existence.patch
 bugfix/all/libapi-define-_fortify_source-as-2-not-empty.patch
@@ -113,5 +101,6 @@ bugfix/all/perf-tools-pass-extra_cflags-through-to-libbpf-build-again.patch
 bugfix/all/kbuild-bpf-fix-btf-reproducibility.patch
 bugfix/all/perf-docs-Fix-perf-check-manual-page-built-with-asci.patch
 bugfix/all/libbpf-use-the-standard-fixdep-build-rule.patch
+bugfix/all/tools-hv-Make-the-sample-hv_get_dhcp_info-script-mor.patch
 
 # ABI maintenance

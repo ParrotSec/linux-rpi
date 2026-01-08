@@ -343,7 +343,11 @@ struct bnxt_qplib_qp {
 	u32				msn;
 	u32				msn_tbl_sz;
 	bool				is_host_msn_tbl;
+	u8				tos_dscp;
 };
+
+#define BNXT_RE_MAX_MSG_SIZE	0x80000000
+#define BNXT_RE_INVAL_MSG_SIZE	0xFFFFFFFF
 
 #define BNXT_QPLIB_MAX_CQE_ENTRY_SIZE	sizeof(struct cq_base)
 
@@ -382,6 +386,25 @@ static inline bool bnxt_qplib_queue_full(struct bnxt_qplib_q *que,
 		avail += hwq->depth;
 	return avail <= slots;
 }
+
+/* CQ coalescing parameters */
+struct bnxt_qplib_cq_coal_param {
+	u16 buf_maxtime;
+	u8 normal_maxbuf;
+	u8 during_maxbuf;
+	u8 en_ring_idle_mode;
+};
+
+#define BNXT_QPLIB_CQ_COAL_DEF_BUF_MAXTIME		0x1
+#define BNXT_QPLIB_CQ_COAL_DEF_NORMAL_MAXBUF_P7		0x8
+#define BNXT_QPLIB_CQ_COAL_DEF_DURING_MAXBUF_P7		0x8
+#define BNXT_QPLIB_CQ_COAL_DEF_NORMAL_MAXBUF_P5		0x1
+#define BNXT_QPLIB_CQ_COAL_DEF_DURING_MAXBUF_P5		0x1
+#define BNXT_QPLIB_CQ_COAL_DEF_EN_RING_IDLE_MODE	0x1
+#define BNXT_QPLIB_CQ_COAL_MAX_BUF_MAXTIME		0x1bf
+#define BNXT_QPLIB_CQ_COAL_MAX_NORMAL_MAXBUF		0x1f
+#define BNXT_QPLIB_CQ_COAL_MAX_DURING_MAXBUF		0x1f
+#define BNXT_QPLIB_CQ_COAL_MAX_EN_RING_IDLE_MODE	0x1
 
 struct bnxt_qplib_cqe {
 	u8				status;
@@ -445,6 +468,7 @@ struct bnxt_qplib_cq {
  */
 	spinlock_t			flush_lock; /* QP flush management */
 	u16				cnq_events;
+	struct bnxt_qplib_cq_coal_param	*coalescing;
 };
 
 #define BNXT_QPLIB_MAX_IRRQE_ENTRY_SIZE	sizeof(struct xrrq_irrq)
@@ -499,6 +523,7 @@ struct bnxt_qplib_nq {
 	struct tasklet_struct		nq_tasklet;
 	bool				requested;
 	int				budget;
+	u32				load;
 
 	cqn_handler_t			cqn_handler;
 	srqn_handler_t			srqn_handler;
@@ -520,8 +545,6 @@ int bnxt_qplib_enable_nq(struct pci_dev *pdev, struct bnxt_qplib_nq *nq,
 			 cqn_handler_t cqn_handler,
 			 srqn_handler_t srq_handler);
 int bnxt_qplib_create_srq(struct bnxt_qplib_res *res,
-			  struct bnxt_qplib_srq *srq);
-int bnxt_qplib_modify_srq(struct bnxt_qplib_res *res,
 			  struct bnxt_qplib_srq *srq);
 int bnxt_qplib_query_srq(struct bnxt_qplib_res *res,
 			 struct bnxt_qplib_srq *srq);

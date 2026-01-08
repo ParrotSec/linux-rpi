@@ -536,8 +536,11 @@ static int pmu_sbi_event_map(struct perf_event *event, u64 *econfig)
 
 		switch (config >> 62) {
 		case 0:
-			ret = RISCV_PMU_RAW_EVENT_IDX;
-			*econfig = config & RISCV_PMU_RAW_EVENT_MASK;
+			/* Return error any bits [48-63] is set  as it is not allowed by the spec */
+			if (!(config & ~RISCV_PMU_RAW_EVENT_MASK)) {
+				*econfig = config & RISCV_PMU_RAW_EVENT_MASK;
+				ret = RISCV_PMU_RAW_EVENT_IDX;
+			}
 			break;
 		case 2:
 			ret = (config & 0xFFFF) | (SBI_PMU_EVENT_TYPE_FW << 16);
@@ -1016,7 +1019,7 @@ static irqreturn_t pmu_sbi_ovf_handler(int irq, void *dev)
 			/* compute hardware counter index */
 			hidx = info->csr - CSR_CYCLE;
 
-		/* check if the corresponding bit is set in sscountovf or overflow mask in shmem */
+		/* check if the corresponding bit is set in scountovf or overflow mask in shmem */
 		if (!(overflow & BIT(hidx)))
 			continue;
 
@@ -1314,7 +1317,7 @@ static int riscv_pmu_proc_user_access_handler(const struct ctl_table *table,
 	return 0;
 }
 
-static struct ctl_table sbi_pmu_sysctl_table[] = {
+static const struct ctl_table sbi_pmu_sysctl_table[] = {
 	{
 		.procname       = "perf_user_access",
 		.data		= &sysctl_perf_user_access,

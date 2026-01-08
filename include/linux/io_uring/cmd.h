@@ -4,9 +4,12 @@
 
 #include <uapi/linux/io_uring.h>
 #include <linux/io_uring_types.h>
+#include <linux/blk-mq.h>
 
 /* only top 8 bits of sqe->uring_cmd_flags for kernel internal use */
 #define IORING_URING_CMD_CANCELABLE	(1U << 30)
+/* io_uring_cmd is being issued again */
+#define IORING_URING_CMD_REISSUE	(1U << 31)
 
 struct io_uring_cmd {
 	struct file	*file;
@@ -34,7 +37,14 @@ static inline void io_uring_cmd_private_sz_check(size_t cmd_sz)
 
 #if defined(CONFIG_IO_URING)
 int io_uring_cmd_import_fixed(u64 ubuf, unsigned long len, int rw,
-			      struct iov_iter *iter, void *ioucmd);
+			      struct iov_iter *iter,
+			      struct io_uring_cmd *ioucmd,
+			      unsigned int issue_flags);
+int io_uring_cmd_import_fixed_vec(struct io_uring_cmd *ioucmd,
+				  const struct iovec __user *uvec,
+				  size_t uvec_segs,
+				  int ddir, struct iov_iter *iter,
+				  unsigned issue_flags);
 
 /*
  * Completes the request, i.e. posts an io_uring CQE and deallocates @ioucmd
@@ -61,8 +71,18 @@ void io_uring_cmd_mark_cancelable(struct io_uring_cmd *cmd,
 void io_uring_cmd_issue_blocking(struct io_uring_cmd *ioucmd);
 
 #else
-static inline int io_uring_cmd_import_fixed(u64 ubuf, unsigned long len, int rw,
-			      struct iov_iter *iter, void *ioucmd)
+static inline int
+io_uring_cmd_import_fixed(u64 ubuf, unsigned long len, int rw,
+			  struct iov_iter *iter, struct io_uring_cmd *ioucmd,
+			  unsigned int issue_flags)
+{
+	return -EOPNOTSUPP;
+}
+static inline int io_uring_cmd_import_fixed_vec(struct io_uring_cmd *ioucmd,
+						const struct iovec __user *uvec,
+						size_t uvec_segs,
+						int ddir, struct iov_iter *iter,
+						unsigned issue_flags)
 {
 	return -EOPNOTSUPP;
 }
@@ -110,7 +130,22 @@ static inline void io_uring_cmd_complete_in_task(struct io_uring_cmd *ioucmd,
 
 static inline struct task_struct *io_uring_cmd_get_task(struct io_uring_cmd *cmd)
 {
-	return cmd_to_io_kiocb(cmd)->task;
+	return cmd_to_io_kiocb(cmd)->tctx->task;
 }
+
+/*
+ * Return uring_cmd's context reference as its context handle for driver to
+ * track per-context resource, such as registered kernel IO buffer
+ */
+static inline void *io_uring_cmd_ctx_handle(struct io_uring_cmd *cmd)
+{
+	return cmd_to_io_kiocb(cmd)->ctx;
+}
+
+int io_buffer_register_bvec(struct io_uring_cmd *cmd, struct request *rq,
+			    void (*release)(void *), unsigned int index,
+			    unsigned int issue_flags);
+int io_buffer_unregister_bvec(struct io_uring_cmd *cmd, unsigned int index,
+			      unsigned int issue_flags);
 
 #endif /* _LINUX_IO_URING_CMD_H */

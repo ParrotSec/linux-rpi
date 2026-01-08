@@ -18,9 +18,9 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/scatterlist.h>
 
 /* QUP Registers */
@@ -452,8 +452,10 @@ static int qup_i2c_bus_active(struct qup_i2c_dev *qup, int len)
 		if (!(status & I2C_STATUS_BUS_ACTIVE))
 			break;
 
-		if (time_after(jiffies, timeout))
+		if (time_after(jiffies, timeout)) {
 			ret = -ETIMEDOUT;
+			break;
+		}
 
 		usleep_range(len, len * 2);
 	}
@@ -1634,13 +1636,13 @@ static u32 qup_i2c_func(struct i2c_adapter *adap)
 }
 
 static const struct i2c_algorithm qup_i2c_algo = {
-	.master_xfer	= qup_i2c_xfer,
-	.functionality	= qup_i2c_func,
+	.xfer = qup_i2c_xfer,
+	.functionality = qup_i2c_func,
 };
 
 static const struct i2c_algorithm qup_i2c_algo_v2 = {
-	.master_xfer	= qup_i2c_xfer_v2,
-	.functionality	= qup_i2c_func,
+	.xfer = qup_i2c_xfer_v2,
+	.functionality = qup_i2c_func,
 };
 
 /*
@@ -1713,7 +1715,7 @@ static int qup_i2c_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (of_device_is_compatible(pdev->dev.of_node, "qcom,i2c-qup-v1.1.1")) {
+	if (device_is_compatible(&pdev->dev, "qcom,i2c-qup-v1.1.1")) {
 		qup->adap.algo = &qup_i2c_algo;
 		qup->adap.quirks = &qup_i2c_quirks;
 		is_qup_v1 = true;
@@ -2010,7 +2012,7 @@ MODULE_DEVICE_TABLE(of, qup_i2c_dt_match);
 
 static struct platform_driver qup_i2c_driver = {
 	.probe  = qup_i2c_probe,
-	.remove_new = qup_i2c_remove,
+	.remove = qup_i2c_remove,
 	.driver = {
 		.name = "i2c_qup",
 		.pm = pm_ptr(&qup_i2c_qup_pm_ops),

@@ -484,13 +484,14 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
  */
-static bool cobalt_should_drop(struct cobalt_vars *vars,
-			       struct cobalt_params *p,
-			       ktime_t now,
-			       struct sk_buff *skb,
-			       u32 bulk_flows)
+static enum skb_drop_reason cobalt_should_drop(struct cobalt_vars *vars,
+					       struct cobalt_params *p,
+					       ktime_t now,
+					       struct sk_buff *skb,
+					       u32 bulk_flows)
 {
-	bool next_due, over_target, drop = false;
+	enum skb_drop_reason reason = SKB_NOT_DROPPED_YET;
+	bool next_due, over_target;
 	ktime_t schedule;
 	u64 sojourn;
 
@@ -533,7 +534,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	if (next_due && vars->dropping) {
 		/* Use ECN mark if possible, otherwise drop */
-		drop = !(vars->ecn_marked = INET_ECN_set_ce(skb));
+		if (!(vars->ecn_marked = INET_ECN_set_ce(skb)))
+			reason = SKB_DROP_REASON_QDISC_CONGESTED;
 
 		vars->count++;
 		if (!vars->count)
@@ -556,16 +558,17 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	}
 
 	/* Simple BLUE implementation.  Lack of ECN is deliberate. */
-	if (vars->p_drop)
-		drop |= (get_random_u32() < vars->p_drop);
+	if (vars->p_drop && reason == SKB_NOT_DROPPED_YET &&
+	    get_random_u32() < vars->p_drop)
+		reason = SKB_DROP_REASON_CAKE_FLOOD;
 
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
 		vars->drop_next = ktime_add_ns(now, p->interval);
-	else if (ktime_to_ns(schedule) > 0 && !drop)
+	else if (ktime_to_ns(schedule) > 0 && reason == SKB_NOT_DROPPED_YET)
 		vars->drop_next = now;
 
-	return drop;
+	return reason;
 }
 
 static bool cake_update_flowkeys(struct flow_keys *keys,
@@ -1404,7 +1407,10 @@ static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
 		return cake_calc_overhead(q, len, off);
 
 	/* borrowed from qdisc_pkt_len_init() */
-	hdr_len = skb_transport_offset(skb);
+	if (!skb->encapsulation)
+		hdr_len = skb_transport_offset(skb);
+	else
+		hdr_len = skb_inner_transport_offset(skb);
 
 	/* + transport layer */
 	if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 |
@@ -1585,14 +1591,12 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 
 	flow->dropped++;
 	b->tin_dropped++;
-	sch->qstats.drops++;
 
 	if (q->rate_flags & CAKE_FLAG_INGRESS)
 		cake_advance_shaper(q, b, skb, now, true);
 
-	__qdisc_drop(skb, to_free);
+	qdisc_drop_reason(skb, sch, to_free, SKB_DROP_REASON_QDISC_OVERLIMIT);
 	sch->q.qlen--;
-	qdisc_tree_reduce_backlog(sch, 1, len);
 
 	cake_heapify(q, 0);
 
@@ -1738,14 +1742,14 @@ static void cake_reconfigure(struct Qdisc *sch);
 static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			struct sk_buff **to_free)
 {
+	u32 idx, tin, prev_qlen, prev_backlog, drop_id;
 	struct cake_sched_data *q = qdisc_priv(sch);
-	int len = qdisc_pkt_len(skb);
-	int ret;
+	int len = qdisc_pkt_len(skb), ret;
 	struct sk_buff *ack = NULL;
 	ktime_t now = ktime_get();
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
-	u32 idx;
+	bool same_flow = false;
 
 	/* choose flow to insert into */
 	idx = cake_classify(sch, &b, skb, q->flow_mode, &ret);
@@ -1755,6 +1759,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		__qdisc_drop(skb, to_free);
 		return ret;
 	}
+	tin = (u32)(b - q->tins);
 	idx--;
 	flow = &b->flows[idx];
 
@@ -1817,6 +1822,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		consume_skb(skb);
 	} else {
 		/* not splitting */
+		int ack_pkt_len = 0;
+
 		cobalt_set_enqueue_time(skb, now);
 		get_cobalt_cb(skb)->adjusted_len = cake_overhead(q, skb);
 		flow_queue_add(flow, skb);
@@ -1827,13 +1834,13 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		if (ack) {
 			b->ack_drops++;
 			sch->qstats.drops++;
-			b->bytes += qdisc_pkt_len(ack);
-			len -= qdisc_pkt_len(ack);
+			ack_pkt_len = qdisc_pkt_len(ack);
+			b->bytes += ack_pkt_len;
 			q->buffer_used += skb->truesize - ack->truesize;
 			if (q->rate_flags & CAKE_FLAG_INGRESS)
 				cake_advance_shaper(q, b, ack, now, true);
 
-			qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(ack));
+			qdisc_tree_reduce_backlog(sch, 1, ack_pkt_len);
 			consume_skb(ack);
 		} else {
 			sch->q.qlen++;
@@ -1842,11 +1849,11 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 		/* stats */
 		b->packets++;
-		b->bytes	    += len;
-		b->backlogs[idx]    += len;
-		b->tin_backlog      += len;
-		sch->qstats.backlog += len;
-		q->avg_window_bytes += len;
+		b->bytes	    += len - ack_pkt_len;
+		b->backlogs[idx]    += len - ack_pkt_len;
+		b->tin_backlog      += len - ack_pkt_len;
+		sch->qstats.backlog += len - ack_pkt_len;
+		q->avg_window_bytes += len - ack_pkt_len;
 	}
 
 	if (q->overflow_timeout)
@@ -1921,15 +1928,29 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (q->buffer_used > q->buffer_max_used)
 		q->buffer_max_used = q->buffer_used;
 
-	if (q->buffer_used > q->buffer_limit) {
-		u32 dropped = 0;
+	if (q->buffer_used <= q->buffer_limit)
+		return NET_XMIT_SUCCESS;
 
-		while (q->buffer_used > q->buffer_limit) {
-			dropped++;
-			cake_drop(sch, to_free);
-		}
-		b->drop_overlimit += dropped;
+	prev_qlen = sch->q.qlen;
+	prev_backlog = sch->qstats.backlog;
+
+	while (q->buffer_used > q->buffer_limit) {
+		drop_id = cake_drop(sch, to_free);
+		if ((drop_id >> 16) == tin &&
+		    (drop_id & 0xFFFF) == idx)
+			same_flow = true;
 	}
+
+	prev_qlen -= sch->q.qlen;
+	prev_backlog -= sch->qstats.backlog;
+	b->drop_overlimit += prev_qlen;
+
+	if (same_flow) {
+		qdisc_tree_reduce_backlog(sch, prev_qlen - 1,
+					  prev_backlog - len);
+		return NET_XMIT_CN;
+	}
+	qdisc_tree_reduce_backlog(sch, prev_qlen, prev_backlog);
 	return NET_XMIT_SUCCESS;
 }
 
@@ -1965,13 +1986,14 @@ static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
 		while (!!(skb = cake_dequeue_one(sch)))
-			kfree_skb(skb);
+			kfree_skb_reason(skb, SKB_DROP_REASON_QUEUE_PURGE);
 }
 
 static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
+	enum skb_drop_reason reason;
 	ktime_t now = ktime_get();
 	struct cake_flow *flow;
 	struct list_head *head;
@@ -2153,12 +2175,12 @@ retry:
 			goto begin;
 		}
 
+		reason = cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
+					    (b->bulk_flow_count *
+					     !!(q->rate_flags &
+						CAKE_FLAG_INGRESS)));
 		/* Last packet in queue may be marked, shouldn't be dropped */
-		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
-					(b->bulk_flow_count *
-					 !!(q->rate_flags &
-					    CAKE_FLAG_INGRESS))) ||
-		    !flow->head)
+		if (reason == SKB_NOT_DROPPED_YET || !flow->head)
 			break;
 
 		/* drop this packet, get another one */
@@ -2172,7 +2194,7 @@ retry:
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 		qdisc_qstats_drop(sch);
-		kfree_skb(skb);
+		kfree_skb_reason(skb, reason);
 		if (q->rate_flags & CAKE_FLAG_INGRESS)
 			goto retry;
 	}

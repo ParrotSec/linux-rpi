@@ -154,6 +154,7 @@ struct mtk_wed_device {
 		bool wcid_512;
 		bool hw_rro;
 		bool msi;
+		bool hif2;
 
 		u16 token_start;
 		unsigned int nbuf;
@@ -192,7 +193,7 @@ struct mtk_wed_device {
 };
 
 struct mtk_wed_ops {
-	int (*attach)(struct mtk_wed_device *dev);
+	int (*attach)(struct mtk_wed_device *dev) __releases(RCU);
 	int (*tx_ring_setup)(struct mtk_wed_device *dev, int ring,
 			     void __iomem *regs, bool reset);
 	int (*rx_ring_setup)(struct mtk_wed_device *dev, int ring,

@@ -17,6 +17,7 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
+#include <linux/crc32.h>
 #include <linux/mempool.h>
 #include <linux/slab.h>
 #include <linux/crypto.h>
@@ -125,7 +126,6 @@ struct iv_lmk_private {
 
 #define TCW_WHITENING_SIZE 16
 struct iv_tcw_private {
-	struct crypto_shash *crc32_tfm;
 	u8 *iv_seed;
 	u8 *whitening;
 };
@@ -253,17 +253,35 @@ MODULE_PARM_DESC(max_read_size, "Maximum size of a read request");
 static unsigned int max_write_size = 0;
 module_param(max_write_size, uint, 0644);
 MODULE_PARM_DESC(max_write_size, "Maximum size of a write request");
-static unsigned get_max_request_size(struct crypt_config *cc, bool wrt)
+
+static unsigned get_max_request_sectors(struct dm_target *ti, struct bio *bio)
 {
+	struct crypt_config *cc = ti->private;
 	unsigned val, sector_align;
-	val = !wrt ? READ_ONCE(max_read_size) : READ_ONCE(max_write_size);
-	if (likely(!val))
-		val = !wrt ? DM_CRYPT_DEFAULT_MAX_READ_SIZE : DM_CRYPT_DEFAULT_MAX_WRITE_SIZE;
-	if (wrt || cc->used_tag_size) {
-		if (unlikely(val > BIO_MAX_VECS << PAGE_SHIFT))
-			val = BIO_MAX_VECS << PAGE_SHIFT;
+	bool wrt = op_is_write(bio_op(bio));
+
+	if (wrt) {
+		/*
+		 * For zoned devices, splitting write operations creates the
+		 * risk of deadlocking queue freeze operations with zone write
+		 * plugging BIO work when the reminder of a split BIO is
+		 * issued. So always allow the entire BIO to proceed.
+		 */
+		if (ti->emulate_zone_append)
+			return bio_sectors(bio);
+
+		val = min_not_zero(READ_ONCE(max_write_size),
+				   DM_CRYPT_DEFAULT_MAX_WRITE_SIZE);
+	} else {
+		val = min_not_zero(READ_ONCE(max_read_size),
+				   DM_CRYPT_DEFAULT_MAX_READ_SIZE);
 	}
-	sector_align = max(bdev_logical_block_size(cc->dev->bdev), (unsigned)cc->sector_size);
+
+	if (wrt || cc->used_tag_size)
+		val = min(val, BIO_MAX_VECS << PAGE_SHIFT);
+
+	sector_align = max(bdev_logical_block_size(cc->dev->bdev),
+			   (unsigned)cc->sector_size);
 	val = round_down(val, sector_align);
 	if (unlikely(!val))
 		val = sector_align;
@@ -517,7 +535,10 @@ static int crypt_iv_lmk_one(struct crypt_config *cc, u8 *iv,
 {
 	struct iv_lmk_private *lmk = &cc->iv_gen_private.lmk;
 	SHASH_DESC_ON_STACK(desc, lmk->hash_tfm);
-	struct md5_state md5state;
+	union {
+		struct md5_state md5state;
+		u8 state[CRYPTO_MD5_STATESIZE];
+	} u;
 	__le32 buf[4];
 	int i, r;
 
@@ -548,13 +569,13 @@ static int crypt_iv_lmk_one(struct crypt_config *cc, u8 *iv,
 		return r;
 
 	/* No MD5 padding here */
-	r = crypto_shash_export(desc, &md5state);
+	r = crypto_shash_export(desc, &u.md5state);
 	if (r)
 		return r;
 
 	for (i = 0; i < MD5_HASH_WORDS; i++)
-		__cpu_to_le32s(&md5state.hash[i]);
-	memcpy(iv, &md5state.hash, cc->iv_size);
+		__cpu_to_le32s(&u.md5state.hash[i]);
+	memcpy(iv, &u.md5state.hash, cc->iv_size);
 
 	return 0;
 }
@@ -607,10 +628,6 @@ static void crypt_iv_tcw_dtr(struct crypt_config *cc)
 	tcw->iv_seed = NULL;
 	kfree_sensitive(tcw->whitening);
 	tcw->whitening = NULL;
-
-	if (tcw->crc32_tfm && !IS_ERR(tcw->crc32_tfm))
-		crypto_free_shash(tcw->crc32_tfm);
-	tcw->crc32_tfm = NULL;
 }
 
 static int crypt_iv_tcw_ctr(struct crypt_config *cc, struct dm_target *ti,
@@ -626,13 +643,6 @@ static int crypt_iv_tcw_ctr(struct crypt_config *cc, struct dm_target *ti,
 	if (cc->key_size <= (cc->iv_size + TCW_WHITENING_SIZE)) {
 		ti->error = "Wrong key size for TCW";
 		return -EINVAL;
-	}
-
-	tcw->crc32_tfm = crypto_alloc_shash("crc32", 0,
-					    CRYPTO_ALG_ALLOCATES_MEMORY);
-	if (IS_ERR(tcw->crc32_tfm)) {
-		ti->error = "Error initializing CRC32 in TCW";
-		return PTR_ERR(tcw->crc32_tfm);
 	}
 
 	tcw->iv_seed = kzalloc(cc->iv_size, GFP_KERNEL);
@@ -668,36 +678,28 @@ static int crypt_iv_tcw_wipe(struct crypt_config *cc)
 	return 0;
 }
 
-static int crypt_iv_tcw_whitening(struct crypt_config *cc,
-				  struct dm_crypt_request *dmreq,
-				  u8 *data)
+static void crypt_iv_tcw_whitening(struct crypt_config *cc,
+				   struct dm_crypt_request *dmreq, u8 *data)
 {
 	struct iv_tcw_private *tcw = &cc->iv_gen_private.tcw;
 	__le64 sector = cpu_to_le64(dmreq->iv_sector);
 	u8 buf[TCW_WHITENING_SIZE];
-	SHASH_DESC_ON_STACK(desc, tcw->crc32_tfm);
-	int i, r;
+	int i;
 
 	/* xor whitening with sector number */
 	crypto_xor_cpy(buf, tcw->whitening, (u8 *)&sector, 8);
 	crypto_xor_cpy(&buf[8], tcw->whitening + 8, (u8 *)&sector, 8);
 
 	/* calculate crc32 for every 32bit part and xor it */
-	desc->tfm = tcw->crc32_tfm;
-	for (i = 0; i < 4; i++) {
-		r = crypto_shash_digest(desc, &buf[i * 4], 4, &buf[i * 4]);
-		if (r)
-			goto out;
-	}
+	for (i = 0; i < 4; i++)
+		put_unaligned_le32(crc32(0, &buf[i * 4], 4), &buf[i * 4]);
 	crypto_xor(&buf[0], &buf[12], 4);
 	crypto_xor(&buf[4], &buf[8], 4);
 
 	/* apply whitening (8 bytes) to whole sector */
 	for (i = 0; i < ((1 << SECTOR_SHIFT) / 8); i++)
 		crypto_xor(data + i * 8, buf, 8);
-out:
 	memzero_explicit(buf, sizeof(buf));
-	return r;
 }
 
 static int crypt_iv_tcw_gen(struct crypt_config *cc, u8 *iv,
@@ -707,13 +709,12 @@ static int crypt_iv_tcw_gen(struct crypt_config *cc, u8 *iv,
 	struct iv_tcw_private *tcw = &cc->iv_gen_private.tcw;
 	__le64 sector = cpu_to_le64(dmreq->iv_sector);
 	u8 *src;
-	int r = 0;
 
 	/* Remove whitening from ciphertext */
 	if (bio_data_dir(dmreq->ctx->bio_in) != WRITE) {
 		sg = crypt_get_sg_data(cc, dmreq->sg_in);
 		src = kmap_local_page(sg_page(sg));
-		r = crypt_iv_tcw_whitening(cc, dmreq, src + sg->offset);
+		crypt_iv_tcw_whitening(cc, dmreq, src + sg->offset);
 		kunmap_local(src);
 	}
 
@@ -723,7 +724,7 @@ static int crypt_iv_tcw_gen(struct crypt_config *cc, u8 *iv,
 		crypto_xor_cpy(&iv[8], tcw->iv_seed + 8, (u8 *)&sector,
 			       cc->iv_size - 8);
 
-	return r;
+	return 0;
 }
 
 static int crypt_iv_tcw_post(struct crypt_config *cc, u8 *iv,
@@ -731,7 +732,6 @@ static int crypt_iv_tcw_post(struct crypt_config *cc, u8 *iv,
 {
 	struct scatterlist *sg;
 	u8 *dst;
-	int r;
 
 	if (bio_data_dir(dmreq->ctx->bio_in) != WRITE)
 		return 0;
@@ -739,10 +739,10 @@ static int crypt_iv_tcw_post(struct crypt_config *cc, u8 *iv,
 	/* Apply whitening on ciphertext */
 	sg = crypt_get_sg_data(cc, dmreq->sg_out);
 	dst = kmap_local_page(sg_page(sg));
-	r = crypt_iv_tcw_whitening(cc, dmreq, dst + sg->offset);
+	crypt_iv_tcw_whitening(cc, dmreq, dst + sg->offset);
 	kunmap_local(dst);
 
-	return r;
+	return 0;
 }
 
 static int crypt_iv_random_gen(struct crypt_config *cc, u8 *iv,
@@ -1188,7 +1188,7 @@ static int dm_crypt_integrity_io_alloc(struct dm_crypt_io *io, struct bio *bio)
 
 	tag_len = io->cc->tuple_size * (bio_sectors(bio) >> io->cc->sector_shift);
 
-	bip->bip_iter.bi_sector = io->cc->start + io->sector;
+	bip->bip_iter.bi_sector = bio->bi_iter.bi_sector;
 
 	ret = bio_integrity_add_page(bio, virt_to_page(io->integrity_metadata),
 				     tag_len, offset_in_page(io->integrity_metadata));
@@ -1210,11 +1210,11 @@ static int crypt_integrity_ctr(struct crypt_config *cc, struct dm_target *ti)
 		return -EINVAL;
 	}
 
-	if (bi->tuple_size < cc->used_tag_size) {
+	if (bi->metadata_size < cc->used_tag_size) {
 		ti->error = "Integrity profile tag size mismatch.";
 		return -EINVAL;
 	}
-	cc->tuple_size = bi->tuple_size;
+	cc->tuple_size = bi->metadata_size;
 	if (1 << bi->interval_exp != cc->sector_size) {
 		ti->error = "Integrity profile sector size mismatch.";
 		return -EINVAL;
@@ -1720,6 +1720,7 @@ retry:
 	clone->bi_private = io;
 	clone->bi_end_io = crypt_endio;
 	clone->bi_ioprio = io->base_bio->bi_ioprio;
+	clone->bi_iter.bi_sector = cc->start + io->sector;
 
 	remaining_size = size;
 
@@ -1910,7 +1911,6 @@ static int kcryptd_io_read(struct dm_crypt_io *io, gfp_t gfp)
 			crypt_dec_pending(io);
 			return 1;
 		}
-		clone->bi_iter.bi_sector = cc->start + io->sector;
 		crypt_convert_init(cc, &io->ctx, clone, clone, io->sector);
 		io->saved_bi_iter = clone->bi_iter;
 		dm_submit_bio_remap(io->base_bio, clone);
@@ -1926,12 +1926,12 @@ static int kcryptd_io_read(struct dm_crypt_io *io, gfp_t gfp)
 	clone = bio_alloc_clone(cc->dev->bdev, io->base_bio, gfp, &cc->bs);
 	if (!clone)
 		return 1;
+
+	clone->bi_iter.bi_sector = cc->start + io->sector;
 	clone->bi_private = io;
 	clone->bi_end_io = crypt_endio;
 
 	crypt_inc_pending(io);
-
-	clone->bi_iter.bi_sector = cc->start + io->sector;
 
 	if (dm_crypt_integrity_io_alloc(io, clone)) {
 		crypt_dec_pending(io);
@@ -2040,8 +2040,6 @@ static void kcryptd_crypt_write_io_submit(struct dm_crypt_io *io, int async)
 	/* crypt_convert should have filled the clone bio */
 	BUG_ON(io->ctx.iter_out.bi_size);
 
-	clone->bi_iter.bi_sector = cc->start + io->sector;
-
 	if ((likely(!async) && test_bit(DM_CRYPT_NO_OFFLOAD, &cc->flags)) ||
 	    test_bit(DM_CRYPT_NO_WRITE_WORKQUEUE, &cc->flags)) {
 		dm_submit_bio_remap(io->base_bio, clone);
@@ -2098,7 +2096,7 @@ static void kcryptd_crypt_write_continue(struct work_struct *work)
 	wait_for_completion(&ctx->restart);
 	reinit_completion(&ctx->restart);
 
-	r = crypt_convert(cc, &io->ctx, true, false);
+	r = crypt_convert(cc, &io->ctx, false, false);
 	if (r)
 		io->error = r;
 	crypt_finished = atomic_dec_and_test(&ctx->cc_pending);
@@ -2196,7 +2194,7 @@ static void kcryptd_crypt_read_continue(struct work_struct *work)
 	wait_for_completion(&io->ctx.restart);
 	reinit_completion(&io->ctx.restart);
 
-	r = crypt_convert(cc, &io->ctx, true, false);
+	r = crypt_convert(cc, &io->ctx, false, false);
 	if (r)
 		io->error = r;
 
@@ -2214,7 +2212,6 @@ static void kcryptd_crypt_read_convert(struct dm_crypt_io *io)
 	crypt_inc_pending(io);
 
 	if (io->ctx.aead_recheck) {
-		io->ctx.cc_sector = io->sector + cc->iv_offset;
 		r = crypt_convert(cc, &io->ctx,
 				  test_bit(DM_CRYPT_NO_READ_WORKQUEUE, &cc->flags), true);
 	} else {
@@ -3517,7 +3514,7 @@ static int crypt_map(struct dm_target *ti, struct bio *bio)
 	/*
 	 * Check if bio is too large, split as needed.
 	 */
-	max_sectors = get_max_request_size(cc, bio_data_dir(bio) == WRITE);
+	max_sectors = get_max_request_sectors(ti, bio);
 	if (unlikely(bio_sectors(bio) > max_sectors))
 		dm_accept_partial_bio(bio, max_sectors);
 
@@ -3754,6 +3751,17 @@ static void crypt_io_hints(struct dm_target *ti, struct queue_limits *limits)
 		max_t(unsigned int, limits->physical_block_size, cc->sector_size);
 	limits->io_min = max_t(unsigned int, limits->io_min, cc->sector_size);
 	limits->dma_alignment = limits->logical_block_size - 1;
+
+	/*
+	 * For zoned dm-crypt targets, there will be no internal splitting of
+	 * write BIOs to avoid exceeding BIO_MAX_VECS vectors per BIO. But
+	 * without respecting this limit, crypt_alloc_buffer() will trigger a
+	 * BUG(). Avoid this by forcing DM core to split write BIOs to this
+	 * limit.
+	 */
+	if (ti->emulate_zone_append)
+		limits->max_hw_sectors = min(limits->max_hw_sectors,
+					     BIO_MAX_VECS << PAGE_SECTORS_SHIFT);
 }
 
 static struct target_type crypt_target = {

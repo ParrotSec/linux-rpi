@@ -39,6 +39,9 @@ intel_lpss ?
 intel_lpss_acpi ?
 intel_lpss_pci ?
 
+# Common library for Chrome platform drivers
+cros-ec-proto ?
+
 # I²C subsystem and common drivers
 i2c-core ?
 i2c-algo-bit ?
@@ -54,9 +57,8 @@ leds-gpio ?
 
 # CRC algorithms
 crc-ccitt
-libcrc32c
-crc32_generic
-crc32c_generic
+crc32_cryptoapi
+crc32c_cryptoapi
 crc-itu-t
 crc16
 crc7 ?

@@ -154,6 +154,8 @@ int vprintk_emit(int facility, int level,
 
 asmlinkage __printf(1, 0)
 int vprintk(const char *fmt, va_list args);
+__printf(1, 0)
+int vprintk_deferred(const char *fmt, va_list args);
 
 asmlinkage __printf(1, 2) __cold
 int _printk(const char *fmt, ...);
@@ -165,6 +167,9 @@ __printf(1, 2) __cold int _printk_deferred(const char *fmt, ...);
 
 extern void __printk_deferred_enter(void);
 extern void __printk_deferred_exit(void);
+
+extern void printk_force_console_enter(void);
+extern void printk_force_console_exit(void);
 
 /*
  * The printk_deferred_enter/exit macros are available only as a hack for
@@ -211,6 +216,11 @@ int vprintk(const char *s, va_list args)
 {
 	return 0;
 }
+static inline __printf(1, 0)
+int vprintk_deferred(const char *fmt, va_list args)
+{
+	return 0;
+}
 static inline __printf(1, 2) __cold
 int _printk(const char *s, ...)
 {
@@ -227,6 +237,14 @@ static inline void printk_deferred_enter(void)
 }
 
 static inline void printk_deferred_exit(void)
+{
+}
+
+static inline void printk_force_console_enter(void)
+{
+}
+
+static inline void printk_force_console_exit(void)
 {
 }
 

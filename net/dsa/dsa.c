@@ -1374,7 +1374,7 @@ static int dsa_switch_parse_of(struct dsa_switch *ds, struct device_node *dn)
 	return dsa_switch_parse_ports_of(ds, dn);
 }
 
-static int dev_is_class(struct device *dev, void *class)
+static int dev_is_class(struct device *dev, const void *class)
 {
 	if (dev->class != NULL && !strcmp(dev->class->name, class))
 		return 1;
@@ -1544,14 +1544,6 @@ static int dsa_switch_probe(struct dsa_switch *ds)
 	if (!ds->num_ports)
 		return -EINVAL;
 
-	if (ds->phylink_mac_ops) {
-		if (ds->ops->phylink_mac_select_pcs ||
-		    ds->ops->phylink_mac_config ||
-		    ds->ops->phylink_mac_link_down ||
-		    ds->ops->phylink_mac_link_up)
-			return -EINVAL;
-	}
-
 	if (np) {
 		err = dsa_switch_parse_of(ds, np);
 		if (err)
@@ -1629,7 +1621,7 @@ void dsa_switch_shutdown(struct dsa_switch *ds)
 	dsa_switch_for_each_cpu_port(dp, ds)
 		list_add(&dp->conduit->close_list, &close_list);
 
-	dev_close_many(&close_list, true);
+	netif_close_many(&close_list, true);
 
 	dsa_switch_for_each_user_port(dp, ds) {
 		conduit = dsa_port_to_conduit(dp);
@@ -1837,3 +1829,4 @@ MODULE_AUTHOR("Lennert Buytenhek <buytenh@wantstofly.org>");
 MODULE_DESCRIPTION("Driver for Distributed Switch Architecture switch chips");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:dsa");
+MODULE_IMPORT_NS("NETDEV_INTERNAL");

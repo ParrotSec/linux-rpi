@@ -25,13 +25,16 @@ struct rps_map {
 
 /*
  * The rps_dev_flow structure contains the mapping of a flow to a CPU, the
- * tail pointer for that CPU's input queue at the time of last enqueue, and
- * a hardware filter index.
+ * tail pointer for that CPU's input queue at the time of last enqueue, a
+ * hardware filter index, and the hash of the flow if aRFS is enabled.
  */
 struct rps_dev_flow {
 	u16		cpu;
 	u16		filter;
 	unsigned int	last_qtail;
+#ifdef CONFIG_RFS_ACCEL
+	u32		hash;
+#endif
 };
 #define RPS_NO_FILTER 0xffff
 
@@ -39,7 +42,7 @@ struct rps_dev_flow {
  * The rps_dev_flow_table structure contains a table of flow mappings.
  */
 struct rps_dev_flow_table {
-	unsigned int		mask;
+	u8			log;
 	struct rcu_head		rcu;
 	struct rps_dev_flow	flows[];
 };
@@ -57,9 +60,10 @@ struct rps_dev_flow_table {
  * meaning we use 32-6=26 bits for the hash.
  */
 struct rps_sock_flow_table {
-	u32	mask;
+	struct rcu_head	rcu;
+	u32		mask;
 
-	u32	ents[] ____cacheline_aligned_in_smp;
+	u32		ents[] ____cacheline_aligned_in_smp;
 };
 #define	RPS_SOCK_FLOW_TABLE_SIZE(_num) (offsetof(struct rps_sock_flow_table, ents[_num]))
 
@@ -119,6 +123,30 @@ static inline void sock_rps_record_flow(const struct sock *sk)
 			sock_rps_record_flow_hash(READ_ONCE(sk->sk_rxhash));
 		}
 	}
+#endif
+}
+
+static inline void sock_rps_delete_flow(const struct sock *sk)
+{
+#ifdef CONFIG_RPS
+	struct rps_sock_flow_table *table;
+	u32 hash, index;
+
+	if (!static_branch_unlikely(&rfs_needed))
+		return;
+
+	hash = READ_ONCE(sk->sk_rxhash);
+	if (!hash)
+		return;
+
+	rcu_read_lock();
+	table = rcu_dereference(net_hotdata.rps_sock_flow_table);
+	if (table) {
+		index = hash & table->mask;
+		if (READ_ONCE(table->ents[index]) != RPS_NO_CPU)
+			WRITE_ONCE(table->ents[index], RPS_NO_CPU);
+	}
+	rcu_read_unlock();
 #endif
 }
 

@@ -9,6 +9,7 @@
 #include <linux/irqchip/chained_irq.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
+#include <linux/string_choices.h>
 
 enum gio_reg_index {
 	GIO_REG_ODEN = 0,
@@ -224,7 +225,7 @@ static int brcmstb_gpio_priv_set_wake(struct brcmstb_gpio_priv *priv,
 		ret = disable_irq_wake(priv->parent_wake_irq);
 	if (ret)
 		dev_err(&priv->pdev->dev, "failed to %s wake-up interrupt\n",
-				enable ? "enable" : "disable");
+			str_enable_disable(enable));
 	return ret;
 }
 
@@ -435,10 +436,8 @@ static int brcmstb_gpio_irq_setup(struct platform_device *pdev,
 	struct device_node *np = dev->of_node;
 	int err;
 
-	priv->irq_domain =
-		irq_domain_add_linear(np, priv->num_gpios,
-				      &brcmstb_gpio_irq_domain_ops,
-				      priv);
+	priv->irq_domain = irq_domain_create_linear(dev_fwnode(dev), priv->num_gpios,
+						    &brcmstb_gpio_irq_domain_ops, priv);
 	if (!priv->irq_domain) {
 		dev_err(dev, "Couldn't allocate IRQ domain\n");
 		return -ENXIO;
@@ -751,7 +750,7 @@ static struct platform_driver brcmstb_gpio_driver = {
 		.pm = &brcmstb_gpio_pm_ops,
 	},
 	.probe = brcmstb_gpio_probe,
-	.remove_new = brcmstb_gpio_remove,
+	.remove = brcmstb_gpio_remove,
 	.shutdown = brcmstb_gpio_shutdown,
 };
 module_platform_driver(brcmstb_gpio_driver);

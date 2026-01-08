@@ -7,15 +7,7 @@ CONFIG_CMDLINE="console=hvsi0 console=hvc0 console=ttyS0,9600 console=tty0"
 ##
 ## file: arch/powerpc/platforms/cell/Kconfig
 ##
-CONFIG_PPC_IBM_CELL_BLADE=y
 CONFIG_SPU_FS=m
-CONFIG_CBE_RAS=y
-CONFIG_CBE_THERM=m
-
-##
-## file: arch/powerpc/platforms/maple/Kconfig
-##
-CONFIG_PPC_MAPLE=y
 
 ##
 ## file: arch/powerpc/platforms/pasemi/Kconfig
@@ -52,7 +44,6 @@ CONFIG_HW_RANDOM_PASEMI=m
 ##
 ## file: drivers/cpufreq/Kconfig.powerpc
 ##
-CONFIG_CPU_FREQ_CBE=m
 CONFIG_CPU_FREQ_PMAC64=y
 #. It's a bool
 CONFIG_PPC_PASEMI_CPUFREQ=y
@@ -87,7 +78,6 @@ CONFIG_PASEMI_MAC=m
 ##
 CONFIG_GELIC_NET=m
 CONFIG_GELIC_WIRELESS=y
-CONFIG_SPIDER_NET=m
 
 ##
 ## file: drivers/rtc/Kconfig

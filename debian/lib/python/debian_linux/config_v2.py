@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import re
 import subprocess
 import tomllib
 from collections.abc import (
@@ -11,7 +12,6 @@ from pathlib import Path
 from typing import (
     Optional,
     Self,
-    TypeVar,
 )
 
 import dacite
@@ -20,10 +20,20 @@ from . import dataclasses_extra
 from .debian import PackageRelationGroup
 
 
+# Wrapper for regex objects, whose type is not a documented API
+class _RegexWrapper:
+    def __init__(self, s):
+        self._re = re.compile(s)
+
+    def __getattr__(self, name):
+        return getattr(self._re, name)
+
+
 _dacite_config = dacite.Config(
     cast=[
         PackageRelationGroup,
         Path,
+        _RegexWrapper,
     ],
     strict=True,
 )
@@ -115,7 +125,15 @@ class ConfigDebianarchDefs:
 @dataclasses.dataclass
 class ConfigFlavourDefs:
     is_default: bool = False
-    is_quick: bool = False
+    is_test: bool = False
+
+
+@dataclasses.dataclass
+class ConfigDebianrelease:
+    name_regex: _RegexWrapper
+    abi_version_full: bool = True
+    abi_suffix: str = ''
+    revision_regex: _RegexWrapper = _RegexWrapper('.*')
 
 
 @dataclasses.dataclass
@@ -128,15 +146,6 @@ class ConfigBase:
     description: ConfigDescription = dataclasses.field(default_factory=ConfigDescription)
     packages: ConfigPackages = dataclasses.field(default_factory=ConfigPackages)
     relations: ConfigRelations = dataclasses.field(default_factory=ConfigRelations)
-
-    # With dacite <1.8.1, the above fields are wrongly set to refer to
-    # the same object in multiple ConfigBase instances
-    # (https://github.com/konradhalas/dacite/issues/215).  This
-    # particularly affects the build field which we modify later.
-    # Work around it for now.
-    def __post_init__(self):
-        import copy
-        self.build = copy.copy(self.build)
 
     def __post_init_hierarchy__(self, path: Path) -> None:
         '''
@@ -168,9 +177,6 @@ class ConfigBase:
         return config
 
 
-ConfigT = TypeVar('ConfigT', bound=ConfigBase)
-
-
 @dataclasses.dataclass
 class Config(ConfigBase):
     # Disable basic fields
@@ -182,6 +188,9 @@ class Config(ConfigBase):
     )
     kernelarch: list[ConfigKernelarch] = dataclasses.field(
         default_factory=list, metadata={'merge': 'assoclist'},
+    )
+    debianrelease: list[ConfigDebianrelease] = dataclasses.field(
+        default_factory=list,
     )
 
     def __post_init_hierarchy__(self, path: Path) -> None:
@@ -238,9 +247,9 @@ class Config(ConfigBase):
         return config
 
     @classmethod
-    def _read_hierarchy(
-        cls, bases: Iterable[Path], orig: Iterable[ConfigT],
-    ) -> Iterable[ConfigT]:
+    def _read_hierarchy[T: ConfigBase](
+        cls, bases: Iterable[Path], orig: Iterable[T],
+    ) -> Iterable[T]:
         for i in orig:
             try:
                 assert i.path is not None
@@ -315,19 +324,9 @@ class ConfigFeatureset(ConfigBase):
 
         if self.flavour:
             # XXX: Remove special case of name
-            if self.name == 'none':
-                flavour_default = [i for i in self.flavour if i.defs.is_default]
-                flavour_quick = [i for i in self.flavour if i.defs.is_quick]
-
-                if not flavour_quick:
-                    flavour_quick = flavour_default or self.flavour[0:1]
-                    flavour_quick[0].defs.is_quick = True
-
-            # Flavours in other featuresets can never be default or quick
-            else:
+            if self.name != 'none':
                 for flavour in self.flavour:
                     flavour.defs.is_default = False
-                    flavour.defs.is_quick = False
 
         self.__post_init_hierarchy__(path)
 
@@ -365,6 +364,13 @@ class ConfigMergedBase:
         ret: list[Path] = []
         for entry in self._entries:
             ret += entry.build.config + entry.build.config_default
+        return ret
+
+    @property
+    def config_nodefault(self) -> list[Path]:
+        ret: list[Path] = []
+        for entry in self._entries:
+            ret += entry.build.config
         return ret
 
     @property
@@ -419,6 +425,10 @@ class ConfigMerged(ConfigMergedBase):
                 root=self._root,
                 kernelarch=kernelarch,
             )
+
+    @property
+    def debianreleases(self) -> Iterable[ConfigDebianrelease]:
+        return self._root.debianrelease
 
 
 class ConfigMergedKernelarch(ConfigMerged):

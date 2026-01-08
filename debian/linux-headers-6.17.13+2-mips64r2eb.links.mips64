@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.17.13+2/scripts                          usr/src/linux-headers-6.17.13+2-mips64r2eb/scripts
+usr/lib/linux-kbuild-6.17.13+2/tools                            usr/src/linux-headers-6.17.13+2-mips64r2eb/tools
+usr/src/linux-headers-6.17.13+2-mips64r2eb                                               usr/lib/modules/6.17.13+2-mips64r2eb/build
+usr/src/linux-headers-6.17.13+2-common  usr/lib/modules/6.17.13+2-mips64r2eb/source

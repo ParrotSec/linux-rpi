@@ -176,12 +176,6 @@ MODULE_PARM_DESC(ql2xenablehba_err_chk,
 		"  1 -- Error isolation enabled only for DIX Type 0\n"
 		"  2 -- Error isolation enabled for all Types\n");
 
-int ql2xiidmaenable = 1;
-module_param(ql2xiidmaenable, int, S_IRUGO);
-MODULE_PARM_DESC(ql2xiidmaenable,
-		"Enables iIDMA settings "
-		"Default is 1 - perform iIDMA. 0 - no iIDMA.");
-
 int ql2xmqsupport = 1;
 module_param(ql2xmqsupport, int, S_IRUGO);
 MODULE_PARM_DESC(ql2xmqsupport,
@@ -198,12 +192,6 @@ MODULE_PARM_DESC(ql2xfwloadbin,
 		"      interface.\n"
 		" 1 -- load firmware from flash.\n"
 		" 0 -- use default semantics.\n");
-
-int ql2xetsenable;
-module_param(ql2xetsenable, int, S_IRUGO);
-MODULE_PARM_DESC(ql2xetsenable,
-		"Enables firmware ETS burst."
-		"Default is 0 - skip ETS enablement.");
 
 int ql2xdbwr = 1;
 module_param(ql2xdbwr, int, S_IRUGO|S_IWUSR);
@@ -401,7 +389,7 @@ qla2x00_restart_timer(scsi_qla_host_t *vha, unsigned long interval)
 static __inline__ void
 qla2x00_stop_timer(scsi_qla_host_t *vha)
 {
-	del_timer_sync(&vha->timer);
+	timer_delete_sync(&vha->timer);
 	vha->timer_active = 0;
 }
 
@@ -1933,7 +1921,7 @@ qla2x00_abort_all_cmds(scsi_qla_host_t *vha, int res)
 }
 
 static int
-qla2xxx_slave_alloc(struct scsi_device *sdev)
+qla2xxx_sdev_init(struct scsi_device *sdev)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(sdev));
 
@@ -1946,7 +1934,7 @@ qla2xxx_slave_alloc(struct scsi_device *sdev)
 }
 
 static int
-qla2xxx_slave_configure(struct scsi_device *sdev)
+qla2xxx_sdev_configure(struct scsi_device *sdev, struct queue_limits *lim)
 {
 	scsi_qla_host_t *vha = shost_priv(sdev->host);
 	struct req_que *req = vha->req;
@@ -1956,7 +1944,7 @@ qla2xxx_slave_configure(struct scsi_device *sdev)
 }
 
 static void
-qla2xxx_slave_destroy(struct scsi_device *sdev)
+qla2xxx_sdev_destroy(struct scsi_device *sdev)
 {
 	sdev->hostdata = NULL;
 }
@@ -7392,7 +7380,7 @@ static void qla_wind_down_chip(scsi_qla_host_t *vha)
 void
 qla2x00_timer(struct timer_list *t)
 {
-	scsi_qla_host_t *vha = from_timer(vha, t, timer);
+	scsi_qla_host_t *vha = timer_container_of(vha, t, timer);
 	unsigned long	cpu_flags = 0;
 	int		start_dpc = 0;
 	int		index;
@@ -7895,11 +7883,6 @@ qla2xxx_pci_slot_reset(struct pci_dev *pdev)
 	       "Slot Reset.\n");
 
 	ha->pci_error_state = QLA_PCI_SLOT_RESET;
-	/* Workaround: qla2xxx driver which access hardware earlier
-	 * needs error state to be pci_channel_io_online.
-	 * Otherwise mailbox command timesout.
-	 */
-	pdev->error_state = pci_channel_io_normal;
 
 	pci_restore_state(pdev);
 
@@ -8087,10 +8070,10 @@ struct scsi_host_template qla2xxx_driver_template = {
 	.eh_bus_reset_handler	= qla2xxx_eh_bus_reset,
 	.eh_host_reset_handler	= qla2xxx_eh_host_reset,
 
-	.slave_configure	= qla2xxx_slave_configure,
+	.sdev_configure		= qla2xxx_sdev_configure,
 
-	.slave_alloc		= qla2xxx_slave_alloc,
-	.slave_destroy		= qla2xxx_slave_destroy,
+	.sdev_init		= qla2xxx_sdev_init,
+	.sdev_destroy		= qla2xxx_sdev_destroy,
 	.scan_finished		= qla2xxx_scan_finished,
 	.scan_start		= qla2xxx_scan_start,
 	.change_queue_depth	= scsi_change_queue_depth,
@@ -8116,7 +8099,7 @@ static const struct pci_error_handlers qla2xxx_err_handler = {
 	.reset_done = qla_pci_reset_done,
 };
 
-static struct pci_device_id qla2xxx_pci_tbl[] = {
+static const struct pci_device_id qla2xxx_pci_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2100) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2200) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, PCI_DEVICE_ID_QLOGIC_ISP2300) },

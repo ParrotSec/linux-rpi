@@ -176,7 +176,7 @@ static int am654_hbmc_probe(struct platform_device *pdev)
 	if (ret)
 		goto put_node;
 
-	if (of_property_read_bool(dev->of_node, "mux-controls")) {
+	if (of_property_present(dev->of_node, "mux-controls")) {
 		struct mux_control *control = devm_mux_control_get(dev, NULL);
 
 		if (IS_ERR(control)) {
@@ -261,7 +261,7 @@ MODULE_DEVICE_TABLE(of, am654_hbmc_dt_ids);
 
 static struct platform_driver am654_hbmc_platform_driver = {
 	.probe = am654_hbmc_probe,
-	.remove_new = am654_hbmc_remove,
+	.remove = am654_hbmc_remove,
 	.driver = {
 		.name = "hbmc-am654",
 		.of_match_table = am654_hbmc_dt_ids,

@@ -200,7 +200,7 @@ static int mcp9600_write_event_config(struct iio_dev *indio_dev,
 				      const struct iio_chan_spec *chan,
 				      enum iio_event_type type,
 				      enum iio_event_direction dir,
-				      int state)
+				      bool state)
 {
 	struct mcp9600_data *data = iio_priv(indio_dev);
 	struct i2c_client *client = data->client;
@@ -449,13 +449,13 @@ static int mcp9600_probe(struct i2c_client *client)
 
 static const struct i2c_device_id mcp9600_id[] = {
 	{ "mcp9600" },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, mcp9600_id);
 
 static const struct of_device_id mcp9600_of_match[] = {
 	{ .compatible = "microchip,mcp9600" },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, mcp9600_of_match);
 

@@ -66,14 +66,14 @@ CONFIG_GPIO_LOONGSON=y
 CONFIG_DRM=m
 
 ##
-## file: drivers/gpu/drm/amd/amdgpu/Kconfig
-##
-CONFIG_DRM_AMDGPU=m
-
-##
 ## file: drivers/gpu/drm/ast/Kconfig
 ##
 CONFIG_DRM_AST=m
+
+##
+## file: drivers/gpu/drm/loongson/Kconfig
+##
+CONFIG_DRM_LOONGSON=m
 
 ##
 ## file: drivers/gpu/drm/radeon/Kconfig
@@ -226,11 +226,11 @@ CONFIG_KEXEC=y
 CONFIG_CRASH_DUMP=y
 
 ##
+## file: sound/hda/controllers/Kconfig
+##
+CONFIG_SND_HDA_INTEL=m
+
+##
 ## file: sound/pci/Kconfig
 ##
 CONFIG_SND_BT87X=m
-
-##
-## file: sound/pci/hda/Kconfig
-##
-CONFIG_SND_HDA_INTEL=m

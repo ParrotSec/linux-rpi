@@ -114,8 +114,7 @@ static void starfive_intc_irq_handler(struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 }
 
-static int __init starfive_intc_init(struct device_node *intc,
-				     struct device_node *parent)
+static int starfive_intc_init(struct device_node *intc, struct device_node *parent)
 {
 	struct starfive_irq_chip *irqc;
 	struct reset_control *rst;
@@ -158,8 +157,8 @@ static int __init starfive_intc_init(struct device_node *intc,
 
 	raw_spin_lock_init(&irqc->lock);
 
-	irqc->domain = irq_domain_add_linear(intc, STARFIVE_INTC_SRC_IRQ_NUM,
-					     &starfive_intc_domain_ops, irqc);
+	irqc->domain = irq_domain_create_linear(of_fwnode_handle(intc), STARFIVE_INTC_SRC_IRQ_NUM,
+						&starfive_intc_domain_ops, irqc);
 	if (!irqc->domain) {
 		pr_err("Unable to create IRQ domain\n");
 		ret = -EINVAL;

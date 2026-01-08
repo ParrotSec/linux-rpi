@@ -7,9 +7,11 @@
 #include <linux/err.h>
 #include <linux/export.h>
 #include <linux/minmax.h>
+#include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/property.h>
 #include <linux/slab.h>
+#include <linux/units.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/iio-opaque.h>
@@ -20,7 +22,7 @@
 
 struct iio_map_internal {
 	struct iio_dev *indio_dev;
-	struct iio_map *map;
+	const struct iio_map *map;
 	struct list_head l;
 };
 
@@ -42,7 +44,7 @@ static int iio_map_array_unregister_locked(struct iio_dev *indio_dev)
 	return ret;
 }
 
-int iio_map_array_register(struct iio_dev *indio_dev, struct iio_map *maps)
+int iio_map_array_register(struct iio_dev *indio_dev, const struct iio_map *maps)
 {
 	struct iio_map_internal *mapi;
 	int i = 0;
@@ -86,7 +88,8 @@ static void iio_map_array_unregister_cb(void *indio_dev)
 	iio_map_array_unregister(indio_dev);
 }
 
-int devm_iio_map_array_register(struct device *dev, struct iio_dev *indio_dev, struct iio_map *maps)
+int devm_iio_map_array_register(struct device *dev, struct iio_dev *indio_dev,
+				const struct iio_map *maps)
 {
 	int ret;
 
@@ -602,7 +605,7 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 {
 	int scale_type, scale_val, scale_val2;
 	int offset_type, offset_val, offset_val2;
-	s64 raw64 = raw;
+	s64 denominator, raw64 = raw;
 
 	offset_type = iio_channel_read(chan, &offset_val, &offset_val2,
 				       IIO_CHAN_INFO_OFFSET);
@@ -637,7 +640,7 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 		 * If no channel scaling is available apply consumer scale to
 		 * raw value and return.
 		 */
-		*processed = raw * scale;
+		*processed = raw64 * scale;
 		return 0;
 	}
 
@@ -646,20 +649,19 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 		*processed = raw64 * scale_val * scale;
 		break;
 	case IIO_VAL_INT_PLUS_MICRO:
-		if (scale_val2 < 0)
-			*processed = -raw64 * scale_val * scale;
-		else
-			*processed = raw64 * scale_val * scale;
-		*processed += div_s64(raw64 * (s64)scale_val2 * scale,
-				      1000000LL);
-		break;
 	case IIO_VAL_INT_PLUS_NANO:
-		if (scale_val2 < 0)
-			*processed = -raw64 * scale_val * scale;
-		else
-			*processed = raw64 * scale_val * scale;
-		*processed += div_s64(raw64 * (s64)scale_val2 * scale,
-				      1000000000LL);
+		switch (scale_type) {
+		case IIO_VAL_INT_PLUS_MICRO:
+			denominator = MICRO;
+			break;
+		case IIO_VAL_INT_PLUS_NANO:
+			denominator = NANO;
+			break;
+		}
+		*processed = raw64 * scale * abs(scale_val);
+		*processed += div_s64(raw64 * scale * abs(scale_val2), denominator);
+		if (scale_val < 0 || scale_val2 < 0)
+			*processed *= -1;
 		break;
 	case IIO_VAL_FRACTIONAL:
 		*processed = div_s64(raw64 * (s64)scale_val * scale,
@@ -988,6 +990,11 @@ ssize_t iio_read_channel_ext_info(struct iio_channel *chan,
 {
 	const struct iio_chan_spec_ext_info *ext_info;
 
+	if (!buf || offset_in_page(buf)) {
+		pr_err("iio: invalid ext_info read buffer\n");
+		return -EINVAL;
+	}
+
 	ext_info = iio_lookup_ext_info(chan, attr);
 	if (!ext_info)
 		return -EINVAL;
@@ -1013,6 +1020,11 @@ EXPORT_SYMBOL_GPL(iio_write_channel_ext_info);
 
 ssize_t iio_read_channel_label(struct iio_channel *chan, char *buf)
 {
+	if (!buf || offset_in_page(buf)) {
+		pr_err("iio: invalid label read buffer\n");
+		return -EINVAL;
+	}
+
 	return do_iio_read_channel_label(chan->indio_dev, chan->channel, buf);
 }
 EXPORT_SYMBOL_GPL(iio_read_channel_label);

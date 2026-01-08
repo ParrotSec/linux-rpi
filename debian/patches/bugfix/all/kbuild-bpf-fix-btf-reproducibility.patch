@@ -15,16 +15,16 @@ Signed-off-by: Ben Hutchings <benh@debian.org>
 ---
 --- a/scripts/Makefile.btf
 +++ b/scripts/Makefile.btf
-@@ -12,8 +12,6 @@ endif
+@@ -14,8 +14,6 @@ endif
  
  pahole-flags-$(call test-ge, $(pahole-ver), 121)	+= --btf_gen_floats
  
--pahole-flags-$(call test-ge, $(pahole-ver), 122)	+= -j
+-pahole-flags-$(call test-ge, $(pahole-ver), 122)	+= -j$(JOBS)
 -
  pahole-flags-$(call test-ge, $(pahole-ver), 125)	+= --skip_encoding_btf_inconsistent_proto --btf_gen_optimized
  
  else
-@@ -27,6 +25,18 @@ endif
+@@ -29,6 +27,18 @@ endif
  
  endif
  
@@ -35,9 +35,9 @@ Signed-off-by: Ben Hutchings <benh@debian.org>
 +# Assume that if KBUILD_BUILD_TIMESTAMP is set then a reproducible
 +# build is required and we must not use -j alone.
 +ifeq ($(KBUILD_BUILD_TIMESTAMP),)
-+pahole-flags-$(call test-ge, $(pahole-ver), 122)	+= -j
++pahole-flags-$(call test-ge, $(pahole-ver), 122)	+= -j$(JOBS)
 +else
-+pahole-flags-$(call test-ge, $(pahole-ver), 127)	+= -j --btf_features=+reproducible_build
++pahole-flags-$(call test-ge, $(pahole-ver), 127)	+= -j$(JOBS) --btf_features=+reproducible_build
 +endif
 +
  pahole-flags-$(CONFIG_PAHOLE_HAS_LANG_EXCLUDE)		+= --lang_exclude=rust

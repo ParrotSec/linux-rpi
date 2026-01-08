@@ -33,17 +33,6 @@ CONFIG_X86_X32_ABI=y
 CONFIG_X86_X32_DISABLED=y
 
 ##
-## file: arch/x86/Kconfig.cpu
-##
-## choice: Processor family
-# CONFIG_MK8 is not set
-# CONFIG_MPSC is not set
-# CONFIG_MCORE2 is not set
-# CONFIG_MATOM is not set
-CONFIG_GENERIC_CPU=y
-## end choice
-
-##
 ## file: arch/x86/crypto/Kconfig
 ##
 CONFIG_CRYPTO_BLOWFISH_X86_64=m
@@ -62,11 +51,7 @@ CONFIG_CRYPTO_TWOFISH_AVX_X86_64=m
 CONFIG_CRYPTO_AEGIS128_AESNI_SSE2=m
 CONFIG_CRYPTO_NHPOLY1305_SSE2=m
 CONFIG_CRYPTO_NHPOLY1305_AVX2=m
-CONFIG_CRYPTO_SHA1_SSSE3=m
-CONFIG_CRYPTO_SHA256_SSSE3=m
-CONFIG_CRYPTO_SHA512_SSSE3=m
 CONFIG_CRYPTO_GHASH_CLMUL_NI_INTEL=m
-CONFIG_CRYPTO_CRCT10DIF_PCLMUL=m
 
 ##
 ## file: arch/x86/kvm/Kconfig
@@ -144,6 +129,11 @@ CONFIG_EDAC_SBRIDGE=m
 CONFIG_EDAC_IGEN6=m
 
 ##
+## file: drivers/gpu/drm/amd/amdkfd/Kconfig
+##
+CONFIG_HSA_AMD_SVM=y
+
+##
 ## file: drivers/gpu/drm/i915/Kconfig
 ##
 CONFIG_DRM_I915_GVT_KVMGT=m
@@ -176,6 +166,11 @@ CONFIG_STM_SOURCE_FTRACE=m
 CONFIG_I2C_STUB=m
 
 ##
+## file: drivers/infiniband/hw/mana/Kconfig
+##
+CONFIG_MANA_INFINIBAND=m
+
+##
 ## file: drivers/input/mouse/Kconfig
 ##
 CONFIG_MOUSE_PS2_LOGIPS2PP=y
@@ -202,6 +197,7 @@ CONFIG_MAC_EMUMOUSEBTN=y
 ##
 ## file: drivers/misc/Kconfig
 ##
+CONFIG_NTSYNC=m
 CONFIG_NSM=m
 
 ##
@@ -244,12 +240,18 @@ CONFIG_NVDIMM_PFN=y
 ##
 ## file: drivers/pci/Kconfig
 ##
+CONFIG_PCI_P2PDMA=y
 CONFIG_PCI_HYPERV=y
 
 ##
 ## file: drivers/pinctrl/Kconfig
 ##
 CONFIG_PINCTRL_AMD=y
+
+##
+## file: drivers/platform/x86/Kconfig
+##
+CONFIG_SAMSUNG_GALAXYBOOK=m
 
 ##
 ## file: drivers/platform/x86/amd/pmc/Kconfig
@@ -347,11 +349,6 @@ CONFIG_KEXEC_BZIMAGE_VERIFY_SIG=y
 CONFIG_LIVEPATCH=y
 
 ##
-## file: kernel/rcu/Kconfig
-##
-CONFIG_RCU_FANOUT=64
-
-##
 ## file: lib/Kconfig.debug
 ##
 CONFIG_DEBUG_INFO_BTF=y
@@ -367,7 +364,6 @@ CONFIG_FRAME_WARN=2048
 CONFIG_SPARSEMEM_MANUAL=y
 ## end choice
 CONFIG_SPARSEMEM_VMEMMAP=y
-CONFIG_MEMORY_HOTPLUG_DEFAULT_ONLINE=y
 CONFIG_NUMA_EMU=y
 
 ##

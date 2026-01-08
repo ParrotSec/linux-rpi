@@ -239,6 +239,7 @@ static int venus_write_queue(struct venus_hfi_device *hdev,
 static int venus_read_queue(struct venus_hfi_device *hdev,
 			    struct iface_queue *queue, void *pkt, u32 *tx_req)
 {
+	struct hfi_pkt_hdr *pkt_hdr = NULL;
 	struct hfi_queue_header *qhdr;
 	u32 dwords, new_rd_idx;
 	u32 rd_idx, wr_idx, type, qsize;
@@ -304,6 +305,9 @@ static int venus_read_queue(struct venus_hfi_device *hdev,
 			memcpy(pkt, rd_ptr, len);
 			memcpy(pkt + len, queue->qmem.kva, new_rd_idx << 2);
 		}
+		pkt_hdr = (struct hfi_pkt_hdr *)(pkt);
+		if ((pkt_hdr->size >> 2) != dwords)
+			return -EINVAL;
 	} else {
 		/* bad packet received, dropping */
 		new_rd_idx = qhdr->write_idx;
@@ -1192,16 +1196,6 @@ static int venus_core_deinit(struct venus_core *core)
 	return 0;
 }
 
-static int venus_core_ping(struct venus_core *core, u32 cookie)
-{
-	struct venus_hfi_device *hdev = to_hfi_priv(core);
-	struct hfi_sys_ping_pkt pkt;
-
-	pkt_sys_ping(&pkt, cookie);
-
-	return venus_iface_cmdq_write(hdev, &pkt, false);
-}
-
 static int venus_core_trigger_ssr(struct venus_core *core, u32 trigger_type)
 {
 	struct venus_hfi_device *hdev = to_hfi_priv(core);
@@ -1653,7 +1647,6 @@ static int venus_suspend(struct venus_core *core)
 static const struct hfi_ops venus_hfi_ops = {
 	.core_init			= venus_core_init,
 	.core_deinit			= venus_core_deinit,
-	.core_ping			= venus_core_ping,
 	.core_trigger_ssr		= venus_core_trigger_ssr,
 
 	.session_init			= venus_session_init,
@@ -1689,6 +1682,7 @@ void venus_hfi_destroy(struct venus_core *core)
 	venus_interface_queues_release(hdev);
 	mutex_destroy(&hdev->lock);
 	kfree(hdev);
+	disable_irq(core->irq);
 	core->ops = NULL;
 }
 

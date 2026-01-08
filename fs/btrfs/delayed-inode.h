@@ -64,9 +64,9 @@ struct btrfs_delayed_node {
 	struct mutex mutex;
 	struct btrfs_inode_item inode_item;
 	refcount_t refs;
+	int count;
 	u64 index_cnt;
 	unsigned long flags;
-	int count;
 	/*
 	 * The size of the next batch of dir index items to insert (if this
 	 * node is from a directory inode). Protected by @mutex.
@@ -133,7 +133,7 @@ int btrfs_commit_inode_delayed_inode(struct btrfs_inode *inode);
 
 int btrfs_delayed_update_inode(struct btrfs_trans_handle *trans,
 			       struct btrfs_inode *inode);
-int btrfs_fill_inode(struct inode *inode, u32 *rdev);
+int btrfs_fill_inode(struct btrfs_inode *inode, u32 *rdev);
 int btrfs_delayed_delete_inode_ref(struct btrfs_inode *inode);
 
 /* Used for drop dead root */
@@ -150,10 +150,9 @@ bool btrfs_readdir_get_delayed_items(struct btrfs_inode *inode,
 void btrfs_readdir_put_delayed_items(struct btrfs_inode *inode,
 				     struct list_head *ins_list,
 				     struct list_head *del_list);
-int btrfs_should_delete_dir_index(const struct list_head *del_list,
-				  u64 index);
-int btrfs_readdir_delayed_dir_index(struct dir_context *ctx,
-				    const struct list_head *ins_list);
+bool btrfs_should_delete_dir_index(const struct list_head *del_list, u64 index);
+bool btrfs_readdir_delayed_dir_index(struct dir_context *ctx,
+				     const struct list_head *ins_list);
 
 /* Used during directory logging. */
 void btrfs_log_get_delayed_items(struct btrfs_inode *inode,

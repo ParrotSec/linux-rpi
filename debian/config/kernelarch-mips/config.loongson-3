@@ -109,6 +109,7 @@ CONFIG_FB_RADEON=y
 ## choice: Preemption Model
 # CONFIG_PREEMPT_VOLUNTARY is not set
 CONFIG_PREEMPT=y
+# CONFIG_PREEMPT_LAZY is not set
 ## end choice
 
 ##
@@ -118,6 +119,6 @@ CONFIG_PREEMPT=y
 # CONFIG_PAGE_POISONING is not set
 
 ##
-## file: sound/pci/hda/Kconfig
+## file: sound/hda/controllers/Kconfig
 ##
 CONFIG_SND_HDA_INTEL=m

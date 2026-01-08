@@ -78,10 +78,8 @@
 #define INTR_SIGNAL_ENABLE		0x28
 #define INTR_FORCE			0x2c
 #define INTR_HC_CMD_SEQ_UFLOW_STAT	BIT(12)	/* Cmd Sequence Underflow */
-#define INTR_HC_RESET_CANCEL		BIT(11)	/* HC Cancelled Reset */
+#define INTR_HC_SEQ_CANCEL		BIT(11)	/* HC Cancelled Transaction Sequence */
 #define INTR_HC_INTERNAL_ERR		BIT(10)	/* HC Internal Error */
-#define INTR_HC_PIO			BIT(8)	/* cascaded PIO interrupt */
-#define INTR_HC_RINGS			GENMASK(7, 0)
 
 #define DAT_SECTION			0x30	/* Device Address Table */
 #define DAT_ENTRY_SIZE			GENMASK(31, 28)
@@ -369,7 +367,7 @@ out:
 }
 
 static int i3c_hci_i2c_xfers(struct i2c_dev_desc *dev,
-			     const struct i2c_msg *i2c_xfers, int nxfers)
+			     struct i2c_msg *i2c_xfers, int nxfers)
 {
 	struct i3c_master_controller *m = i2c_dev_get_master(dev);
 	struct i3c_hci *hci = to_i3c_hci(m);
@@ -384,14 +382,11 @@ static int i3c_hci_i2c_xfers(struct i2c_dev_desc *dev,
 		return -ENOMEM;
 
 	for (i = 0; i < nxfers; i++) {
-		xfer[i].data = i2c_xfers[i].buf;
+		xfer[i].data = i2c_get_dma_safe_msg_buf(&i2c_xfers[i], 1);
 		xfer[i].data_len = i2c_xfers[i].len;
 		xfer[i].rnw = i2c_xfers[i].flags & I2C_M_RD;
 		hci->cmd->prep_i2c_xfer(hci, dev, &xfer[i]);
 		xfer[i].cmd_desc[0] |= CMD_0_ROC;
-		ret = i3c_hci_alloc_safe_xfer_buf(hci, &xfer[i]);
-		if (ret)
-			goto out;
 	}
 	last = i - 1;
 	xfer[last].cmd_desc[0] |= CMD_0_TOC;
@@ -400,7 +395,7 @@ static int i3c_hci_i2c_xfers(struct i2c_dev_desc *dev,
 	ret = hci->io->queue_xfer(hci, xfer, nxfers);
 	if (ret)
 		goto out;
-	if (!wait_for_completion_timeout(&done, HZ) &&
+	if (!wait_for_completion_timeout(&done, m->i2c.timeout) &&
 	    hci->io->dequeue_xfer(hci, xfer, nxfers)) {
 		ret = -ETIME;
 		goto out;
@@ -414,7 +409,8 @@ static int i3c_hci_i2c_xfers(struct i2c_dev_desc *dev,
 
 out:
 	for (i = 0; i < nxfers; i++)
-		i3c_hci_free_safe_xfer_buf(hci, &xfer[i]);
+		i2c_put_dma_safe_msg_buf(xfer[i].data, &i2c_xfers[i],
+					 ret ? false : true);
 
 	hci_free_xfer(xfer, nxfers);
 	return ret;
@@ -438,7 +434,8 @@ static int i3c_hci_attach_i3c_dev(struct i3c_dev_desc *dev)
 			kfree(dev_data);
 			return ret;
 		}
-		mipi_i3c_hci_dat_v1.set_dynamic_addr(hci, ret, dev->info.dyn_addr);
+		mipi_i3c_hci_dat_v1.set_dynamic_addr(hci, ret,
+						     dev->info.dyn_addr ?: dev->info.static_addr);
 		dev_data->dat_idx = ret;
 	}
 	i3c_dev_set_master_data(dev, dev_data);
@@ -593,34 +590,27 @@ static irqreturn_t i3c_hci_irq_handler(int irq, void *dev_id)
 	u32 val;
 
 	val = reg_read(INTR_STATUS);
+	reg_write(INTR_STATUS, val);
 	DBG("INTR_STATUS = %#x", val);
 
-	if (val) {
-		reg_write(INTR_STATUS, val);
-	} else {
-		/* v1.0 does not have PIO cascaded notification bits */
-		val |= INTR_HC_PIO;
-	}
+	if (val)
+		result = IRQ_HANDLED;
 
-	if (val & INTR_HC_RESET_CANCEL) {
-		DBG("cancelled reset");
-		val &= ~INTR_HC_RESET_CANCEL;
+	if (val & INTR_HC_SEQ_CANCEL) {
+		dev_dbg(&hci->master.dev,
+			"Host Controller Cancelled Transaction Sequence\n");
+		val &= ~INTR_HC_SEQ_CANCEL;
 	}
 	if (val & INTR_HC_INTERNAL_ERR) {
 		dev_err(&hci->master.dev, "Host Controller Internal Error\n");
 		val &= ~INTR_HC_INTERNAL_ERR;
 	}
-	if (val & INTR_HC_PIO) {
-		hci->io->irq_handler(hci, 0);
-		val &= ~INTR_HC_PIO;
-	}
-	if (val & INTR_HC_RINGS) {
-		hci->io->irq_handler(hci, val & INTR_HC_RINGS);
-		val &= ~INTR_HC_RINGS;
-	}
+
 	if (val)
-		dev_err(&hci->master.dev, "unexpected INTR_STATUS %#x\n", val);
-	else
+		dev_warn_once(&hci->master.dev,
+			      "unexpected INTR_STATUS %#x\n", val);
+
+	if (hci->io->irq_handler(hci))
 		result = IRQ_HANDLED;
 
 	return result;
@@ -710,9 +700,14 @@ static int i3c_hci_init(struct i3c_hci *hci)
 	if (ret)
 		return -ENXIO;
 
-	/* Disable all interrupts and allow all signal updates */
+	/* Disable all interrupts */
 	reg_write(INTR_SIGNAL_ENABLE, 0x0);
-	reg_write(INTR_STATUS_ENABLE, 0xffffffff);
+	/*
+	 * Only allow bit 31:10 signal updates because
+	 * Bit 0:9 are reserved in IP version >= 0.8
+	 * Bit 0:5 are defined in IP version < 0.8 but not handled by PIO code
+	 */
+	reg_write(INTR_STATUS_ENABLE, GENMASK(31, 10));
 
 	/* Make sure our data ordering fits the host's */
 	regval = reg_read(HC_CONTROL);
@@ -853,7 +848,7 @@ MODULE_DEVICE_TABLE(acpi, i3c_hci_acpi_match);
 
 static struct platform_driver i3c_hci_driver = {
 	.probe = i3c_hci_probe,
-	.remove_new = i3c_hci_remove,
+	.remove = i3c_hci_remove,
 	.driver = {
 		.name = "mipi-i3c-hci",
 		.of_match_table = of_match_ptr(i3c_hci_of_match),

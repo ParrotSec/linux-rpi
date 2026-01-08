@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8; mode: python -*-
+# SPDX-License-Identifier: GPL-2.0
 # pylint: disable=R0903, C0330, R0914, R0912, E0401
 
-u"""
+"""
     kernel-include
     ~~~~~~~~~~~~~~
 
@@ -34,12 +35,14 @@ u"""
 import os.path
 
 from docutils import io, nodes, statemachine
-from docutils.utils.error_reporting import SafeString, ErrorString
 from docutils.parsers.rst import directives
 from docutils.parsers.rst.directives.body import CodeBlock, NumberLines
 from docutils.parsers.rst.directives.misc import Include
 
 __version__  = '1.0'
+
+def ErrorString(exc):  # Shamelessly stolen from docutils
+    return f'{exc.__class__.__name}: {exc}'
 
 # ==============================================================================
 def setup(app):
@@ -56,7 +59,7 @@ def setup(app):
 class KernelInclude(Include):
 # ==============================================================================
 
-    u"""KernelInclude (``kernel-include``) directive"""
+    """KernelInclude (``kernel-include``) directive"""
 
     def run(self):
         env = self.state.document.settings.env
@@ -111,7 +114,7 @@ class KernelInclude(Include):
             raise self.severe('Problems with "%s" directive path:\n'
                               'Cannot encode input file path "%s" '
                               '(wrong locale?).' %
-                              (self.name, SafeString(path)))
+                              (self.name, path))
         except IOError as error:
             raise self.severe('Problems with "%s" directive path:\n%s.' %
                       (self.name, ErrorString(error)))

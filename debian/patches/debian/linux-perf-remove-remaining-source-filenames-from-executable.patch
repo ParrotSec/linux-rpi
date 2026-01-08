@@ -15,7 +15,7 @@ to the installed location.
 ---
 --- a/tools/perf/builtin-report.c
 +++ b/tools/perf/builtin-report.c
-@@ -654,10 +654,12 @@ static int report__browse_hists(struct r
+@@ -662,10 +662,12 @@ static int report__browse_hists(struct r
  
  	path = system_path(TIPDIR);
  	if (perf_tip(&help, path) || help == NULL) {
@@ -30,10 +30,10 @@ to the installed location.
  	free(path);
 --- a/tools/perf/tests/Build
 +++ b/tools/perf/tests/Build
-@@ -73,7 +73,7 @@ perf-test-$(CONFIG_DWARF_UNWIND) += dwar
+@@ -73,7 +73,7 @@ ifeq ($(SRCARCH),$(filter $(SRCARCH),x86
+ perf-test-$(CONFIG_DWARF_UNWIND) += dwarf-unwind.o
  endif
  
- CFLAGS_attr.o         += -DBINDIR="BUILD_STR($(bindir_SQ))" -DPYTHON="BUILD_STR($(PYTHON_WORD))"
 -CFLAGS_python-use.o   += -DPYTHONPATH="BUILD_STR($(OUTPUT)python)" -DPYTHON="BUILD_STR($(PYTHON_WORD))"
 +CFLAGS_python-use.o   += -DPYTHONPATH="BUILD_STR($(perfexec_instdir_SQ)/scripts/python)" -DPYTHON="BUILD_STR($(PYTHON_WORD))"
  CFLAGS_dwarf-unwind.o += -fno-optimize-sibling-calls
@@ -41,7 +41,7 @@ to the installed location.
  perf-test-y += workloads/
 --- a/tools/perf/Build
 +++ b/tools/perf/Build
-@@ -51,7 +51,7 @@ CFLAGS_perf.o              += -DPERF_HTM
+@@ -52,7 +52,7 @@ CFLAGS_perf.o              += -DPERF_HTM
  			      -DPREFIX="BUILD_STR($(prefix_SQ))"
  CFLAGS_builtin-trace.o	   += -DSTRACE_GROUPS_DIR="BUILD_STR($(STRACE_GROUPS_DIR_SQ))"
  CFLAGS_builtin-report.o	   += -DTIPDIR="BUILD_STR($(tipdir_SQ))"

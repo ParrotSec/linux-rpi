@@ -16,8 +16,8 @@ The error message is based on that used in commit 0126be38d988
 ---
 --- a/Makefile
 +++ b/Makefile
-@@ -218,6 +218,18 @@ ifeq ("$(origin M)", "command line")
-   KBUILD_EXTMOD := $(M)
+@@ -138,6 +138,18 @@ ifeq ("$(origin MO)", "command line")
+   KBUILD_EXTMOD_OUTPUT := $(MO)
  endif
  
 +# Old syntax make ... SUBDIRS=$PWD should be rejected to avoid mishaps

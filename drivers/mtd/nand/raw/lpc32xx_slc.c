@@ -937,6 +937,7 @@ release_dma:
 	dma_release_channel(host->dma_chan);
 enable_wp:
 	lpc32xx_wp_enable(host);
+	gpiod_put(host->wp_gpio);
 
 	return res;
 }
@@ -962,6 +963,7 @@ static void lpc32xx_nand_remove(struct platform_device *pdev)
 	writel(tmp, SLC_CTRL(host->io_base));
 
 	lpc32xx_wp_enable(host);
+	gpiod_put(host->wp_gpio);
 }
 
 static int lpc32xx_nand_resume(struct platform_device *pdev)
@@ -1010,7 +1012,7 @@ MODULE_DEVICE_TABLE(of, lpc32xx_nand_match);
 
 static struct platform_driver lpc32xx_nand_driver = {
 	.probe		= lpc32xx_nand_probe,
-	.remove_new	= lpc32xx_nand_remove,
+	.remove		= lpc32xx_nand_remove,
 	.resume		= pm_ptr(lpc32xx_nand_resume),
 	.suspend	= pm_ptr(lpc32xx_nand_suspend),
 	.driver		= {

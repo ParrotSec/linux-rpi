@@ -3,7 +3,7 @@ config XFS_FS
 	tristate "XFS filesystem support"
 	depends on BLOCK
 	select EXPORTFS
-	select LIBCRC32C
+	select CRC32
 	select FS_IOMAP
 	help
 	  XFS is a high performance journaling filesystem which originated
@@ -105,6 +105,7 @@ config XFS_POSIX_ACL
 config XFS_RT
 	bool "XFS Realtime subvolume support"
 	depends on XFS_FS
+	default BLK_DEV_ZONED
 	help
 	  If you say Y here you will be able to mount and use XFS filesystems
 	  which contain a realtime subvolume.  The realtime subvolume is a

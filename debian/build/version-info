@@ -1,2 +1,3 @@
 Source: linux
-Version: 6.12.32-1parrot1
+Version: 6.17.13-1parrot1
+Distribution: echo

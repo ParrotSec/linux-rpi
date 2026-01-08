@@ -301,6 +301,7 @@ struct iqs7222_dev_desc {
 	int allow_offset;
 	int event_offset;
 	int comms_offset;
+	int ext_chan;
 	bool legacy_gesture;
 	struct iqs7222_reg_grp_desc reg_grps[IQS7222_NUM_REG_GRPS];
 };
@@ -315,6 +316,7 @@ static const struct iqs7222_dev_desc iqs7222_devs[] = {
 		.allow_offset = 9,
 		.event_offset = 10,
 		.comms_offset = 12,
+		.ext_chan = 10,
 		.reg_grps = {
 			[IQS7222_REG_GRP_STAT] = {
 				.base = IQS7222_SYS_STATUS,
@@ -373,6 +375,7 @@ static const struct iqs7222_dev_desc iqs7222_devs[] = {
 		.allow_offset = 9,
 		.event_offset = 10,
 		.comms_offset = 12,
+		.ext_chan = 10,
 		.legacy_gesture = true,
 		.reg_grps = {
 			[IQS7222_REG_GRP_STAT] = {
@@ -2244,7 +2247,7 @@ static int iqs7222_parse_chan(struct iqs7222_private *iqs7222,
 	const struct iqs7222_dev_desc *dev_desc = iqs7222->dev_desc;
 	struct i2c_client *client = iqs7222->client;
 	int num_chan = dev_desc->reg_grps[IQS7222_REG_GRP_CHAN].num_row;
-	int ext_chan = rounddown(num_chan, 10);
+	int ext_chan = dev_desc->ext_chan ? : num_chan;
 	int error, i;
 	u16 *chan_setup = iqs7222->chan_setup[chan_index];
 	u16 *sys_setup = iqs7222->sys_setup;
@@ -2379,9 +2382,9 @@ static int iqs7222_parse_chan(struct iqs7222_private *iqs7222,
 	for (i = 0; i < ARRAY_SIZE(iqs7222_kp_events); i++) {
 		const char *event_name = iqs7222_kp_events[i].name;
 		u16 event_enable = iqs7222_kp_events[i].enable;
-		struct fwnode_handle *event_node;
 
-		event_node = fwnode_get_named_child_node(chan_node, event_name);
+		struct fwnode_handle *event_node __free(fwnode_handle) =
+			fwnode_get_named_child_node(chan_node, event_name);
 		if (!event_node)
 			continue;
 
@@ -2402,7 +2405,6 @@ static int iqs7222_parse_chan(struct iqs7222_private *iqs7222,
 				dev_err(&client->dev,
 					"Invalid %s press timeout: %u\n",
 					fwnode_get_name(event_node), val);
-				fwnode_handle_put(event_node);
 				return -EINVAL;
 			}
 
@@ -2412,7 +2414,6 @@ static int iqs7222_parse_chan(struct iqs7222_private *iqs7222,
 			dev_err(&client->dev,
 				"Failed to read %s press timeout: %d\n",
 				fwnode_get_name(event_node), error);
-			fwnode_handle_put(event_node);
 			return error;
 		}
 
@@ -2423,9 +2424,11 @@ static int iqs7222_parse_chan(struct iqs7222_private *iqs7222,
 					    dev_desc->touch_link - (i ? 0 : 2),
 					    &iqs7222->kp_type[chan_index][i],
 					    &iqs7222->kp_code[chan_index][i]);
-		fwnode_handle_put(event_node);
 		if (error)
 			return error;
+
+		if (!iqs7222->kp_type[chan_index][i])
+			continue;
 
 		if (!dev_desc->event_offset)
 			continue;
@@ -2448,7 +2451,7 @@ static int iqs7222_parse_sldr(struct iqs7222_private *iqs7222,
 	const struct iqs7222_dev_desc *dev_desc = iqs7222->dev_desc;
 	struct i2c_client *client = iqs7222->client;
 	int num_chan = dev_desc->reg_grps[IQS7222_REG_GRP_CHAN].num_row;
-	int ext_chan = rounddown(num_chan, 10);
+	int ext_chan = dev_desc->ext_chan ? : num_chan;
 	int count, error, reg_offset, i;
 	u16 *event_mask = &iqs7222->sys_setup[dev_desc->event_offset];
 	u16 *sldr_setup = iqs7222->sldr_setup[sldr_index];
@@ -2598,10 +2601,10 @@ static int iqs7222_parse_sldr(struct iqs7222_private *iqs7222,
 
 	for (i = 0; i < ARRAY_SIZE(iqs7222_sl_events); i++) {
 		const char *event_name = iqs7222_sl_events[i].name;
-		struct fwnode_handle *event_node;
 		enum iqs7222_reg_key_id reg_key;
 
-		event_node = fwnode_get_named_child_node(sldr_node, event_name);
+		struct fwnode_handle *event_node __free(fwnode_handle) =
+			fwnode_get_named_child_node(sldr_node, event_name);
 		if (!event_node)
 			continue;
 
@@ -2633,7 +2636,6 @@ static int iqs7222_parse_sldr(struct iqs7222_private *iqs7222,
 					      : sldr_setup[4 + reg_offset],
 					    NULL,
 					    &iqs7222->sl_code[sldr_index][i]);
-		fwnode_handle_put(event_node);
 		if (error)
 			return error;
 
@@ -2736,9 +2738,9 @@ static int iqs7222_parse_tpad(struct iqs7222_private *iqs7222,
 
 	for (i = 0; i < ARRAY_SIZE(iqs7222_tp_events); i++) {
 		const char *event_name = iqs7222_tp_events[i].name;
-		struct fwnode_handle *event_node;
 
-		event_node = fwnode_get_named_child_node(tpad_node, event_name);
+		struct fwnode_handle *event_node __free(fwnode_handle) =
+			fwnode_get_named_child_node(tpad_node, event_name);
 		if (!event_node)
 			continue;
 
@@ -2754,7 +2756,6 @@ static int iqs7222_parse_tpad(struct iqs7222_private *iqs7222,
 					    iqs7222_tp_events[i].link, 1566,
 					    NULL,
 					    &iqs7222->tp_code[i]);
-		fwnode_handle_put(event_node);
 		if (error)
 			return error;
 
@@ -2812,9 +2813,9 @@ static int iqs7222_parse_reg_grp(struct iqs7222_private *iqs7222,
 				 int reg_grp_index)
 {
 	struct i2c_client *client = iqs7222->client;
-	struct fwnode_handle *reg_grp_node;
 	int error;
 
+	struct fwnode_handle *reg_grp_node __free(fwnode_handle) = NULL;
 	if (iqs7222_reg_grp_names[reg_grp]) {
 		char reg_grp_name[16];
 
@@ -2832,14 +2833,17 @@ static int iqs7222_parse_reg_grp(struct iqs7222_private *iqs7222,
 
 	error = iqs7222_parse_props(iqs7222, reg_grp_node, reg_grp_index,
 				    reg_grp, IQS7222_REG_KEY_NONE);
+	if (error)
+		return error;
 
-	if (!error && iqs7222_parse_extra[reg_grp])
+	if (iqs7222_parse_extra[reg_grp]) {
 		error = iqs7222_parse_extra[reg_grp](iqs7222, reg_grp_node,
 						     reg_grp_index);
+		if (error)
+			return error;
+	}
 
-	fwnode_handle_put(reg_grp_node);
-
-	return error;
+	return 0;
 }
 
 static int iqs7222_parse_all(struct iqs7222_private *iqs7222)

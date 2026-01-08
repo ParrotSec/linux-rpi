@@ -37,6 +37,7 @@ config NET_DSA_LANTIQ_GSWIP
 config NET_DSA_MT7530
 	tristate "MediaTek MT7530 and MT7531 Ethernet switch support"
 	select NET_DSA_TAG_MTK
+	select REGMAP_IRQ
 	imply NET_DSA_MT7530_MDIO
 	imply NET_DSA_MT7530_MMIO
 	help
@@ -91,7 +92,7 @@ source "drivers/net/dsa/realtek/Kconfig"
 
 config NET_DSA_RZN1_A5PSW
 	tristate "Renesas RZ/N1 A5PSW Ethernet switch support"
-	depends on OF && ARCH_RZN1
+	depends on OF && (ARCH_RZN1 || COMPILE_TEST)
 	select NET_DSA_TAG_RZN1_A5PSW
 	select PCS_RZN1_MIIC
 	help

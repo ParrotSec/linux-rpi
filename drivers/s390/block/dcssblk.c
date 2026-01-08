@@ -17,7 +17,6 @@
 #include <linux/blkdev.h>
 #include <linux/completion.h>
 #include <linux/interrupt.h>
-#include <linux/pfn_t.h>
 #include <linux/uio.h>
 #include <linux/dax.h>
 #include <linux/io.h>
@@ -33,7 +32,7 @@ static void dcssblk_release(struct gendisk *disk);
 static void dcssblk_submit_bio(struct bio *bio);
 static long dcssblk_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode mode, void **kaddr,
-		pfn_t *pfn);
+		unsigned long *pfn);
 
 static char dcssblk_segments[DCSSBLK_PARM_LEN] = "\0";
 
@@ -314,7 +313,7 @@ dcssblk_load_segment(char *name, struct segment_info **seg_info)
 	if (*seg_info == NULL)
 		return -ENOMEM;
 
-	strcpy((*seg_info)->segment_name, name);
+	strscpy((*seg_info)->segment_name, name);
 
 	/* load the segment */
 	rc = segment_load(name, SEGMENT_SHARED,
@@ -339,7 +338,7 @@ dcssblk_shared_show(struct device *dev, struct device_attribute *attr, char *buf
 	struct dcssblk_dev_info *dev_info;
 
 	dev_info = container_of(dev, struct dcssblk_dev_info, dev);
-	return sprintf(buf, dev_info->is_shared ? "1\n" : "0\n");
+	return sysfs_emit(buf, dev_info->is_shared ? "1\n" : "0\n");
 }
 
 static ssize_t
@@ -444,7 +443,7 @@ dcssblk_save_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct dcssblk_dev_info *dev_info;
 
 	dev_info = container_of(dev, struct dcssblk_dev_info, dev);
-	return sprintf(buf, dev_info->save_pending ? "1\n" : "0\n");
+	return sysfs_emit(buf, dev_info->save_pending ? "1\n" : "0\n");
 }
 
 static ssize_t
@@ -506,21 +505,15 @@ static ssize_t
 dcssblk_seglist_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	int i;
-
 	struct dcssblk_dev_info *dev_info;
 	struct segment_info *entry;
+	int i;
 
+	i = 0;
 	down_read(&dcssblk_devices_sem);
 	dev_info = container_of(dev, struct dcssblk_dev_info, dev);
-	i = 0;
-	buf[0] = '\0';
-	list_for_each_entry(entry, &dev_info->seg_list, lh) {
-		strcpy(&buf[i], entry->segment_name);
-		i += strlen(entry->segment_name);
-		buf[i] = '\n';
-		i++;
-	}
+	list_for_each_entry(entry, &dev_info->seg_list, lh)
+		i += sysfs_emit_at(buf, i, "%s\n", entry->segment_name);
 	up_read(&dcssblk_devices_sem);
 	return i;
 }
@@ -540,6 +533,21 @@ static const struct attribute_group *dcssblk_dev_attr_groups[] = {
 	NULL,
 };
 
+static int dcssblk_setup_dax(struct dcssblk_dev_info *dev_info)
+{
+	struct dax_device *dax_dev;
+
+	if (!IS_ENABLED(CONFIG_DCSSBLK_DAX))
+		return 0;
+
+	dax_dev = alloc_dax(dev_info, &dcssblk_dax_ops);
+	if (IS_ERR(dax_dev))
+		return PTR_ERR(dax_dev);
+	set_dax_synchronous(dax_dev);
+	dev_info->dax_dev = dax_dev;
+	return dax_add_host(dev_info->dax_dev, dev_info->gd);
+}
+
 /*
  * device attribute for adding devices
  */
@@ -553,7 +561,6 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 	int rc, i, j, num_of_segments;
 	struct dcssblk_dev_info *dev_info;
 	struct segment_info *seg_info, *temp;
-	struct dax_device *dax_dev;
 	char *local_buf;
 	unsigned long seg_byte_size;
 
@@ -604,7 +611,7 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 				rc = -ENOMEM;
 				goto out;
 			}
-			strcpy(dev_info->segment_name, local_buf);
+			strscpy(dev_info->segment_name, local_buf);
 			dev_info->segment_type = seg_info->segment_type;
 			INIT_LIST_HEAD(&dev_info->seg_list);
 		}
@@ -680,14 +687,7 @@ dcssblk_add_store(struct device *dev, struct device_attribute *attr, const char 
 	if (rc)
 		goto put_dev;
 
-	dax_dev = alloc_dax(dev_info, &dcssblk_dax_ops);
-	if (IS_ERR(dax_dev)) {
-		rc = PTR_ERR(dax_dev);
-		goto put_dev;
-	}
-	set_dax_synchronous(dax_dev);
-	dev_info->dax_dev = dax_dev;
-	rc = dax_add_host(dev_info->dax_dev, dev_info->gd);
+	rc = dcssblk_setup_dax(dev_info);
 	if (rc)
 		goto out_dax;
 
@@ -913,7 +913,7 @@ fail:
 
 static long
 __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
-		long nr_pages, void **kaddr, pfn_t *pfn)
+		long nr_pages, void **kaddr, unsigned long *pfn)
 {
 	resource_size_t offset = pgoff * PAGE_SIZE;
 	unsigned long dev_sz;
@@ -922,8 +922,7 @@ __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
 	if (kaddr)
 		*kaddr = __va(dev_info->start + offset);
 	if (pfn)
-		*pfn = __pfn_to_pfn_t(PFN_DOWN(dev_info->start + offset),
-				PFN_DEV|PFN_SPECIAL);
+		*pfn = PFN_DOWN(dev_info->start + offset);
 
 	return (dev_sz - offset) / PAGE_SIZE;
 }
@@ -931,7 +930,7 @@ __dcssblk_direct_access(struct dcssblk_dev_info *dev_info, pgoff_t pgoff,
 static long
 dcssblk_dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff,
 		long nr_pages, enum dax_access_mode mode, void **kaddr,
-		pfn_t *pfn)
+		unsigned long *pfn)
 {
 	struct dcssblk_dev_info *dev_info = dax_get_private(dax_dev);
 

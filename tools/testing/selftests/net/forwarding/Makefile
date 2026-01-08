@@ -102,9 +102,11 @@ TEST_PROGS = bridge_fdb_learning_limit.sh \
 	vxlan_bridge_1d_port_8472.sh \
 	vxlan_bridge_1d.sh \
 	vxlan_bridge_1q_ipv6.sh \
+	vxlan_bridge_1q_mc_ul.sh \
 	vxlan_bridge_1q_port_8472_ipv6.sh \
 	vxlan_bridge_1q_port_8472.sh \
 	vxlan_bridge_1q.sh \
+	vxlan_reserved.sh \
 	vxlan_symmetric_ipv6.sh \
 	vxlan_symmetric.sh
 
@@ -126,6 +128,7 @@ TEST_FILES := devlink_lib.sh \
 	tc_common.sh
 
 TEST_INCLUDES := \
-	../lib.sh
+	../lib.sh \
+	$(wildcard ../lib/sh/*.sh)
 
 include ../../lib.mk

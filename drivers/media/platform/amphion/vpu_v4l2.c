@@ -501,14 +501,25 @@ static int vpu_vb2_queue_setup(struct vb2_queue *vq,
 		call_void_vop(inst, release);
 	}
 
+	if (V4L2_TYPE_IS_CAPTURE(vq->type))
+		call_void_vop(inst, reset_frame_store);
+
 	return 0;
 }
 
 static int vpu_vb2_buf_init(struct vb2_buffer *vb)
 {
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct vpu_vb2_buffer *vpu_buf = to_vpu_vb2_buffer(vbuf);
+	struct vpu_inst *inst = vb2_get_drv_priv(vb->vb2_queue);
 
+	vpu_buf->fs_id = -1;
 	vpu_set_buffer_state(vbuf, VPU_BUF_STATE_IDLE);
+
+	if (!inst->ops->attach_frame_store || V4L2_TYPE_IS_OUTPUT(vb->type))
+		return 0;
+
+	call_void_vop(inst, attach_frame_store, vb);
 	return 0;
 }
 
@@ -646,8 +657,6 @@ static const struct vb2_ops vpu_vb2_ops = {
 	.start_streaming    = vpu_vb2_start_streaming,
 	.stop_streaming     = vpu_vb2_stop_streaming,
 	.buf_queue          = vpu_vb2_buf_queue,
-	.wait_prepare       = vb2_ops_wait_prepare,
-	.wait_finish        = vb2_ops_wait_finish,
 };
 
 static int vpu_m2m_queue_init(void *priv, struct vb2_queue *src_vq, struct vb2_queue *dst_vq)
@@ -709,8 +718,6 @@ static int vpu_v4l2_release(struct vpu_inst *inst)
 
 	v4l2_ctrl_handler_free(&inst->ctrl_handler);
 	mutex_destroy(&inst->lock);
-	v4l2_fh_del(&inst->fh);
-	v4l2_fh_exit(&inst->fh);
 
 	call_void_vop(inst, cleanup);
 
@@ -779,6 +786,8 @@ int vpu_v4l2_open(struct file *file, struct vpu_inst *inst)
 
 	return 0;
 error:
+	v4l2_fh_del(&inst->fh);
+	v4l2_fh_exit(&inst->fh);
 	vpu_inst_put(inst);
 	return ret;
 }
@@ -797,6 +806,9 @@ int vpu_v4l2_close(struct file *file)
 	}
 	call_void_vop(inst, release);
 	vpu_inst_unlock(inst);
+
+	v4l2_fh_del(&inst->fh);
+	v4l2_fh_exit(&inst->fh);
 
 	vpu_inst_unregister(inst);
 	vpu_inst_put(inst);

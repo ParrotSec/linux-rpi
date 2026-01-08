@@ -35,6 +35,7 @@ struct nfs_local_kiocb {
 	struct bio_vec		*bvec;
 	struct nfs_pgio_header	*hdr;
 	struct work_struct	work;
+	void (*aio_complete_work)(struct work_struct *);
 	struct nfsd_file	*localio;
 };
 
@@ -42,17 +43,15 @@ struct nfs_local_fsync_ctx {
 	struct nfsd_file	*localio;
 	struct nfs_commit_data	*data;
 	struct work_struct	work;
-	struct kref		kref;
 	struct completion	*done;
 };
-static void nfs_local_fsync_work(struct work_struct *work);
 
 static bool localio_enabled __read_mostly = true;
 module_param(localio_enabled, bool, 0644);
 
 static inline bool nfs_client_is_local(const struct nfs_client *clp)
 {
-	return !!test_bit(NFS_CS_LOCAL_IO, &clp->cl_flags);
+	return !!rcu_access_pointer(clp->cl_uuid.net);
 }
 
 bool nfs_server_is_local(const struct nfs_client *clp)
@@ -118,30 +117,6 @@ const struct rpc_program nfslocalio_program = {
 };
 
 /*
- * nfs_local_enable - enable local i/o for an nfs_client
- */
-static void nfs_local_enable(struct nfs_client *clp)
-{
-	spin_lock(&clp->cl_localio_lock);
-	set_bit(NFS_CS_LOCAL_IO, &clp->cl_flags);
-	trace_nfs_local_enable(clp);
-	spin_unlock(&clp->cl_localio_lock);
-}
-
-/*
- * nfs_local_disable - disable local i/o for an nfs_client
- */
-void nfs_local_disable(struct nfs_client *clp)
-{
-	spin_lock(&clp->cl_localio_lock);
-	if (test_and_clear_bit(NFS_CS_LOCAL_IO, &clp->cl_flags)) {
-		trace_nfs_local_disable(clp);
-		nfs_uuid_invalidate_one_client(&clp->cl_uuid);
-	}
-	spin_unlock(&clp->cl_localio_lock);
-}
-
-/*
  * nfs_init_localioclient - Initialise an NFS localio client connection
  */
 static struct rpc_clnt *nfs_init_localioclient(struct nfs_client *clp)
@@ -180,7 +155,7 @@ static bool nfs_server_uuid_is_local(struct nfs_client *clp)
 	rpc_shutdown_client(rpcclient_localio);
 
 	/* Server is only local if it initialized required struct members */
-	if (status || !clp->cl_uuid.net || !clp->cl_uuid.dom)
+	if (status || !rcu_access_pointer(clp->cl_uuid.net) || !clp->cl_uuid.dom)
 		return false;
 
 	return true;
@@ -191,60 +166,113 @@ static bool nfs_server_uuid_is_local(struct nfs_client *clp)
  * - called after alloc_client and init_client (so cl_rpcclient exists)
  * - this function is idempotent, it can be called for old or new clients
  */
-void nfs_local_probe(struct nfs_client *clp)
+static void nfs_local_probe(struct nfs_client *clp)
 {
 	/* Disallow localio if disabled via sysfs or AUTH_SYS isn't used */
 	if (!localio_enabled ||
 	    clp->cl_rpcclient->cl_auth->au_flavor != RPC_AUTH_UNIX) {
-		nfs_local_disable(clp);
+		nfs_localio_disable_client(clp);
 		return;
 	}
 
-	if (nfs_client_is_local(clp)) {
-		/* If already enabled, disable and re-enable */
-		nfs_local_disable(clp);
-	}
+	if (nfs_client_is_local(clp))
+		return;
 
 	if (!nfs_uuid_begin(&clp->cl_uuid))
 		return;
 	if (nfs_server_uuid_is_local(clp))
-		nfs_local_enable(clp);
+		nfs_localio_enable_client(clp);
 	nfs_uuid_end(&clp->cl_uuid);
 }
-EXPORT_SYMBOL_GPL(nfs_local_probe);
+
+void nfs_local_probe_async_work(struct work_struct *work)
+{
+	struct nfs_client *clp =
+		container_of(work, struct nfs_client, cl_local_probe_work);
+
+	if (!refcount_inc_not_zero(&clp->cl_count))
+		return;
+	nfs_local_probe(clp);
+	nfs_put_client(clp);
+}
+
+void nfs_local_probe_async(struct nfs_client *clp)
+{
+	queue_work(nfsiod_workqueue, &clp->cl_local_probe_work);
+}
+EXPORT_SYMBOL_GPL(nfs_local_probe_async);
+
+static inline void nfs_local_file_put(struct nfsd_file *localio)
+{
+	/* nfs_to_nfsd_file_put_local() expects an __rcu pointer
+	 * but we have a __kernel pointer.  It is always safe
+	 * to cast a __kernel pointer to an __rcu pointer
+	 * because the cast only weakens what is known about the pointer.
+	 */
+	struct nfsd_file __rcu *nf = (struct nfsd_file __rcu*) localio;
+
+	nfs_to_nfsd_file_put_local(&nf);
+}
 
 /*
- * nfs_local_open_fh - open a local filehandle in terms of nfsd_file
+ * __nfs_local_open_fh - open a local filehandle in terms of nfsd_file.
  *
- * Returns a pointer to a struct nfsd_file or NULL
+ * Returns a pointer to a struct nfsd_file or ERR_PTR.
+ * Caller must release returned nfsd_file with nfs_to_nfsd_file_put_local().
+ */
+static struct nfsd_file *
+__nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
+		    struct nfs_fh *fh, struct nfs_file_localio *nfl,
+		    struct nfsd_file __rcu **pnf,
+		    const fmode_t mode)
+{
+	struct nfsd_file *localio;
+
+	localio = nfs_open_local_fh(&clp->cl_uuid, clp->cl_rpcclient,
+				    cred, fh, nfl, pnf, mode);
+	if (IS_ERR(localio)) {
+		int status = PTR_ERR(localio);
+		trace_nfs_local_open_fh(fh, mode, status);
+		switch (status) {
+		case -ENOMEM:
+		case -ENXIO:
+		case -ENOENT:
+			/* Revalidate localio */
+			nfs_localio_disable_client(clp);
+			nfs_local_probe(clp);
+		}
+	}
+	return localio;
+}
+
+/*
+ * nfs_local_open_fh - open a local filehandle in terms of nfsd_file.
+ * First checking if the open nfsd_file is already cached, otherwise
+ * must __nfs_local_open_fh and insert the nfsd_file in nfs_file_localio.
+ *
+ * Returns a pointer to a struct nfsd_file or NULL.
  */
 struct nfsd_file *
 nfs_local_open_fh(struct nfs_client *clp, const struct cred *cred,
-		  struct nfs_fh *fh, const fmode_t mode)
+		  struct nfs_fh *fh, struct nfs_file_localio *nfl,
+		  const fmode_t mode)
 {
-	struct nfsd_file *localio;
-	int status;
+	struct nfsd_file *nf, __rcu **pnf;
 
 	if (!nfs_server_is_local(clp))
 		return NULL;
 	if (mode & ~(FMODE_READ | FMODE_WRITE))
 		return NULL;
 
-	localio = nfs_open_local_fh(&clp->cl_uuid, clp->cl_rpcclient,
-				    cred, fh, mode);
-	if (IS_ERR(localio)) {
-		status = PTR_ERR(localio);
-		trace_nfs_local_open_fh(fh, mode, status);
-		switch (status) {
-		case -ENOMEM:
-		case -ENXIO:
-		case -ENOENT:
-			/* Revalidate localio, will disable if unsupported */
-			nfs_local_probe(clp);
-		}
+	if (mode & FMODE_WRITE)
+		pnf = &nfl->rw_file;
+	else
+		pnf = &nfl->ro_file;
+
+	nf = __nfs_local_open_fh(clp, cred, fh, nfl, pnf, mode);
+	if (IS_ERR(nf))
 		return NULL;
-	}
-	return localio;
+	return nf;
 }
 EXPORT_SYMBOL_GPL(nfs_local_open_fh);
 
@@ -274,7 +302,7 @@ nfs_local_iocb_free(struct nfs_local_kiocb *iocb)
 
 static struct nfs_local_kiocb *
 nfs_local_iocb_alloc(struct nfs_pgio_header *hdr,
-		     struct nfsd_file *localio, gfp_t flags)
+		     struct file *file, gfp_t flags)
 {
 	struct nfs_local_kiocb *iocb;
 
@@ -287,12 +315,41 @@ nfs_local_iocb_alloc(struct nfs_pgio_header *hdr,
 		kfree(iocb);
 		return NULL;
 	}
-	init_sync_kiocb(&iocb->kiocb, nfs_to->nfsd_file_file(localio));
+
+	init_sync_kiocb(&iocb->kiocb, file);
+	if (test_bit(NFS_IOHDR_ODIRECT, &hdr->flags))
+		iocb->kiocb.ki_flags = IOCB_DIRECT;
+
 	iocb->kiocb.ki_pos = hdr->args.offset;
-	iocb->localio = localio;
 	iocb->hdr = hdr;
 	iocb->kiocb.ki_flags &= ~IOCB_APPEND;
+	iocb->aio_complete_work = NULL;
+
 	return iocb;
+}
+
+static bool nfs_iov_iter_aligned_bvec(const struct iov_iter *i,
+		loff_t offset, unsigned int addr_mask, unsigned int len_mask)
+{
+	const struct bio_vec *bvec = i->bvec;
+	size_t skip = i->iov_offset;
+	size_t size = i->count;
+
+	if ((offset | size) & len_mask)
+		return false;
+	do {
+		size_t len = bvec->bv_len;
+
+		if (len > size)
+			len = size;
+		if ((unsigned long)(bvec->bv_offset + skip) & addr_mask)
+			return false;
+		bvec++;
+		size -= len;
+		skip = 0;
+	} while (size);
+
+	return true;
 }
 
 static void
@@ -304,6 +361,25 @@ nfs_local_iter_init(struct iov_iter *i, struct nfs_local_kiocb *iocb, int dir)
 		      hdr->args.count + hdr->args.pgbase);
 	if (hdr->args.pgbase != 0)
 		iov_iter_advance(i, hdr->args.pgbase);
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		u32 nf_dio_mem_align, nf_dio_offset_align, nf_dio_read_offset_align;
+		/* Verify the IO is DIO-aligned as required */
+		nfs_to->nfsd_file_dio_alignment(iocb->localio, &nf_dio_mem_align,
+						&nf_dio_offset_align,
+						&nf_dio_read_offset_align);
+		if (dir == READ)
+			nf_dio_offset_align = nf_dio_read_offset_align;
+
+		if (nf_dio_mem_align && nf_dio_offset_align &&
+		    nfs_iov_iter_aligned_bvec(i, hdr->args.offset,
+					      nf_dio_mem_align - 1,
+					      nf_dio_offset_align - 1))
+			return; /* is DIO-aligned */
+
+		/* Fallback to using buffered for this misaligned IO */
+		iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
+	}
 }
 
 static void
@@ -341,9 +417,21 @@ nfs_local_pgio_release(struct nfs_local_kiocb *iocb)
 {
 	struct nfs_pgio_header *hdr = iocb->hdr;
 
-	nfs_to_nfsd_file_put_local(iocb->localio);
+	nfs_local_file_put(iocb->localio);
 	nfs_local_iocb_free(iocb);
 	nfs_local_hdr_release(hdr, hdr->task.tk_ops);
+}
+
+/*
+ * Complete the I/O from iocb->kiocb.ki_complete()
+ *
+ * Note that this function can be called from a bottom half context,
+ * hence we need to queue the rpc_call_done() etc to a workqueue
+ */
+static inline void nfs_local_pgio_aio_complete(struct nfs_local_kiocb *iocb)
+{
+	INIT_WORK(&iocb->work, iocb->aio_complete_work);
+	queue_work(nfsiod_workqueue, &iocb->work);
 }
 
 static void
@@ -351,6 +439,11 @@ nfs_local_read_done(struct nfs_local_kiocb *iocb, long status)
 {
 	struct nfs_pgio_header *hdr = iocb->hdr;
 	struct file *filp = iocb->kiocb.ki_filp;
+
+	if ((iocb->kiocb.ki_flags & IOCB_DIRECT) && status == -EINVAL) {
+		/* Underlying FS will return -EINVAL if misaligned DIO is attempted. */
+		pr_info_ratelimited("nfs: Unexpected direct I/O read alignment failure\n");
+	}
 
 	nfs_local_pgio_done(hdr, status);
 
@@ -368,6 +461,23 @@ nfs_local_read_done(struct nfs_local_kiocb *iocb, long status)
 			status > 0 ? status : 0, hdr->res.eof);
 }
 
+static void nfs_local_read_aio_complete_work(struct work_struct *work)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(work, struct nfs_local_kiocb, work);
+
+	nfs_local_pgio_release(iocb);
+}
+
+static void nfs_local_read_aio_complete(struct kiocb *kiocb, long ret)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(kiocb, struct nfs_local_kiocb, kiocb);
+
+	nfs_local_read_done(iocb, ret);
+	nfs_local_pgio_aio_complete(iocb); /* Calls nfs_local_read_aio_complete_work */
+}
+
 static void nfs_local_call_read(struct work_struct *work)
 {
 	struct nfs_local_kiocb *iocb =
@@ -382,12 +492,13 @@ static void nfs_local_call_read(struct work_struct *work)
 	nfs_local_iter_init(&iter, iocb, READ);
 
 	status = filp->f_op->read_iter(&iocb->kiocb, &iter);
-	WARN_ON_ONCE(status == -EIOCBQUEUED);
-
-	nfs_local_read_done(iocb, status);
-	nfs_local_pgio_release(iocb);
 
 	revert_creds(save_cred);
+
+	if (status != -EIOCBQUEUED) {
+		nfs_local_read_done(iocb, status);
+		nfs_local_pgio_release(iocb);
+	}
 }
 
 static int
@@ -396,16 +507,27 @@ nfs_do_local_read(struct nfs_pgio_header *hdr,
 		  const struct rpc_call_ops *call_ops)
 {
 	struct nfs_local_kiocb *iocb;
+	struct file *file = nfs_to->nfsd_file_file(localio);
+
+	/* Don't support filesystems without read_iter */
+	if (!file->f_op->read_iter)
+		return -EAGAIN;
 
 	dprintk("%s: vfs_read count=%u pos=%llu\n",
 		__func__, hdr->args.count, hdr->args.offset);
 
-	iocb = nfs_local_iocb_alloc(hdr, localio, GFP_KERNEL);
+	iocb = nfs_local_iocb_alloc(hdr, file, GFP_KERNEL);
 	if (iocb == NULL)
 		return -ENOMEM;
+	iocb->localio = localio;
 
 	nfs_local_pgio_init(hdr, call_ops);
 	hdr->res.eof = false;
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
+		iocb->aio_complete_work = nfs_local_read_aio_complete_work;
+	}
 
 	INIT_WORK(&iocb->work, nfs_local_call_read);
 	queue_work(nfslocaliod_workqueue, &iocb->work);
@@ -418,14 +540,13 @@ nfs_copy_boot_verifier(struct nfs_write_verifier *verifier, struct inode *inode)
 {
 	struct nfs_client *clp = NFS_SERVER(inode)->nfs_client;
 	u32 *verf = (u32 *)verifier->data;
-	int seq = 0;
+	unsigned int seq;
 
 	do {
-		read_seqbegin_or_lock(&clp->cl_boot_lock, &seq);
+		seq = read_seqbegin(&clp->cl_boot_lock);
 		verf[0] = (u32)clp->cl_nfssvc_boot.tv_sec;
 		verf[1] = (u32)clp->cl_nfssvc_boot.tv_nsec;
-	} while (need_seqretry(&clp->cl_boot_lock, seq));
-	done_seqretry(&clp->cl_boot_lock, seq);
+	} while (read_seqretry(&clp->cl_boot_lock, seq));
 }
 
 static void
@@ -516,6 +637,11 @@ nfs_local_write_done(struct nfs_local_kiocb *iocb, long status)
 
 	dprintk("%s: wrote %ld bytes.\n", __func__, status > 0 ? status : 0);
 
+	if ((iocb->kiocb.ki_flags & IOCB_DIRECT) && status == -EINVAL) {
+		/* Underlying FS will return -EINVAL if misaligned DIO is attempted. */
+		pr_info_ratelimited("nfs: Unexpected direct I/O write alignment failure\n");
+	}
+
 	/* Handle short writes as if they are ENOSPC */
 	if (status > 0 && status < hdr->args.count) {
 		hdr->mds_offset += status;
@@ -527,13 +653,26 @@ nfs_local_write_done(struct nfs_local_kiocb *iocb, long status)
 	}
 	if (status < 0)
 		nfs_reset_boot_verifier(inode);
-	else if (nfs_should_remove_suid(inode)) {
-		/* Deal with the suid/sgid bit corner case */
-		spin_lock(&inode->i_lock);
-		nfs_set_cache_invalid(inode, NFS_INO_INVALID_MODE);
-		spin_unlock(&inode->i_lock);
-	}
+
 	nfs_local_pgio_done(hdr, status);
+}
+
+static void nfs_local_write_aio_complete_work(struct work_struct *work)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(work, struct nfs_local_kiocb, work);
+
+	nfs_local_vfs_getattr(iocb);
+	nfs_local_pgio_release(iocb);
+}
+
+static void nfs_local_write_aio_complete(struct kiocb *kiocb, long ret)
+{
+	struct nfs_local_kiocb *iocb =
+		container_of(kiocb, struct nfs_local_kiocb, kiocb);
+
+	nfs_local_write_done(iocb, ret);
+	nfs_local_pgio_aio_complete(iocb); /* Calls nfs_local_write_aio_complete_work */
 }
 
 static void nfs_local_call_write(struct work_struct *work)
@@ -554,14 +693,15 @@ static void nfs_local_call_write(struct work_struct *work)
 	file_start_write(filp);
 	status = filp->f_op->write_iter(&iocb->kiocb, &iter);
 	file_end_write(filp);
-	WARN_ON_ONCE(status == -EIOCBQUEUED);
-
-	nfs_local_write_done(iocb, status);
-	nfs_local_vfs_getattr(iocb);
-	nfs_local_pgio_release(iocb);
 
 	revert_creds(save_cred);
 	current->flags = old_flags;
+
+	if (status != -EIOCBQUEUED) {
+		nfs_local_write_done(iocb, status);
+		nfs_local_vfs_getattr(iocb);
+		nfs_local_pgio_release(iocb);
+	}
 }
 
 static int
@@ -570,14 +710,20 @@ nfs_do_local_write(struct nfs_pgio_header *hdr,
 		   const struct rpc_call_ops *call_ops)
 {
 	struct nfs_local_kiocb *iocb;
+	struct file *file = nfs_to->nfsd_file_file(localio);
+
+	/* Don't support filesystems without write_iter */
+	if (!file->f_op->write_iter)
+		return -EAGAIN;
 
 	dprintk("%s: vfs_write count=%u pos=%llu %s\n",
 		__func__, hdr->args.count, hdr->args.offset,
 		(hdr->args.stable == NFS_UNSTABLE) ?  "unstable" : "stable");
 
-	iocb = nfs_local_iocb_alloc(hdr, localio, GFP_NOIO);
+	iocb = nfs_local_iocb_alloc(hdr, file, GFP_NOIO);
 	if (iocb == NULL)
 		return -ENOMEM;
+	iocb->localio = localio;
 
 	switch (hdr->args.stable) {
 	default:
@@ -588,9 +734,15 @@ nfs_do_local_write(struct nfs_pgio_header *hdr,
 	case NFS_FILE_SYNC:
 		iocb->kiocb.ki_flags |= IOCB_DSYNC|IOCB_SYNC;
 	}
+
 	nfs_local_pgio_init(hdr, call_ops);
 
 	nfs_set_local_verifier(hdr->inode, hdr->res.verf, hdr->args.stable);
+
+	if (iocb->kiocb.ki_flags & IOCB_DIRECT) {
+		iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
+		iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+	}
 
 	INIT_WORK(&iocb->work, nfs_local_call_write);
 	queue_work(nfslocaliod_workqueue, &iocb->work);
@@ -603,16 +755,9 @@ int nfs_local_doio(struct nfs_client *clp, struct nfsd_file *localio,
 		   const struct rpc_call_ops *call_ops)
 {
 	int status = 0;
-	struct file *filp = nfs_to->nfsd_file_file(localio);
 
 	if (!hdr->args.count)
 		return 0;
-	/* Don't support filesystems without read_iter/write_iter */
-	if (!filp->f_op->read_iter || !filp->f_op->write_iter) {
-		nfs_local_disable(clp);
-		status = -EAGAIN;
-		goto out;
-	}
 
 	switch (hdr->rw_mode) {
 	case FMODE_READ:
@@ -626,9 +771,11 @@ int nfs_local_doio(struct nfs_client *clp, struct nfsd_file *localio,
 			hdr->rw_mode);
 		status = -EINVAL;
 	}
-out:
+
 	if (status != 0) {
-		nfs_to_nfsd_file_put_local(localio);
+		if (status == -EAGAIN)
+			nfs_localio_disable_client(clp);
+		nfs_local_file_put(localio);
 		hdr->task.tk_status = status;
 		nfs_local_hdr_release(hdr, call_ops);
 	}
@@ -679,37 +826,9 @@ nfs_local_release_commit_data(struct nfsd_file *localio,
 		struct nfs_commit_data *data,
 		const struct rpc_call_ops *call_ops)
 {
-	nfs_to_nfsd_file_put_local(localio);
+	nfs_local_file_put(localio);
 	call_ops->rpc_call_done(&data->task, data);
 	call_ops->rpc_release(data);
-}
-
-static struct nfs_local_fsync_ctx *
-nfs_local_fsync_ctx_alloc(struct nfs_commit_data *data,
-			  struct nfsd_file *localio, gfp_t flags)
-{
-	struct nfs_local_fsync_ctx *ctx = kmalloc(sizeof(*ctx), flags);
-
-	if (ctx != NULL) {
-		ctx->localio = localio;
-		ctx->data = data;
-		INIT_WORK(&ctx->work, nfs_local_fsync_work);
-		kref_init(&ctx->kref);
-		ctx->done = NULL;
-	}
-	return ctx;
-}
-
-static void
-nfs_local_fsync_ctx_kref_free(struct kref *kref)
-{
-	kfree(container_of(kref, struct nfs_local_fsync_ctx, kref));
-}
-
-static void
-nfs_local_fsync_ctx_put(struct nfs_local_fsync_ctx *ctx)
-{
-	kref_put(&ctx->kref, nfs_local_fsync_ctx_kref_free);
 }
 
 static void
@@ -717,7 +836,7 @@ nfs_local_fsync_ctx_free(struct nfs_local_fsync_ctx *ctx)
 {
 	nfs_local_release_commit_data(ctx->localio, ctx->data,
 				      ctx->data->task.tk_ops);
-	nfs_local_fsync_ctx_put(ctx);
+	kfree(ctx);
 }
 
 static void
@@ -736,6 +855,21 @@ nfs_local_fsync_work(struct work_struct *work)
 	nfs_local_fsync_ctx_free(ctx);
 }
 
+static struct nfs_local_fsync_ctx *
+nfs_local_fsync_ctx_alloc(struct nfs_commit_data *data,
+			  struct nfsd_file *localio, gfp_t flags)
+{
+	struct nfs_local_fsync_ctx *ctx = kmalloc(sizeof(*ctx), flags);
+
+	if (ctx != NULL) {
+		ctx->localio = localio;
+		ctx->data = data;
+		INIT_WORK(&ctx->work, nfs_local_fsync_work);
+		ctx->done = NULL;
+	}
+	return ctx;
+}
+
 int nfs_local_commit(struct nfsd_file *localio,
 		     struct nfs_commit_data *data,
 		     const struct rpc_call_ops *call_ops, int how)
@@ -750,7 +884,7 @@ int nfs_local_commit(struct nfsd_file *localio,
 	}
 
 	nfs_local_init_commit(data, call_ops);
-	kref_get(&ctx->kref);
+
 	if (how & FLUSH_SYNC) {
 		DECLARE_COMPLETION_ONSTACK(done);
 		ctx->done = &done;
@@ -758,6 +892,6 @@ int nfs_local_commit(struct nfsd_file *localio,
 		wait_for_completion(&done);
 	} else
 		queue_work(nfsiod_workqueue, &ctx->work);
-	nfs_local_fsync_ctx_put(ctx);
+
 	return 0;
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
  * Copyright (c) 2023, Luca Weiss <luca.weiss@fairphone.com>
- * Copyright (c) 2024, Caleb Connolly <caleb@postmarketos.org>
+ * Copyright (c) 2024, Casey Connolly <casey.connolly@linaro.org>
  */
 
 /dts-v1/;
@@ -115,6 +115,11 @@
 
 		cdsp_mem: cdsp@88f00000 {
 			reg = <0x0 0x88f00000 0x0 0x1e00000>;
+			no-map;
+		};
+
+		removed_mem: removed@c0000000 {
+			reg = <0x0 0xc0000000 0x0 0x5100000>;
 			no-map;
 		};
 
@@ -953,7 +958,7 @@
 };
 
 &wifi {
-	qcom,ath11k-calibration-variant = "SHIFTphone_8";
+	qcom,calibration-variant = "SHIFTphone_8";
 
 	status = "okay";
 };

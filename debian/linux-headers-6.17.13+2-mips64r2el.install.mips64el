@@ -1,0 +1,3 @@
+.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+2-mips64r2el
+scripts/module.lds                       usr/src/linux-headers-6.17.13+2-mips64r2el/arch/mips
+arch/mips/include             usr/src/linux-headers-6.17.13+2-mips64r2el/arch/mips

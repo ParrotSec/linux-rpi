@@ -5,6 +5,10 @@
 #define XSTR(s) STR(s)
 #define STR(s) #s
 
+/* Expand a macro and then stringize the expansion */
+#define QUOTE(str) #str
+#define EXPAND_QUOTE(str) QUOTE(str)
+
 /* This set of attributes controls behavior of the
  * test_loader.c:test_loader__run_subtests().
  *
@@ -79,9 +83,11 @@
  *                   expect return value to match passed parameter:
  *                   - a decimal number
  *                   - a hexadecimal number, when starts from 0x
- *                   - literal INT_MIN
- *                   - literal POINTER_VALUE (see definition below)
- *                   - literal TEST_DATA_LEN (see definition below)
+ *                   - a macro which expands to one of the above
+ *                   - literal _INT_MIN (expands to INT_MIN)
+ *                   In addition, two special macros are defined below:
+ *                   - POINTER_VALUE
+ *                   - TEST_DATA_LEN
  * __retval_unpriv   Same, but load program in unprivileged mode.
  *
  * __description     Text to be used instead of a program name for display
@@ -106,6 +112,7 @@
  * __arch_*          Specify on which architecture the test case should be tested.
  *                   Several __arch_* annotations could be specified at once.
  *                   When test case is not run on current arch it is marked as skipped.
+ * __caps_unpriv     Specify the capabilities that should be set when running the test.
  */
 #define __msg(msg)		__attribute__((btf_decl_tag("comment:test_expect_msg=" XSTR(__COUNTER__) "=" msg)))
 #define __xlated(msg)		__attribute__((btf_decl_tag("comment:test_expect_xlated=" XSTR(__COUNTER__) "=" msg)))
@@ -120,8 +127,8 @@
 #define __success_unpriv	__attribute__((btf_decl_tag("comment:test_expect_success_unpriv")))
 #define __log_level(lvl)	__attribute__((btf_decl_tag("comment:test_log_level="#lvl)))
 #define __flag(flag)		__attribute__((btf_decl_tag("comment:test_prog_flags="#flag)))
-#define __retval(val)		__attribute__((btf_decl_tag("comment:test_retval="#val)))
-#define __retval_unpriv(val)	__attribute__((btf_decl_tag("comment:test_retval_unpriv="#val)))
+#define __retval(val)		__attribute__((btf_decl_tag("comment:test_retval="XSTR(val))))
+#define __retval_unpriv(val)	__attribute__((btf_decl_tag("comment:test_retval_unpriv="XSTR(val))))
 #define __auxiliary		__attribute__((btf_decl_tag("comment:test_auxiliary")))
 #define __auxiliary_unpriv	__attribute__((btf_decl_tag("comment:test_auxiliary_unpriv")))
 #define __btf_path(path)	__attribute__((btf_decl_tag("comment:test_btf_path=" path)))
@@ -129,6 +136,15 @@
 #define __arch_x86_64		__arch("X86_64")
 #define __arch_arm64		__arch("ARM64")
 #define __arch_riscv64		__arch("RISCV64")
+#define __caps_unpriv(caps)	__attribute__((btf_decl_tag("comment:test_caps_unpriv=" EXPAND_QUOTE(caps))))
+#define __load_if_JITed()	__attribute__((btf_decl_tag("comment:load_mode=jited")))
+#define __load_if_no_JITed()	__attribute__((btf_decl_tag("comment:load_mode=no_jited")))
+
+/* Define common capabilities tested using __caps_unpriv */
+#define CAP_NET_ADMIN		12
+#define CAP_SYS_ADMIN		21
+#define CAP_PERFMON		38
+#define CAP_BPF			39
 
 /* Convenience macro for use with 'asm volatile' blocks */
 #define __naked __attribute__((naked))
@@ -141,7 +157,7 @@
 #define __imm_insn(name, expr) [name]"i"(*(long *)&(expr))
 
 /* Magic constants used with __retval() */
-#define POINTER_VALUE	0xcafe4all
+#define POINTER_VALUE	0xbadcafe
 #define TEST_DATA_LEN	64
 
 #ifndef __used
@@ -160,6 +176,9 @@
 #elif defined(__TARGET_ARCH_riscv)
 #define SYSCALL_WRAPPER 1
 #define SYS_PREFIX "__riscv_"
+#elif defined(__TARGET_ARCH_powerpc)
+#define SYSCALL_WRAPPER 1
+#define SYS_PREFIX ""
 #else
 #define SYSCALL_WRAPPER 0
 #define SYS_PREFIX "__se_"
@@ -194,6 +213,33 @@
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) ||	\
+     (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||		\
+     defined(__TARGET_ARCH_arm) || defined(__TARGET_ARCH_s390) ||	\
+     defined(__TARGET_ARCH_loongarch)) &&				\
+	__clang_major__ >= 18
+#define CAN_USE_GOTOL
+#endif
+
+#if __clang_major__ >= 18
+#define CAN_USE_BPF_ST
+#endif
+
+#if __clang_major__ >= 18 && defined(ENABLE_ATOMICS_TESTS) &&		\
+	(defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) ||	\
+	 (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)) || \
+	  (defined(__TARGET_ARCH_powerpc))
+#define CAN_USE_LOAD_ACQ_STORE_REL
+#endif
+
+#if defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86)
+#define SPEC_V1
+#endif
+
+#if defined(__TARGET_ARCH_x86)
+#define SPEC_V4
 #endif
 
 #endif

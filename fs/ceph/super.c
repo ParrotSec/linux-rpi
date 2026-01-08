@@ -246,20 +246,6 @@ static void canonicalize_path(char *path)
 	path[j] = '\0';
 }
 
-/*
- * Check if the mds namespace in ceph_mount_options matches
- * the passed in namespace string. First time match (when
- * ->mds_namespace is NULL) is treated specially, since
- * ->mds_namespace needs to be initialized by the caller.
- */
-static int namespace_equals(struct ceph_mount_options *fsopt,
-			    const char *namespace, size_t len)
-{
-	return !(fsopt->mds_namespace &&
-		 (strlen(fsopt->mds_namespace) != len ||
-		  strncmp(fsopt->mds_namespace, namespace, len)));
-}
-
 static int ceph_parse_old_source(const char *dev_name, const char *dev_name_end,
 				 struct fs_context *fc)
 {
@@ -288,7 +274,7 @@ static int ceph_parse_new_source(const char *dev_name, const char *dev_name_end,
 	struct ceph_options *opts = pctx->copts;
 	struct ceph_mount_options *fsopt = pctx->opts;
 	const char *name_start = dev_name;
-	char *fsid_start, *fs_name_start;
+	const char *fsid_start, *fs_name_start;
 
 	if (*dev_name_end != '=') {
 		dout("separator '=' missing in source");
@@ -1033,8 +1019,7 @@ void ceph_umount_begin(struct super_block *sb)
 	struct ceph_fs_client *fsc = ceph_sb_to_fs_client(sb);
 
 	doutc(fsc->client, "starting forced umount\n");
-	if (!fsc)
-		return;
+
 	fsc->mount_state = CEPH_MOUNT_SHUTDOWN;
 	__ceph_umount_begin(fsc);
 }
@@ -1220,13 +1205,14 @@ static int ceph_set_super(struct super_block *s, struct fs_context *fc)
 	fsc->max_file_size = 1ULL << 40; /* temp value until we get mdsmap */
 
 	s->s_op = &ceph_super_ops;
-	s->s_d_op = &ceph_dentry_ops;
+	set_default_d_op(s, &ceph_dentry_ops);
 	s->s_export_op = &ceph_export_ops;
 
 	s->s_time_gran = 1;
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
 	s->s_flags |= SB_NODIRATIME | SB_NOATIME;
+	s->s_magic = CEPH_SUPER_MAGIC;
 
 	ceph_fscrypt_set_ops(s);
 
@@ -1562,6 +1548,17 @@ static void ceph_kill_sb(struct super_block *s)
 	 * evict the inodes later.
 	 */
 	sync_filesystem(s);
+
+	if (atomic64_read(&mdsc->dirty_folios) > 0) {
+		wait_queue_head_t *wq = &mdsc->flush_end_wq;
+		long timeleft = wait_event_killable_timeout(*wq,
+					atomic64_read(&mdsc->dirty_folios) <= 0,
+					fsc->client->options->mount_timeout);
+		if (!timeleft) /* timed out */
+			pr_warn_client(cl, "umount timed out, %ld\n", timeleft);
+		else if (timeleft < 0) /* killed */
+			pr_warn_client(cl, "umount was killed, %ld\n", timeleft);
+	}
 
 	spin_lock(&mdsc->stopping_lock);
 	mdsc->stopping = CEPH_MDSC_STOPPING_FLUSHING;

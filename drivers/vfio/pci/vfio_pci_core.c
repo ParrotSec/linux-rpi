@@ -20,7 +20,6 @@
 #include <linux/mutex.h>
 #include <linux/notifier.h>
 #include <linux/pci.h>
-#include <linux/pfn_t.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -41,6 +40,40 @@
 static bool nointxmask;
 static bool disable_vga;
 static bool disable_idle_d3;
+
+static void vfio_pci_eventfd_rcu_free(struct rcu_head *rcu)
+{
+	struct vfio_pci_eventfd *eventfd =
+		container_of(rcu, struct vfio_pci_eventfd, rcu);
+
+	eventfd_ctx_put(eventfd->ctx);
+	kfree(eventfd);
+}
+
+int vfio_pci_eventfd_replace_locked(struct vfio_pci_core_device *vdev,
+				    struct vfio_pci_eventfd __rcu **peventfd,
+				    struct eventfd_ctx *ctx)
+{
+	struct vfio_pci_eventfd *new = NULL;
+	struct vfio_pci_eventfd *old;
+
+	lockdep_assert_held(&vdev->igate);
+
+	if (ctx) {
+		new = kzalloc(sizeof(*new), GFP_KERNEL_ACCOUNT);
+		if (!new)
+			return -ENOMEM;
+
+		new->ctx = ctx;
+	}
+
+	old = rcu_replace_pointer(*peventfd, new,
+				  lockdep_is_held(&vdev->igate));
+	if (old)
+		call_rcu(&old->rcu, vfio_pci_eventfd_rcu_free);
+
+	return 0;
+}
 
 /* List of PF's that vfio_pci_core_sriov_configure() has been called on */
 static DEFINE_MUTEX(vfio_pci_sriov_pfs_mutex);
@@ -116,7 +149,7 @@ static void vfio_pci_probe_mmaps(struct vfio_pci_core_device *vdev)
 
 		res = &vdev->pdev->resource[bar];
 
-		if (!IS_ENABLED(CONFIG_VFIO_PCI_MMAP))
+		if (vdev->pdev->non_mappable_bars)
 			goto no_mmap;
 
 		if (!(res->flags & IORESOURCE_MEM))
@@ -697,14 +730,8 @@ void vfio_pci_core_close_device(struct vfio_device *core_vdev)
 	vfio_pci_core_disable(vdev);
 
 	mutex_lock(&vdev->igate);
-	if (vdev->err_trigger) {
-		eventfd_ctx_put(vdev->err_trigger);
-		vdev->err_trigger = NULL;
-	}
-	if (vdev->req_trigger) {
-		eventfd_ctx_put(vdev->req_trigger);
-		vdev->req_trigger = NULL;
-	}
+	vfio_pci_eventfd_replace_locked(vdev, &vdev->err_trigger, NULL);
+	vfio_pci_eventfd_replace_locked(vdev, &vdev->req_trigger, NULL);
 	mutex_unlock(&vdev->igate);
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_close_device);
@@ -1046,31 +1073,27 @@ static int vfio_pci_ioctl_get_region_info(struct vfio_pci_core_device *vdev,
 
 		info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
 		info.flags = 0;
+		info.size = 0;
 
-		/* Report the BAR size, not the ROM size */
-		info.size = pci_resource_len(pdev, info.index);
-		if (!info.size) {
-			/* Shadow ROMs appear as PCI option ROMs */
-			if (pdev->resource[PCI_ROM_RESOURCE].flags &
-			    IORESOURCE_ROM_SHADOW)
-				info.size = 0x20000;
-			else
-				break;
-		}
-
-		/*
-		 * Is it really there?  Enable memory decode for implicit access
-		 * in pci_map_rom().
-		 */
-		cmd = vfio_pci_memory_lock_and_enable(vdev);
-		io = pci_map_rom(pdev, &size);
-		if (io) {
+		if (pci_resource_start(pdev, PCI_ROM_RESOURCE)) {
+			/*
+			 * Check ROM content is valid. Need to enable memory
+			 * decode for ROM access in pci_map_rom().
+			 */
+			cmd = vfio_pci_memory_lock_and_enable(vdev);
+			io = pci_map_rom(pdev, &size);
+			if (io) {
+				info.flags = VFIO_REGION_INFO_FLAG_READ;
+				/* Report the BAR size, not the ROM size. */
+				info.size = pci_resource_len(pdev, PCI_ROM_RESOURCE);
+				pci_unmap_rom(pdev, io);
+			}
+			vfio_pci_memory_unlock_and_restore(vdev, cmd);
+		} else if (pdev->rom && pdev->romlen) {
 			info.flags = VFIO_REGION_INFO_FLAG_READ;
-			pci_unmap_rom(pdev, io);
-		} else {
-			info.size = 0;
+			/* Report BAR size as power of two. */
+			info.size = roundup_pow_of_two(pdev->romlen);
 		}
-		vfio_pci_memory_unlock_and_restore(vdev, cmd);
 
 		break;
 	}
@@ -1673,14 +1696,12 @@ static vm_fault_t vfio_pci_mmap_huge_fault(struct vm_fault *vmf,
 		break;
 #ifdef CONFIG_ARCH_SUPPORTS_PMD_PFNMAP
 	case PMD_ORDER:
-		ret = vmf_insert_pfn_pmd(vmf,
-					 __pfn_to_pfn_t(pfn, PFN_DEV), false);
+		ret = vmf_insert_pfn_pmd(vmf, pfn, false);
 		break;
 #endif
 #ifdef CONFIG_ARCH_SUPPORTS_PUD_PFNMAP
 	case PUD_ORDER:
-		ret = vmf_insert_pfn_pud(vmf,
-					 __pfn_to_pfn_t(pfn, PFN_DEV), false);
+		ret = vmf_insert_pfn_pud(vmf, pfn, false);
 		break;
 #endif
 	default:
@@ -1807,27 +1828,31 @@ void vfio_pci_core_request(struct vfio_device *core_vdev, unsigned int count)
 	struct vfio_pci_core_device *vdev =
 		container_of(core_vdev, struct vfio_pci_core_device, vdev);
 	struct pci_dev *pdev = vdev->pdev;
+	struct vfio_pci_eventfd *eventfd;
 
-	mutex_lock(&vdev->igate);
-
-	if (vdev->req_trigger) {
+	rcu_read_lock();
+	eventfd = rcu_dereference(vdev->req_trigger);
+	if (eventfd) {
 		if (!(count % 10))
 			pci_notice_ratelimited(pdev,
 				"Relaying device request to user (#%u)\n",
 				count);
-		eventfd_signal(vdev->req_trigger);
+		eventfd_signal(eventfd->ctx);
 	} else if (count == 0) {
 		pci_warn(pdev,
 			"No device request channel registered, blocked until released by user\n");
 	}
-
-	mutex_unlock(&vdev->igate);
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_request);
 
-static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
-				      bool vf_token, uuid_t *uuid)
+int vfio_pci_core_match_token_uuid(struct vfio_device *core_vdev,
+				   const uuid_t *uuid)
+
 {
+	struct vfio_pci_core_device *vdev =
+		container_of(core_vdev, struct vfio_pci_core_device, vdev);
+
 	/*
 	 * There's always some degree of trust or collaboration between SR-IOV
 	 * PF and VFs, even if just that the PF hosts the SR-IOV capability and
@@ -1858,7 +1883,7 @@ static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
 		bool match;
 
 		if (!pf_vdev) {
-			if (!vf_token)
+			if (!uuid)
 				return 0; /* PF is not vfio-pci, no VF token */
 
 			pci_info_ratelimited(vdev->pdev,
@@ -1866,7 +1891,7 @@ static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
 			return -EINVAL;
 		}
 
-		if (!vf_token) {
+		if (!uuid) {
 			pci_info_ratelimited(vdev->pdev,
 				"VF token required to access device\n");
 			return -EACCES;
@@ -1884,7 +1909,7 @@ static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
 	} else if (vdev->vf_token) {
 		mutex_lock(&vdev->vf_token->lock);
 		if (vdev->vf_token->users) {
-			if (!vf_token) {
+			if (!uuid) {
 				mutex_unlock(&vdev->vf_token->lock);
 				pci_info_ratelimited(vdev->pdev,
 					"VF token required to access device\n");
@@ -1897,12 +1922,12 @@ static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
 					"Incorrect VF token provided for device\n");
 				return -EACCES;
 			}
-		} else if (vf_token) {
+		} else if (uuid) {
 			uuid_copy(&vdev->vf_token->uuid, uuid);
 		}
 
 		mutex_unlock(&vdev->vf_token->lock);
-	} else if (vf_token) {
+	} else if (uuid) {
 		pci_info_ratelimited(vdev->pdev,
 			"VF token incorrectly provided, not a PF or VF\n");
 		return -EINVAL;
@@ -1910,6 +1935,7 @@ static int vfio_pci_validate_vf_token(struct vfio_pci_core_device *vdev,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(vfio_pci_core_match_token_uuid);
 
 #define VF_TOKEN_ARG "vf_token="
 
@@ -1956,7 +1982,8 @@ int vfio_pci_core_match(struct vfio_device *core_vdev, char *buf)
 		}
 	}
 
-	ret = vfio_pci_validate_vf_token(vdev, vf_token, &uuid);
+	ret = core_vdev->ops->match_token_uuid(core_vdev,
+					       vf_token ? &uuid : NULL);
 	if (ret)
 		return ret;
 
@@ -2153,7 +2180,7 @@ int vfio_pci_core_register_device(struct vfio_pci_core_device *vdev)
 		return -EBUSY;
 	}
 
-	if (pci_is_root_bus(pdev->bus)) {
+	if (pci_is_root_bus(pdev->bus) || pdev->is_virtfn) {
 		ret = vfio_assign_device_set(&vdev->vdev, vdev);
 	} else if (!pci_probe_reset_slot(pdev->slot)) {
 		ret = vfio_assign_device_set(&vdev->vdev, pdev->slot);
@@ -2228,13 +2255,13 @@ pci_ers_result_t vfio_pci_core_aer_err_detected(struct pci_dev *pdev,
 						pci_channel_state_t state)
 {
 	struct vfio_pci_core_device *vdev = dev_get_drvdata(&pdev->dev);
+	struct vfio_pci_eventfd *eventfd;
 
-	mutex_lock(&vdev->igate);
-
-	if (vdev->err_trigger)
-		eventfd_signal(vdev->err_trigger);
-
-	mutex_unlock(&vdev->igate);
+	rcu_read_lock();
+	eventfd = rcu_dereference(vdev->err_trigger);
+	if (eventfd)
+		eventfd_signal(eventfd->ctx);
+	rcu_read_unlock();
 
 	return PCI_ERS_RESULT_CAN_RECOVER;
 }

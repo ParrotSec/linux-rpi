@@ -221,10 +221,9 @@ static ssize_t ieee80211_if_fmt_##name(					\
 }
 
 #define _IEEE80211_IF_FILE_OPS(name, _read, _write)			\
-static const struct file_operations name##_ops = {			\
+static const struct debugfs_short_fops name##_ops = {				\
 	.read = (_read),						\
 	.write = (_write),						\
-	.open = simple_open,						\
 	.llseek = generic_file_llseek,					\
 }
 
@@ -705,7 +704,7 @@ static ssize_t ieee80211_if_parse_tsf(
 		}
 	}
 
-	ieee80211_recalc_dtim(local, sdata);
+	ieee80211_recalc_dtim(sdata, drv_get_tsf(local, sdata));
 	return buflen;
 }
 IEEE80211_IF_FILE_RW(tsf);
@@ -1026,16 +1025,7 @@ void ieee80211_debugfs_remove_netdev(struct ieee80211_sub_if_data *sdata)
 
 void ieee80211_debugfs_rename_netdev(struct ieee80211_sub_if_data *sdata)
 {
-	struct dentry *dir;
-	char buf[10 + IFNAMSIZ];
-
-	dir = sdata->vif.debugfs_dir;
-
-	if (IS_ERR_OR_NULL(dir))
-		return;
-
-	sprintf(buf, "netdev:%s", sdata->name);
-	debugfs_rename(dir->d_parent, dir, dir->d_parent, buf);
+	debugfs_change_name(sdata->vif.debugfs_dir, "netdev:%s", sdata->name);
 }
 
 void ieee80211_debugfs_recreate_netdev(struct ieee80211_sub_if_data *sdata,

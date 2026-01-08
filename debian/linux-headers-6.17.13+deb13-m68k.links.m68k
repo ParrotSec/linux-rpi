@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.17.13+deb13/scripts                          usr/src/linux-headers-6.17.13+deb13-m68k/scripts
+usr/lib/linux-kbuild-6.17.13+deb13/tools                            usr/src/linux-headers-6.17.13+deb13-m68k/tools
+usr/src/linux-headers-6.17.13+deb13-m68k                                               usr/lib/modules/6.17.13+deb13-m68k/build
+usr/src/linux-headers-6.17.13+deb13-common  usr/lib/modules/6.17.13+deb13-m68k/source

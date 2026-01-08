@@ -12,7 +12,7 @@ actually used.
 ---
 --- a/fs/notify/fanotify/fanotify_user.c
 +++ b/fs/notify/fanotify/fanotify_user.c
-@@ -1752,6 +1752,14 @@ static int do_fanotify_mark(int fanotify
+@@ -1756,6 +1756,14 @@ static int do_fanotify_mark(int fanotify
  		umask = FANOTIFY_EVENT_FLAGS;
  	}
  
@@ -24,6 +24,6 @@ actually used.
 +	}
 +#endif
 +
- 	f = fdget(fanotify_fd);
- 	if (unlikely(!fd_file(f)))
+ 	CLASS(fd, f)(fanotify_fd);
+ 	if (fd_empty(f))
  		return -EBADF;

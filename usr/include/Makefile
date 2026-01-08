@@ -59,6 +59,10 @@ ifeq ($(SRCARCH),arc)
 no-header-test += linux/bpf_perf_event.h
 endif
 
+ifeq ($(SRCARCH),openrisc)
+no-header-test += linux/bpf_perf_event.h
+endif
+
 ifeq ($(SRCARCH),powerpc)
 no-header-test += linux/bpf_perf_event.h
 endif
@@ -78,7 +82,7 @@ quiet_cmd_hdrtest = HDRTEST $<
       cmd_hdrtest = \
 		$(CC) $(c_flags) -fsyntax-only -x c /dev/null \
 			$(if $(filter-out $(no-header-test), $*.h), -include $< -include $<); \
-		$(PERL) $(src)/headers_check.pl $(obj) $(SRCARCH) $<; \
+		$(PERL) $(src)/headers_check.pl $(obj) $<; \
 		touch $@
 
 $(obj)/%.hdrtest: $(obj)/%.h FORCE

@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.17.13+2/scripts                          usr/src/linux-headers-6.17.13+2-alpha-smp/scripts
+usr/lib/linux-kbuild-6.17.13+2/tools                            usr/src/linux-headers-6.17.13+2-alpha-smp/tools
+usr/src/linux-headers-6.17.13+2-alpha-smp                                               usr/lib/modules/6.17.13+2-alpha-smp/build
+usr/src/linux-headers-6.17.13+2-common  usr/lib/modules/6.17.13+2-alpha-smp/source

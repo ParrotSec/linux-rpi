@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.17.13+deb13/scripts                          usr/src/linux-headers-6.17.13+deb13-mips32r2eb/scripts
+usr/lib/linux-kbuild-6.17.13+deb13/tools                            usr/src/linux-headers-6.17.13+deb13-mips32r2eb/tools
+usr/src/linux-headers-6.17.13+deb13-mips32r2eb                                               usr/lib/modules/6.17.13+deb13-mips32r2eb/build
+usr/src/linux-headers-6.17.13+deb13-common  usr/lib/modules/6.17.13+deb13-mips32r2eb/source

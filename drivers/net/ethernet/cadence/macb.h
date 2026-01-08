@@ -213,10 +213,8 @@
 
 #define GEM_ISR(hw_q)		(0x0400 + ((hw_q) << 2))
 #define GEM_TBQP(hw_q)		(0x0440 + ((hw_q) << 2))
-#define GEM_TBQPH(hw_q)		(0x04C8)
 #define GEM_RBQP(hw_q)		(0x0480 + ((hw_q) << 2))
 #define GEM_RBQS(hw_q)		(0x04A0 + ((hw_q) << 2))
-#define GEM_RBQPH(hw_q)		(0x04D4)
 #define GEM_IER(hw_q)		(0x0600 + ((hw_q) << 2))
 #define GEM_IDR(hw_q)		(0x0620 + ((hw_q) << 2))
 #define GEM_IMR(hw_q)		(0x0640 + ((hw_q) << 2))
@@ -951,75 +949,73 @@ struct macb_tx_skb {
  * device stats by a periodic timer.
  */
 struct macb_stats {
-	u32	rx_pause_frames;
-	u32	tx_ok;
-	u32	tx_single_cols;
-	u32	tx_multiple_cols;
-	u32	rx_ok;
-	u32	rx_fcs_errors;
-	u32	rx_align_errors;
-	u32	tx_deferred;
-	u32	tx_late_cols;
-	u32	tx_excessive_cols;
-	u32	tx_underruns;
-	u32	tx_carrier_errors;
-	u32	rx_resource_errors;
-	u32	rx_overruns;
-	u32	rx_symbol_errors;
-	u32	rx_oversize_pkts;
-	u32	rx_jabbers;
-	u32	rx_undersize_pkts;
-	u32	sqe_test_errors;
-	u32	rx_length_mismatch;
-	u32	tx_pause_frames;
+	u64	rx_pause_frames;
+	u64	tx_ok;
+	u64	tx_single_cols;
+	u64	tx_multiple_cols;
+	u64	rx_ok;
+	u64	rx_fcs_errors;
+	u64	rx_align_errors;
+	u64	tx_deferred;
+	u64	tx_late_cols;
+	u64	tx_excessive_cols;
+	u64	tx_underruns;
+	u64	tx_carrier_errors;
+	u64	rx_resource_errors;
+	u64	rx_overruns;
+	u64	rx_symbol_errors;
+	u64	rx_oversize_pkts;
+	u64	rx_jabbers;
+	u64	rx_undersize_pkts;
+	u64	sqe_test_errors;
+	u64	rx_length_mismatch;
+	u64	tx_pause_frames;
 };
 
 struct gem_stats {
-	u32	tx_octets_31_0;
-	u32	tx_octets_47_32;
-	u32	tx_frames;
-	u32	tx_broadcast_frames;
-	u32	tx_multicast_frames;
-	u32	tx_pause_frames;
-	u32	tx_64_byte_frames;
-	u32	tx_65_127_byte_frames;
-	u32	tx_128_255_byte_frames;
-	u32	tx_256_511_byte_frames;
-	u32	tx_512_1023_byte_frames;
-	u32	tx_1024_1518_byte_frames;
-	u32	tx_greater_than_1518_byte_frames;
-	u32	tx_underrun;
-	u32	tx_single_collision_frames;
-	u32	tx_multiple_collision_frames;
-	u32	tx_excessive_collisions;
-	u32	tx_late_collisions;
-	u32	tx_deferred_frames;
-	u32	tx_carrier_sense_errors;
-	u32	rx_octets_31_0;
-	u32	rx_octets_47_32;
-	u32	rx_frames;
-	u32	rx_broadcast_frames;
-	u32	rx_multicast_frames;
-	u32	rx_pause_frames;
-	u32	rx_64_byte_frames;
-	u32	rx_65_127_byte_frames;
-	u32	rx_128_255_byte_frames;
-	u32	rx_256_511_byte_frames;
-	u32	rx_512_1023_byte_frames;
-	u32	rx_1024_1518_byte_frames;
-	u32	rx_greater_than_1518_byte_frames;
-	u32	rx_undersized_frames;
-	u32	rx_oversize_frames;
-	u32	rx_jabbers;
-	u32	rx_frame_check_sequence_errors;
-	u32	rx_length_field_frame_errors;
-	u32	rx_symbol_errors;
-	u32	rx_alignment_errors;
-	u32	rx_resource_errors;
-	u32	rx_overruns;
-	u32	rx_ip_header_checksum_errors;
-	u32	rx_tcp_checksum_errors;
-	u32	rx_udp_checksum_errors;
+	u64	tx_octets;
+	u64	tx_frames;
+	u64	tx_broadcast_frames;
+	u64	tx_multicast_frames;
+	u64	tx_pause_frames;
+	u64	tx_64_byte_frames;
+	u64	tx_65_127_byte_frames;
+	u64	tx_128_255_byte_frames;
+	u64	tx_256_511_byte_frames;
+	u64	tx_512_1023_byte_frames;
+	u64	tx_1024_1518_byte_frames;
+	u64	tx_greater_than_1518_byte_frames;
+	u64	tx_underrun;
+	u64	tx_single_collision_frames;
+	u64	tx_multiple_collision_frames;
+	u64	tx_excessive_collisions;
+	u64	tx_late_collisions;
+	u64	tx_deferred_frames;
+	u64	tx_carrier_sense_errors;
+	u64	rx_octets;
+	u64	rx_frames;
+	u64	rx_broadcast_frames;
+	u64	rx_multicast_frames;
+	u64	rx_pause_frames;
+	u64	rx_64_byte_frames;
+	u64	rx_65_127_byte_frames;
+	u64	rx_128_255_byte_frames;
+	u64	rx_256_511_byte_frames;
+	u64	rx_512_1023_byte_frames;
+	u64	rx_1024_1518_byte_frames;
+	u64	rx_greater_than_1518_byte_frames;
+	u64	rx_undersized_frames;
+	u64	rx_oversize_frames;
+	u64	rx_jabbers;
+	u64	rx_frame_check_sequence_errors;
+	u64	rx_length_field_frame_errors;
+	u64	rx_symbol_errors;
+	u64	rx_alignment_errors;
+	u64	rx_resource_errors;
+	u64	rx_overruns;
+	u64	rx_ip_header_checksum_errors;
+	u64	rx_tcp_checksum_errors;
+	u64	rx_udp_checksum_errors;
 };
 
 /* Describes the name and offset of an individual statistic register, as
@@ -1027,7 +1023,7 @@ struct gem_stats {
  * this register should contribute to.
  */
 struct gem_statistic {
-	char stat_string[ETH_GSTRING_LEN];
+	char stat_string[ETH_GSTRING_LEN] __nonstring;
 	int offset;
 	u32 stat_bits;
 };
@@ -1216,10 +1212,8 @@ struct macb_queue {
 	unsigned int		IDR;
 	unsigned int		IMR;
 	unsigned int		TBQP;
-	unsigned int		TBQPH;
 	unsigned int		RBQS;
 	unsigned int		RBQP;
-	unsigned int		RBQPH;
 
 	/* Lock to protect tx_head and tx_tail */
 	spinlock_t		tx_ptr_lock;

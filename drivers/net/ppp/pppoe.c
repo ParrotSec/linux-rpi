@@ -372,9 +372,6 @@ static int pppoe_rcv_core(struct sock *sk, struct sk_buff *skb)
 	 * can't change.
 	 */
 
-	if (skb->pkt_type == PACKET_OTHERHOST)
-		goto abort_kfree;
-
 	if (sk->sk_state & PPPOX_BOUND) {
 		ppp_input(&po->chan, skb);
 	} else if (sk->sk_state & PPPOX_RELAY) {
@@ -417,6 +414,9 @@ static int pppoe_rcv(struct sk_buff *skb, struct net_device *dev,
 	struct pppox_sock *po;
 	struct pppoe_net *pn;
 	int len;
+
+	if (skb->pkt_type == PACKET_OTHERHOST)
+		goto drop;
 
 	skb = skb_share_check(skb, GFP_ATOMIC);
 	if (!skb)
@@ -693,6 +693,7 @@ static int pppoe_connect(struct socket *sock, struct sockaddr *uservaddr,
 		po->chan.mtu = dev->mtu - sizeof(struct pppoe_hdr) - 2;
 		po->chan.private = sk;
 		po->chan.ops = &pppoe_chan_ops;
+		po->chan.direct_xmit = true;
 
 		error = ppp_register_net_channel(dev_net(dev), &po->chan);
 		if (error) {

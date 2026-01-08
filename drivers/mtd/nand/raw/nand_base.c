@@ -1833,7 +1833,7 @@ int nand_readid_op(struct nand_chip *chip, u8 addr, void *buf,
 
 		/* READ_ID data bytes are received twice in NV-DDR mode */
 		if (len && nand_interface_is_nvddr(conf)) {
-			ddrbuf = kzalloc(len * 2, GFP_KERNEL);
+			ddrbuf = kcalloc(2, len, GFP_KERNEL);
 			if (!ddrbuf)
 				return -ENOMEM;
 
@@ -2203,7 +2203,7 @@ int nand_read_data_op(struct nand_chip *chip, void *buf, unsigned int len,
 		 * twice.
 		 */
 		if (force_8bit && nand_interface_is_nvddr(conf)) {
-			ddrbuf = kzalloc(len * 2, GFP_KERNEL);
+			ddrbuf = kcalloc(2, len, GFP_KERNEL);
 			if (!ddrbuf)
 				return -ENOMEM;
 
@@ -6469,11 +6469,14 @@ static int nand_scan_tail(struct nand_chip *chip)
 		ecc->steps = mtd->writesize / ecc->size;
 	if (!base->ecc.ctx.nsteps)
 		base->ecc.ctx.nsteps = ecc->steps;
-	if (ecc->steps * ecc->size != mtd->writesize) {
-		WARN(1, "Invalid ECC parameters\n");
-		ret = -EINVAL;
-		goto err_nand_manuf_cleanup;
-	}
+
+	/*
+	 * Validity check: Warn if ECC parameters are not compatible with page size.
+	 * Due to the custom handling of ECC blocks in certain controllers the check
+	 * may result in an expected failure.
+	 */
+	if (ecc->steps * ecc->size != mtd->writesize)
+		pr_warn("ECC parameters may be invalid in reference to underlying NAND chip\n");
 
 	if (!ecc->total) {
 		ecc->total = ecc->steps * ecc->bytes;

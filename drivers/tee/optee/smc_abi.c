@@ -1272,8 +1272,9 @@ static void optee_msg_get_os_revision(optee_invoke_fn *invoke_fn)
 		  &res.smccc);
 
 	if (res.result.build_id)
-		pr_info("revision %lu.%lu (%08lx)", res.result.major,
-			res.result.minor, res.result.build_id);
+		pr_info("revision %lu.%lu (%0*lx)", res.result.major,
+			res.result.minor, (int)sizeof(res.result.build_id) * 2,
+			res.result.build_id);
 	else
 		pr_info("revision %lu.%lu", res.result.major, res.result.minor);
 }
@@ -1550,8 +1551,7 @@ fw_load:
 		  data_pa_high, data_pa_low, 0, 0, 0, &res);
 	if (!rc)
 		rc = res.a0;
-	if (fw)
-		release_firmware(fw);
+	release_firmware(fw);
 	kfree(data_buf);
 
 	if (!rc) {
@@ -1817,7 +1817,7 @@ MODULE_DEVICE_TABLE(of, optee_dt_match);
 
 static struct platform_driver optee_driver = {
 	.probe  = optee_probe,
-	.remove_new = optee_smc_remove,
+	.remove = optee_smc_remove,
 	.shutdown = optee_shutdown,
 	.driver = {
 		.name = "optee",

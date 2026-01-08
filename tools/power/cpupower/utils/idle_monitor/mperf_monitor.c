@@ -148,7 +148,7 @@ static int mperf_measure_stats(unsigned int cpu)
 	ret = get_aperf_mperf(cpu, &aval, &mval);
 	aperf_current_count[cpu] = aval;
 	mperf_current_count[cpu] = mval;
-	is_valid[cpu] = !ret;
+	is_valid[cpu] |= !ret;
 
 	return 0;
 }
@@ -240,9 +240,9 @@ static int mperf_stop(void)
 	int cpu;
 
 	for (cpu = 0; cpu < cpu_count; cpu++) {
-		mperf_measure_stats(cpu);
-		mperf_get_tsc(&tsc_at_measure_end[cpu]);
 		clock_gettime(CLOCK_REALTIME, &time_end[cpu]);
+		mperf_get_tsc(&tsc_at_measure_end[cpu]);
+		mperf_measure_stats(cpu);
 	}
 
 	return 0;

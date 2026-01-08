@@ -315,59 +315,72 @@ build_avpair_blob(struct cifs_ses *ses, const struct nls_table *nls_cp)
 	return 0;
 }
 
-/* Server has provided av pairs/target info in the type 2 challenge
- * packet and we have plucked it and stored within smb session.
- * We parse that blob here to find netbios domain name to be used
- * as part of ntlmv2 authentication (in Target String), if not already
- * specified on the command line.
- * If this function returns without any error but without fetching
- * domain name, authentication may fail against some server but
- * may not fail against other (those who are not very particular
- * about target string i.e. for some, just user name might suffice.
- */
-static int
-find_domain_name(struct cifs_ses *ses, const struct nls_table *nls_cp)
+#define AV_TYPE(av)		(le16_to_cpu(av->type))
+#define AV_LEN(av)		(le16_to_cpu(av->length))
+#define AV_DATA_PTR(av)	((void *)av->data)
+
+#define av_for_each_entry(ses, av) \
+	for (av = NULL; (av = find_next_av(ses, av));)
+
+static struct ntlmssp2_name *find_next_av(struct cifs_ses *ses,
+					  struct ntlmssp2_name *av)
 {
-	unsigned int attrsize;
-	unsigned int type;
-	unsigned int onesize = sizeof(struct ntlmssp2_name);
-	unsigned char *blobptr;
-	unsigned char *blobend;
-	struct ntlmssp2_name *attrptr;
+	u16 len;
+	u8 *end;
 
-	if (!ses->auth_key.len || !ses->auth_key.response)
-		return 0;
-
-	blobptr = ses->auth_key.response;
-	blobend = blobptr + ses->auth_key.len;
-
-	while (blobptr + onesize < blobend) {
-		attrptr = (struct ntlmssp2_name *) blobptr;
-		type = le16_to_cpu(attrptr->type);
-		if (type == NTLMSSP_AV_EOL)
-			break;
-		blobptr += 2; /* advance attr type */
-		attrsize = le16_to_cpu(attrptr->length);
-		blobptr += 2; /* advance attr size */
-		if (blobptr + attrsize > blobend)
-			break;
-		if (type == NTLMSSP_AV_NB_DOMAIN_NAME) {
-			if (!attrsize || attrsize >= CIFS_MAX_DOMAINNAME_LEN)
-				break;
-			if (!ses->domainName) {
-				ses->domainName =
-					kmalloc(attrsize + 1, GFP_KERNEL);
-				if (!ses->domainName)
-						return -ENOMEM;
-				cifs_from_utf16(ses->domainName,
-					(__le16 *)blobptr, attrsize, attrsize,
-					nls_cp, NO_MAP_UNI_RSVD);
-				break;
-			}
-		}
-		blobptr += attrsize; /* advance attr  value */
+	end = (u8 *)ses->auth_key.response + ses->auth_key.len;
+	if (!av) {
+		if (unlikely(!ses->auth_key.response || !ses->auth_key.len))
+			return NULL;
+		av = (void *)ses->auth_key.response;
+	} else {
+		av = (void *)((u8 *)av + sizeof(*av) + AV_LEN(av));
 	}
 
+	if ((u8 *)av + sizeof(*av) > end)
+		return NULL;
+
+	len = AV_LEN(av);
+	if (AV_TYPE(av) == NTLMSSP_AV_EOL)
+		return NULL;
+	if ((u8 *)av + sizeof(*av) + len > end)
+		return NULL;
+	return av;
+}
+
+/*
+ * Check if server has provided av pair of @type in the NTLMSSP
+ * CHALLENGE_MESSAGE blob.
+ */
+static int find_av_name(struct cifs_ses *ses, u16 type, char **name, u16 maxlen)
+{
+	const struct nls_table *nlsc = ses->local_nls;
+	struct ntlmssp2_name *av;
+	u16 len, nlen;
+
+	if (*name)
+		return 0;
+
+	av_for_each_entry(ses, av) {
+		len = AV_LEN(av);
+		if (AV_TYPE(av) != type || !len)
+			continue;
+		if (!IS_ALIGNED(len, sizeof(__le16))) {
+			cifs_dbg(VFS | ONCE, "%s: bad length(%u) for type %u\n",
+				 __func__, len, type);
+			continue;
+		}
+		nlen = len / sizeof(__le16);
+		if (nlen <= maxlen) {
+			++nlen;
+			*name = kmalloc(nlen, GFP_KERNEL);
+			if (!*name)
+				return -ENOMEM;
+			cifs_from_utf16(*name, AV_DATA_PTR(av), nlen,
+					len, nlsc, NO_MAP_UNI_RSVD);
+			break;
+		}
+	}
 	return 0;
 }
 
@@ -377,40 +390,16 @@ find_domain_name(struct cifs_ses *ses, const struct nls_table *nls_cp)
  * as part of ntlmv2 authentication (or local current time as
  * default in case of failure)
  */
-static __le64
-find_timestamp(struct cifs_ses *ses)
+static __le64 find_timestamp(struct cifs_ses *ses)
 {
-	unsigned int attrsize;
-	unsigned int type;
-	unsigned int onesize = sizeof(struct ntlmssp2_name);
-	unsigned char *blobptr;
-	unsigned char *blobend;
-	struct ntlmssp2_name *attrptr;
+	struct ntlmssp2_name *av;
 	struct timespec64 ts;
 
-	if (!ses->auth_key.len || !ses->auth_key.response)
-		return 0;
-
-	blobptr = ses->auth_key.response;
-	blobend = blobptr + ses->auth_key.len;
-
-	while (blobptr + onesize < blobend) {
-		attrptr = (struct ntlmssp2_name *) blobptr;
-		type = le16_to_cpu(attrptr->type);
-		if (type == NTLMSSP_AV_EOL)
-			break;
-		blobptr += 2; /* advance attr type */
-		attrsize = le16_to_cpu(attrptr->length);
-		blobptr += 2; /* advance attr size */
-		if (blobptr + attrsize > blobend)
-			break;
-		if (type == NTLMSSP_AV_TIMESTAMP) {
-			if (attrsize == sizeof(u64))
-				return *((__le64 *)blobptr);
-		}
-		blobptr += attrsize; /* advance attr value */
+	av_for_each_entry(ses, av) {
+		if (AV_TYPE(av) == NTLMSSP_AV_TIMESTAMP &&
+		    AV_LEN(av) == sizeof(u64))
+			return *((__le64 *)AV_DATA_PTR(av));
 	}
-
 	ktime_get_real_ts64(&ts);
 	return cpu_to_le64(cifs_UnixTimeToNT(ts));
 }
@@ -543,17 +532,67 @@ CalcNTLMv2_response(const struct cifs_ses *ses, char *ntlmv2_hash, struct shash_
 	return rc;
 }
 
+/*
+ * Set up NTLMv2 response blob with SPN (cifs/<hostname>) appended to the
+ * existing list of AV pairs.
+ */
+static int set_auth_key_response(struct cifs_ses *ses)
+{
+	size_t baselen = CIFS_SESS_KEY_SIZE + sizeof(struct ntlmv2_resp);
+	size_t len, spnlen, tilen = 0, num_avs = 2 /* SPN + EOL */;
+	struct TCP_Server_Info *server = ses->server;
+	char *spn __free(kfree) = NULL;
+	struct ntlmssp2_name *av;
+	char *rsp = NULL;
+	int rc;
+
+	spnlen = strlen(server->hostname);
+	len = sizeof("cifs/") + spnlen;
+	spn = kmalloc(len, GFP_KERNEL);
+	if (!spn) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	spnlen = scnprintf(spn, len, "cifs/%.*s",
+			   (int)spnlen, server->hostname);
+
+	av_for_each_entry(ses, av)
+		tilen += sizeof(*av) + AV_LEN(av);
+
+	len = baselen + tilen + spnlen * sizeof(__le16) + num_avs * sizeof(*av);
+	rsp = kmalloc(len, GFP_KERNEL);
+	if (!rsp) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	memcpy(rsp + baselen, ses->auth_key.response, tilen);
+	av = (void *)(rsp + baselen + tilen);
+	av->type = cpu_to_le16(NTLMSSP_AV_TARGET_NAME);
+	av->length = cpu_to_le16(spnlen * sizeof(__le16));
+	cifs_strtoUTF16((__le16 *)av->data, spn, spnlen, ses->local_nls);
+	av = (void *)((__u8 *)av + sizeof(*av) + AV_LEN(av));
+	av->type = cpu_to_le16(NTLMSSP_AV_EOL);
+	av->length = 0;
+
+	rc = 0;
+	ses->auth_key.len = len;
+out:
+	ses->auth_key.response = rsp;
+	return rc;
+}
+
 int
 setup_ntlmv2_rsp(struct cifs_ses *ses, const struct nls_table *nls_cp)
 {
 	struct shash_desc *hmacmd5 = NULL;
-	int rc;
-	int baselen;
-	unsigned int tilen;
+	unsigned char *tiblob = NULL; /* target info blob */
 	struct ntlmv2_resp *ntlmv2;
 	char ntlmv2_hash[16];
-	unsigned char *tiblob = NULL; /* target info blob */
 	__le64 rsp_timestamp;
+	__u64 cc;
+	int rc;
 
 	if (nls_cp == NULL) {
 		cifs_dbg(VFS, "%s called with nls_cp==NULL\n", __func__);
@@ -563,16 +602,29 @@ setup_ntlmv2_rsp(struct cifs_ses *ses, const struct nls_table *nls_cp)
 	if (ses->server->negflavor == CIFS_NEGFLAVOR_EXTENDED) {
 		if (!ses->domainName) {
 			if (ses->domainAuto) {
-				rc = find_domain_name(ses, nls_cp);
-				if (rc) {
-					cifs_dbg(VFS, "error %d finding domain name\n",
-						 rc);
+				/*
+				 * Domain (workgroup) hasn't been specified in
+				 * mount options, so try to find it in
+				 * CHALLENGE_MESSAGE message and then use it as
+				 * part of NTLMv2 authentication.
+				 */
+				rc = find_av_name(ses, NTLMSSP_AV_NB_DOMAIN_NAME,
+						  &ses->domainName,
+						  CIFS_MAX_DOMAINNAME_LEN);
+				if (rc)
 					goto setup_ntlmv2_rsp_ret;
-				}
 			} else {
 				ses->domainName = kstrdup("", GFP_KERNEL);
+				if (!ses->domainName) {
+					rc = -ENOMEM;
+					goto setup_ntlmv2_rsp_ret;
+				}
 			}
 		}
+		rc = find_av_name(ses, NTLMSSP_AV_DNS_DOMAIN_NAME,
+				  &ses->dns_dom, CIFS_MAX_DOMAINNAME_LEN);
+		if (rc)
+			goto setup_ntlmv2_rsp_ret;
 	} else {
 		rc = build_avpair_blob(ses, nls_cp);
 		if (rc) {
@@ -586,31 +638,24 @@ setup_ntlmv2_rsp(struct cifs_ses *ses, const struct nls_table *nls_cp)
 	 * (as Windows 7 does)
 	 */
 	rsp_timestamp = find_timestamp(ses);
+	get_random_bytes(&cc, sizeof(cc));
 
-	baselen = CIFS_SESS_KEY_SIZE + sizeof(struct ntlmv2_resp);
-	tilen = ses->auth_key.len;
+	cifs_server_lock(ses->server);
+
 	tiblob = ses->auth_key.response;
-
-	ses->auth_key.response = kmalloc(baselen + tilen, GFP_KERNEL);
-	if (!ses->auth_key.response) {
-		rc = -ENOMEM;
+	rc = set_auth_key_response(ses);
+	if (rc) {
 		ses->auth_key.len = 0;
-		goto setup_ntlmv2_rsp_ret;
+		goto unlock;
 	}
-	ses->auth_key.len += baselen;
 
 	ntlmv2 = (struct ntlmv2_resp *)
 			(ses->auth_key.response + CIFS_SESS_KEY_SIZE);
 	ntlmv2->blob_signature = cpu_to_le32(0x00000101);
 	ntlmv2->reserved = 0;
 	ntlmv2->time = rsp_timestamp;
-
-	get_random_bytes(&ntlmv2->client_chal, sizeof(ntlmv2->client_chal));
+	ntlmv2->client_chal = cc;
 	ntlmv2->reserved2 = 0;
-
-	memcpy(ses->auth_key.response + baselen, tiblob, tilen);
-
-	cifs_server_lock(ses->server);
 
 	rc = cifs_alloc_hash("hmac(md5)", &hmacmd5);
 	if (rc) {

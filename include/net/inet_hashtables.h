@@ -89,6 +89,7 @@ struct inet_bind_bucket {
 	bool			fast_ipv6_only;
 	struct hlist_node	node;
 	struct hlist_head	bhash2;
+	struct rcu_head		rcu;
 };
 
 struct inet_bind2_bucket {
@@ -107,6 +108,8 @@ struct inet_bind2_bucket {
 	struct hlist_node	bhash_node;
 	/* List of sockets hashed to this bucket */
 	struct hlist_head	owners;
+	signed char		fastreuse;
+	signed char		fastreuseport;
 };
 
 static inline struct net *ib_net(const struct inet_bind_bucket *ib)
@@ -174,14 +177,9 @@ struct inet_hashinfo {
 	bool				pernet;
 } ____cacheline_aligned_in_smp;
 
-static inline struct inet_hashinfo *tcp_or_dccp_get_hashinfo(const struct sock *sk)
+static inline struct inet_hashinfo *tcp_get_hashinfo(const struct sock *sk)
 {
-#if IS_ENABLED(CONFIG_IP_DCCP)
-	return sk->sk_prot->h.hashinfo ? :
-		sock_net(sk)->ipv4.tcp_death_row.hashinfo;
-#else
 	return sock_net(sk)->ipv4.tcp_death_row.hashinfo;
-#endif
 }
 
 static inline struct inet_listen_hashbucket *
@@ -206,12 +204,6 @@ static inline spinlock_t *inet_ehash_lockp(
 
 int inet_ehash_locks_alloc(struct inet_hashinfo *hashinfo);
 
-static inline void inet_hashinfo2_free_mod(struct inet_hashinfo *h)
-{
-	kfree(h->lhash2);
-	h->lhash2 = NULL;
-}
-
 static inline void inet_ehash_locks_free(struct inet_hashinfo *hashinfo)
 {
 	kvfree(hashinfo->ehash_locks);
@@ -226,8 +218,7 @@ struct inet_bind_bucket *
 inet_bind_bucket_create(struct kmem_cache *cachep, struct net *net,
 			struct inet_bind_hashbucket *head,
 			const unsigned short snum, int l3mdev);
-void inet_bind_bucket_destroy(struct kmem_cache *cachep,
-			      struct inet_bind_bucket *tb);
+void inet_bind_bucket_destroy(struct inet_bind_bucket *tb);
 
 bool inet_bind_bucket_match(const struct inet_bind_bucket *tb,
 			    const struct net *net, unsigned short port,
@@ -492,7 +483,7 @@ static inline struct sock *__inet_lookup_skb(struct inet_hashinfo *hashinfo,
 					     const int sdif,
 					     bool *refcounted)
 {
-	struct net *net = dev_net(skb_dst(skb)->dev);
+	struct net *net = skb_dst_dev_net_rcu(skb);
 	const struct iphdr *iph = ip_hdr(skb);
 	struct sock *sk;
 
@@ -527,9 +518,12 @@ static inline void sk_rcv_saddr_set(struct sock *sk, __be32 addr)
 
 int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 			struct sock *sk, u64 port_offset,
+			u32 hash_port0,
 			int (*check_established)(struct inet_timewait_death_row *,
 						 struct sock *, __u16,
-						 struct inet_timewait_sock **));
+						 struct inet_timewait_sock **,
+						 bool rcu_lookup,
+						 u32 hash));
 
 int inet_hash_connect(struct inet_timewait_death_row *death_row,
 		      struct sock *sk);

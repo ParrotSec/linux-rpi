@@ -6,9 +6,11 @@
 #include <linux/pci.h>
 #include <linux/rtnetlink.h>
 #include <linux/types.h>
+#include <net/devlink.h>
 
 #include "fbnic.h"
 #include "fbnic_drvinfo.h"
+#include "fbnic_hw_stats.h"
 #include "fbnic_netdev.h"
 
 char fbnic_driver_name[] = DRV_NAME;
@@ -116,14 +118,12 @@ static void fbnic_service_task_start(struct fbnic_net *fbn)
 	struct fbnic_dev *fbd = fbn->fbd;
 
 	schedule_delayed_work(&fbd->service_task, HZ);
-	phylink_resume(fbn->phylink);
 }
 
 static void fbnic_service_task_stop(struct fbnic_net *fbn)
 {
 	struct fbnic_dev *fbd = fbn->fbd;
 
-	phylink_suspend(fbn->phylink, fbnic_bmc_present(fbd));
 	cancel_delayed_work(&fbd->service_task);
 }
 
@@ -144,7 +144,7 @@ void fbnic_up(struct fbnic_net *fbn)
 	fbnic_service_task_start(fbn);
 }
 
-static void fbnic_down_noidle(struct fbnic_net *fbn)
+void fbnic_down_noidle(struct fbnic_net *fbn)
 {
 	fbnic_service_task_stop(fbn);
 
@@ -197,6 +197,8 @@ static void fbnic_service_task(struct work_struct *work)
 					     struct fbnic_dev, service_task);
 
 	rtnl_lock();
+
+	fbnic_get_hw_stats32(fbd);
 
 	fbnic_fw_check_heartbeat(fbd);
 
@@ -280,14 +282,32 @@ static int fbnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto free_irqs;
 	}
 
-	err = fbnic_fw_enable_mbx(fbd);
+	err = fbnic_fw_request_mbx(fbd);
 	if (err) {
 		dev_err(&pdev->dev,
 			"Firmware mailbox initialization failure\n");
 		goto free_irqs;
 	}
 
+	/* Send the request to enable the FW logging to host. Note if this
+	 * fails we ignore the error and just display a message as it is
+	 * possible the FW is just too old to support the logging and needs
+	 * to be updated.
+	 */
+	err = fbnic_fw_log_init(fbd);
+	if (err)
+		dev_warn(fbd->dev,
+			 "Unable to initialize firmware log buffer: %d\n",
+			 err);
+
 	fbnic_devlink_register(fbd);
+	fbnic_dbg_fbd_init(fbd);
+	spin_lock_init(&fbd->hw_stats_lock);
+
+	/* Capture snapshot of hardware stats so netdev can calculate delta */
+	fbnic_reset_hw_stats(fbd);
+
+	fbnic_hwmon_register(fbd);
 
 	if (!fbd->dsn) {
 		dev_warn(&pdev->dev, "Reading serial number failed\n");
@@ -300,14 +320,20 @@ static int fbnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto init_failure_mode;
 	}
 
+	err = fbnic_ptp_setup(fbd);
+	if (err)
+		goto ifm_free_netdev;
+
 	err = fbnic_netdev_register(netdev);
 	if (err) {
 		dev_err(&pdev->dev, "Netdev registration failed: %d\n", err);
-		goto ifm_free_netdev;
+		goto ifm_destroy_ptp;
 	}
 
 	return 0;
 
+ifm_destroy_ptp:
+	fbnic_ptp_destroy(fbd);
 ifm_free_netdev:
 	fbnic_netdev_free(fbd);
 init_failure_mode:
@@ -341,11 +367,15 @@ static void fbnic_remove(struct pci_dev *pdev)
 
 		fbnic_netdev_unregister(netdev);
 		cancel_delayed_work_sync(&fbd->service_task);
+		fbnic_ptp_destroy(fbd);
 		fbnic_netdev_free(fbd);
 	}
 
+	fbnic_hwmon_unregister(fbd);
+	fbnic_dbg_fbd_exit(fbd);
 	fbnic_devlink_unregister(fbd);
-	fbnic_fw_disable_mbx(fbd);
+	fbnic_fw_log_free(fbd);
+	fbnic_fw_free_mbx(fbd);
 	fbnic_free_irqs(fbd);
 
 	fbnic_devlink_free(fbd);
@@ -369,7 +399,13 @@ static int fbnic_pm_suspend(struct device *dev)
 	rtnl_unlock();
 
 null_uc_addr:
-	fbnic_fw_disable_mbx(fbd);
+	fbnic_fw_log_disable(fbd);
+
+	devl_lock(priv_to_devlink(fbd));
+
+	fbnic_fw_free_mbx(fbd);
+
+	devl_unlock(priv_to_devlink(fbd));
 
 	/* Free the IRQs so they aren't trying to occupy sleeping CPUs */
 	fbnic_free_irqs(fbd);
@@ -401,10 +437,18 @@ static int __fbnic_pm_resume(struct device *dev)
 
 	fbd->mac->init_regs(fbd);
 
+	devl_lock(priv_to_devlink(fbd));
+
 	/* Re-enable mailbox */
-	err = fbnic_fw_enable_mbx(fbd);
+	err = fbnic_fw_request_mbx(fbd);
+	devl_unlock(priv_to_devlink(fbd));
 	if (err)
 		goto err_free_irqs;
+
+	/* Only send log history if log buffer is empty to prevent duplicate
+	 * log entries.
+	 */
+	fbnic_fw_log_enable(fbd, list_empty(&fbd->fw_log.entries));
 
 	/* No netdev means there isn't a network interface to bring up */
 	if (fbnic_init_failure(fbd))
@@ -417,18 +461,20 @@ static int __fbnic_pm_resume(struct device *dev)
 
 	rtnl_lock();
 
-	if (netif_running(netdev)) {
+	if (netif_running(netdev))
 		err = __fbnic_open(fbn);
-		if (err)
-			goto err_disable_mbx;
-	}
 
 	rtnl_unlock();
+	if (err)
+		goto err_free_mbx;
 
 	return 0;
-err_disable_mbx:
-	rtnl_unlock();
-	fbnic_fw_disable_mbx(fbd);
+err_free_mbx:
+	fbnic_fw_log_disable(fbd);
+
+	devl_lock(priv_to_devlink(fbd));
+	fbnic_fw_free_mbx(fbd);
+	devl_unlock(priv_to_devlink(fbd));
 err_free_irqs:
 	fbnic_free_irqs(fbd);
 err_invalidate_uc_addr:
@@ -442,6 +488,8 @@ static void __fbnic_pm_attach(struct device *dev)
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
 	struct fbnic_net *fbn;
+
+	fbnic_reset_hw_stats(fbd);
 
 	if (fbnic_init_failure(fbd))
 		return;
@@ -540,9 +588,13 @@ static int __init fbnic_init_module(void)
 {
 	int err;
 
+	fbnic_dbg_init();
+
 	err = pci_register_driver(&fbnic_driver);
-	if (err)
+	if (err) {
+		fbnic_dbg_exit();
 		goto out;
+	}
 
 	pr_info(DRV_SUMMARY " (%s)", fbnic_driver.name);
 out:
@@ -558,5 +610,7 @@ module_init(fbnic_init_module);
 static void __exit fbnic_exit_module(void)
 {
 	pci_unregister_driver(&fbnic_driver);
+
+	fbnic_dbg_exit();
 }
 module_exit(fbnic_exit_module);

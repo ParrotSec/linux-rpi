@@ -172,6 +172,8 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 	if (len == 0)
 		return error;
 	if (fh->fh_fsid_type == FSID_MAJOR_MINOR) {
+		u32 *fsid = fh_fsid(fh);
+
 		/* deprecated, convert to type 3 */
 		len = key_len(FSID_ENCODE_DEV)/4;
 		fh->fh_fsid_type = FSID_ENCODE_DEV;
@@ -181,17 +183,17 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 		 * confuses sparse, so we must use __force here to
 		 * keep it from complaining.
 		 */
-		fh->fh_fsid[0] = new_encode_dev(MKDEV(ntohl((__force __be32)fh->fh_fsid[0]),
-						      ntohl((__force __be32)fh->fh_fsid[1])));
-		fh->fh_fsid[1] = fh->fh_fsid[2];
+		fsid[0] = new_encode_dev(MKDEV(ntohl((__force __be32)fsid[0]),
+					       ntohl((__force __be32)fsid[1])));
+		fsid[1] = fsid[2];
 	}
 	data_left -= len;
 	if (data_left < 0)
 		return error;
 	exp = rqst_exp_find(rqstp ? &rqstp->rq_chandle : NULL,
 			    net, client, gssclient,
-			    fh->fh_fsid_type, fh->fh_fsid);
-	fid = (struct fid *)(fh->fh_fsid + len);
+			    fh->fh_fsid_type, fh_fsid(fh));
+	fid = (struct fid *)(fh_fsid(fh) + len);
 
 	error = nfserr_stale;
 	if (IS_ERR(exp)) {
@@ -222,7 +224,6 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 			cap_raise_nfsd_set(new->cap_effective,
 					   new->cap_permitted);
 		put_cred(override_creds(new));
-		put_cred(new);
 	} else {
 		error = nfsd_setuser_and_check_port(rqstp, cred, exp);
 		if (error)
@@ -268,9 +269,6 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 				dentry);
 	}
 
-	fhp->fh_dentry = dentry;
-	fhp->fh_export = exp;
-
 	switch (fhp->fh_maxsize) {
 	case NFS4_FHSIZE:
 		if (dentry->d_sb->s_export_op->flags & EXPORT_OP_NOATOMIC_ATTR)
@@ -291,6 +289,9 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 		if (exp->ex_flags & NFSEXP_V4ROOT)
 			goto out;
 	}
+
+	fhp->fh_dentry = dentry;
+	fhp->fh_export = exp;
 
 	return 0;
 out:
@@ -320,6 +321,7 @@ __fh_verify(struct svc_rqst *rqstp,
 {
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 	struct svc_export *exp = NULL;
+	bool may_bypass_gss = false;
 	struct dentry	*dentry;
 	__be32		error;
 
@@ -363,12 +365,31 @@ __fh_verify(struct svc_rqst *rqstp,
 		goto out;
 
 	/*
-	 * pseudoflavor restrictions are not enforced on NLM,
-	 * which clients virtually always use auth_sys for,
-	 * even while using RPCSEC_GSS for NFS.
+	 * If rqstp is NULL, this is a LOCALIO request which will only
+	 * ever use a filehandle/credential pair for which access has
+	 * been affirmed (by ACCESS or OPEN NFS requests) over the
+	 * wire.  Skip both the xprtsec policy and the security flavor
+	 * checks.
 	 */
-	if (access & NFSD_MAY_LOCK || access & NFSD_MAY_BYPASS_GSS)
-		goto skip_pseudoflavor_check;
+	if (!rqstp)
+		goto check_permissions;
+
+	if ((access & NFSD_MAY_NLM) && (exp->ex_flags & NFSEXP_NOAUTHNLM))
+		/* NLM is allowed to fully bypass authentication */
+		goto out;
+
+	/*
+	 * NLM is allowed to bypass the xprtsec policy check because lockd
+	 * doesn't support xprtsec.
+	 */
+	if (!(access & NFSD_MAY_NLM)) {
+		error = check_xprtsec_policy(exp, rqstp);
+		if (error)
+			goto out;
+	}
+
+	if (access & NFSD_MAY_BYPASS_GSS)
+		may_bypass_gss = true;
 	/*
 	 * Clients may expect to be able to use auth_sys during mount,
 	 * even if they use gss for everything else; see section 2.3.2
@@ -376,13 +397,17 @@ __fh_verify(struct svc_rqst *rqstp,
 	 */
 	if (access & NFSD_MAY_BYPASS_GSS_ON_ROOT
 			&& exp->ex_path.dentry == dentry)
-		goto skip_pseudoflavor_check;
+		may_bypass_gss = true;
 
-	error = check_nfsd_access(exp, rqstp);
+	error = check_security_flavor(exp, rqstp, may_bypass_gss);
 	if (error)
 		goto out;
 
-skip_pseudoflavor_check:
+	/* During LOCALIO call to fh_verify will be called with a NULL rqstp */
+	if (rqstp)
+		svc_xprt_set_valid(rqstp->rq_xprt);
+
+check_permissions:
 	/* Finally, check access permissions. */
 	error = nfsd_permission(cred, exp, dentry, access);
 out:
@@ -462,7 +487,7 @@ static void _fh_update(struct svc_fh *fhp, struct svc_export *exp,
 {
 	if (dentry != exp->ex_path.dentry) {
 		struct fid *fid = (struct fid *)
-			(fhp->fh_handle.fh_fsid + fhp->fh_handle.fh_size/4 - 1);
+			(fh_fsid(&fhp->fh_handle) + fhp->fh_handle.fh_size/4 - 1);
 		int maxsize = (fhp->fh_maxsize - fhp->fh_handle.fh_size)/4;
 		int fh_flags = (exp->ex_flags & NFSEXP_NOSUBTREECHECK) ? 0 :
 				EXPORT_FH_CONNECTABLE;
@@ -613,7 +638,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 	fhp->fh_handle.fh_auth_type = 0;
 
 	mk_fsid(fhp->fh_handle.fh_fsid_type,
-		fhp->fh_handle.fh_fsid,
+		fh_fsid(&fhp->fh_handle),
 		ex_dev,
 		d_inode(exp->ex_path.dentry)->i_ino,
 		exp->ex_fsid, exp->ex_uuid);
@@ -767,7 +792,7 @@ char * SVCFH_fmt(struct svc_fh *fhp)
 	struct knfsd_fh *fh = &fhp->fh_handle;
 	static char buf[2+1+1+64*3+1];
 
-	if (fh->fh_size < 0 || fh->fh_size> 64)
+	if (fh->fh_size > 64)
 		return "bad-fh";
 	sprintf(buf, "%d: %*ph", fh->fh_size, fh->fh_size, fh->fh_raw);
 	return buf;

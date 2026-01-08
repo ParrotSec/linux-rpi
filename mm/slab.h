@@ -50,7 +50,7 @@ typedef union {
 
 /* Reuses the bits in struct page */
 struct slab {
-	unsigned long __page_flags;
+	unsigned long flags;
 
 	struct kmem_cache *slab_cache;
 	union {
@@ -99,7 +99,7 @@ struct slab {
 
 #define SLAB_MATCH(pg, sl)						\
 	static_assert(offsetof(struct page, pg) == offsetof(struct slab, sl))
-SLAB_MATCH(flags, __page_flags);
+SLAB_MATCH(flags, flags);
 SLAB_MATCH(compound_head, slab_cache);	/* Ensure bit 0 is clear */
 SLAB_MATCH(_refcount, __page_refcount);
 #ifdef CONFIG_MEMCG
@@ -128,7 +128,7 @@ static_assert(IS_ALIGNED(offsetof(struct slab, freelist), sizeof(freelist_aba_t)
 
 /**
  * slab_folio - The folio allocated for a slab
- * @slab: The slab.
+ * @s: The slab.
  *
  * Slabs are allocated as folios that contain the individual objects and are
  * using some fields in the first struct page of the folio - those fields are
@@ -159,37 +159,13 @@ static_assert(IS_ALIGNED(offsetof(struct slab, freelist), sizeof(freelist_aba_t)
 
 /**
  * slab_page - The first struct page allocated for a slab
- * @slab: The slab.
+ * @s: The slab.
  *
  * A convenience wrapper for converting slab to the first struct page of the
  * underlying folio, to communicate with code not yet converted to folio or
  * struct slab.
  */
 #define slab_page(s) folio_page(slab_folio(s), 0)
-
-/*
- * If network-based swap is enabled, sl*b must keep track of whether pages
- * were allocated from pfmemalloc reserves.
- */
-static inline bool slab_test_pfmemalloc(const struct slab *slab)
-{
-	return folio_test_active(slab_folio(slab));
-}
-
-static inline void slab_set_pfmemalloc(struct slab *slab)
-{
-	folio_set_active(slab_folio(slab));
-}
-
-static inline void slab_clear_pfmemalloc(struct slab *slab)
-{
-	folio_clear_active(slab_folio(slab));
-}
-
-static inline void __slab_clear_pfmemalloc(struct slab *slab)
-{
-	__folio_clear_active(slab_folio(slab));
-}
 
 static inline void *slab_address(const struct slab *slab)
 {
@@ -457,39 +433,17 @@ static inline bool is_kmalloc_normal(struct kmem_cache *s)
 	return !(s->flags & (SLAB_CACHE_DMA|SLAB_ACCOUNT|SLAB_RECLAIM_ACCOUNT));
 }
 
-/* Legal flag mask for kmem_cache_create(), for various configurations */
 #define SLAB_CORE_FLAGS (SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA | \
 			 SLAB_CACHE_DMA32 | SLAB_PANIC | \
-			 SLAB_TYPESAFE_BY_RCU | SLAB_DEBUG_OBJECTS )
+			 SLAB_TYPESAFE_BY_RCU | SLAB_DEBUG_OBJECTS | \
+			 SLAB_NOLEAKTRACE | SLAB_RECLAIM_ACCOUNT | \
+			 SLAB_TEMPORARY | SLAB_ACCOUNT | \
+			 SLAB_NO_USER_FLAGS | SLAB_KMALLOC | SLAB_NO_MERGE)
 
-#ifdef CONFIG_SLUB_DEBUG
 #define SLAB_DEBUG_FLAGS (SLAB_RED_ZONE | SLAB_POISON | SLAB_STORE_USER | \
 			  SLAB_TRACE | SLAB_CONSISTENCY_CHECKS)
-#else
-#define SLAB_DEBUG_FLAGS (0)
-#endif
 
-#define SLAB_CACHE_FLAGS (SLAB_NOLEAKTRACE | SLAB_RECLAIM_ACCOUNT | \
-			  SLAB_TEMPORARY | SLAB_ACCOUNT | \
-			  SLAB_NO_USER_FLAGS | SLAB_KMALLOC | SLAB_NO_MERGE)
-
-/* Common flags available with current configuration */
-#define CACHE_CREATE_MASK (SLAB_CORE_FLAGS | SLAB_DEBUG_FLAGS | SLAB_CACHE_FLAGS)
-
-/* Common flags permitted for kmem_cache_create */
-#define SLAB_FLAGS_PERMITTED (SLAB_CORE_FLAGS | \
-			      SLAB_RED_ZONE | \
-			      SLAB_POISON | \
-			      SLAB_STORE_USER | \
-			      SLAB_TRACE | \
-			      SLAB_CONSISTENCY_CHECKS | \
-			      SLAB_NOLEAKTRACE | \
-			      SLAB_RECLAIM_ACCOUNT | \
-			      SLAB_TEMPORARY | \
-			      SLAB_ACCOUNT | \
-			      SLAB_KMALLOC | \
-			      SLAB_NO_MERGE | \
-			      SLAB_NO_USER_FLAGS)
+#define SLAB_FLAGS_PERMITTED (SLAB_CORE_FLAGS | SLAB_DEBUG_FLAGS)
 
 bool __kmem_cache_empty(struct kmem_cache *);
 int __kmem_cache_shutdown(struct kmem_cache *);
@@ -572,8 +526,12 @@ static inline struct slabobj_ext *slab_obj_exts(struct slab *slab)
 	unsigned long obj_exts = READ_ONCE(slab->obj_exts);
 
 #ifdef CONFIG_MEMCG
-	VM_BUG_ON_PAGE(obj_exts && !(obj_exts & MEMCG_DATA_OBJEXTS),
-							slab_page(slab));
+	/*
+	 * obj_exts should be either NULL, a valid pointer with
+	 * MEMCG_DATA_OBJEXTS bit set or be equal to OBJEXTS_ALLOC_FAIL.
+	 */
+	VM_BUG_ON_PAGE(obj_exts && !(obj_exts & MEMCG_DATA_OBJEXTS) &&
+		       obj_exts != OBJEXTS_ALLOC_FAIL, slab_page(slab));
 	VM_BUG_ON_PAGE(obj_exts & MEMCG_DATA_KMEM, slab_page(slab));
 #endif
 	return (struct slabobj_ext *)(obj_exts & ~OBJEXTS_FLAGS_MASK);
@@ -603,6 +561,8 @@ bool __memcg_slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
 void __memcg_slab_free_hook(struct kmem_cache *s, struct slab *slab,
 			    void **p, int objects, struct slabobj_ext *obj_exts);
 #endif
+
+void kvfree_rcu_cb(struct rcu_head *head);
 
 size_t __ksize(const void *objp);
 
@@ -699,6 +659,12 @@ void __kmem_obj_info(struct kmem_obj_info *kpp, void *object, struct slab *slab)
 
 void __check_heap_object(const void *ptr, unsigned long n,
 			 const struct slab *slab, bool to_user);
+
+static inline bool slub_debug_orig_size(struct kmem_cache *s)
+{
+	return (kmem_cache_debug_flags(s, SLAB_STORE_USER) &&
+			(s->flags & SLAB_KMALLOC));
+}
 
 #ifdef CONFIG_SLUB_DEBUG
 void skip_orig_size_check(struct kmem_cache *s, const void *object);

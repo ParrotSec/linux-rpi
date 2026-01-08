@@ -15,11 +15,7 @@ CONFIG_SUN_OPENPROMFS=m
 ## file: arch/sparc/crypto/Kconfig
 ##
 CONFIG_CRYPTO_DES_SPARC64=m
-CONFIG_CRYPTO_CRC32C_SPARC64=m
 CONFIG_CRYPTO_MD5_SPARC64=m
-CONFIG_CRYPTO_SHA1_SPARC64=m
-CONFIG_CRYPTO_SHA256_SPARC64=m
-CONFIG_CRYPTO_SHA512_SPARC64=m
 CONFIG_CRYPTO_AES_SPARC64=m
 CONFIG_CRYPTO_CAMELLIA_SPARC64=m
 
@@ -47,9 +43,6 @@ CONFIG_PATA_LEGACY=m
 ## file: drivers/block/Kconfig
 ##
 CONFIG_BLK_DEV_FD=y
-CONFIG_CDROM_PKTCDVD=m
-CONFIG_CDROM_PKTCDVD_BUFFERS=8
-# CONFIG_CDROM_PKTCDVD_WCACHE is not set
 CONFIG_SUNVDC=m
 
 ##
@@ -72,26 +65,17 @@ CONFIG_HW_RANDOM_N2RNG=m
 # CONFIG_IPMI_HANDLER is not set
 
 ##
-## file: drivers/crypto/Kconfig
-##
-CONFIG_CRYPTO_DEV_NIAGARA2=m
-
-##
 ## file: drivers/gpu/drm/Kconfig
 ##
 CONFIG_DRM=m
-
-##
-## file: drivers/gpu/drm/i2c/Kconfig
-##
-CONFIG_DRM_I2C_CH7006=m
-CONFIG_DRM_I2C_SIL164=m
 
 ##
 ## file: drivers/gpu/drm/nouveau/Kconfig
 ##
 CONFIG_DRM_NOUVEAU=m
 # CONFIG_DRM_NOUVEAU_BACKLIGHT is not set
+CONFIG_DRM_NOUVEAU_CH7006=m
+CONFIG_DRM_NOUVEAU_SIL164=m
 
 ##
 ## file: drivers/gpu/drm/radeon/Kconfig
@@ -290,12 +274,6 @@ CONFIG_TULIP=m
 # CONFIG_TULIP_MMIO is not set
 CONFIG_WINBOND_840=m
 CONFIG_DM9102=m
-
-##
-## file: drivers/net/ethernet/dlink/Kconfig
-##
-CONFIG_SUNDANCE=m
-CONFIG_SUNDANCE_MMIO=y
 
 ##
 ## file: drivers/net/ethernet/intel/Kconfig
@@ -514,8 +492,8 @@ CONFIG_FB_MODE_HELPERS=y
 ##
 ## file: init/Kconfig
 ##
-CONFIG_SGETMASK_SYSCALL=y
 CONFIG_SYSFS_SYSCALL=y
+CONFIG_SGETMASK_SYSCALL=y
 
 ##
 ## file: lib/xz/Kconfig
@@ -548,6 +526,11 @@ CONFIG_SND_VIRMIDI=m
 # CONFIG_SND_MTPAV is not set
 # CONFIG_SND_SERIAL_U16550 is not set
 # CONFIG_SND_MPU401 is not set
+
+##
+## file: sound/hda/controllers/Kconfig
+##
+# CONFIG_SND_HDA_INTEL is not set
 
 ##
 ## file: sound/pci/Kconfig
@@ -589,11 +572,6 @@ CONFIG_SND_MAESTRO3=m
 # CONFIG_SND_VIA82XX_MODEM is not set
 # CONFIG_SND_VX222 is not set
 # CONFIG_SND_YMFPCI is not set
-
-##
-## file: sound/pci/hda/Kconfig
-##
-# CONFIG_SND_HDA_INTEL is not set
 
 ##
 ## file: sound/sparc/Kconfig

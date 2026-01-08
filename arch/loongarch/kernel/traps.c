@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/kexec.h>
 #include <linux/module.h>
+#include <linux/export.h>
 #include <linux/extable.h>
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
@@ -598,17 +599,24 @@ int is_valid_bugaddr(unsigned long addr)
 
 static void bug_handler(struct pt_regs *regs)
 {
+	if (user_mode(regs)) {
+		force_sig(SIGTRAP);
+		return;
+	}
+
 	switch (report_bug(regs->csr_era, regs)) {
 	case BUG_TRAP_TYPE_BUG:
-	case BUG_TRAP_TYPE_NONE:
-		die_if_kernel("Oops - BUG", regs);
-		force_sig(SIGTRAP);
+		die("Oops - BUG", regs);
 		break;
 
 	case BUG_TRAP_TYPE_WARN:
 		/* Skip the BUG instruction and continue */
 		regs->csr_era += LOONGARCH_INSN_SIZE;
 		break;
+
+	default:
+		if (!fixup_exception(regs))
+			die("Oops - BUG", regs);
 	}
 }
 
@@ -1123,8 +1131,8 @@ static void configure_exception_vector(void)
 	tlbrentry = (unsigned long)exception_handlers + 80*VECSIZE;
 
 	csr_write64(eentry, LOONGARCH_CSR_EENTRY);
-	csr_write64(eentry, LOONGARCH_CSR_MERRENTRY);
-	csr_write64(tlbrentry, LOONGARCH_CSR_TLBRENTRY);
+	csr_write64(__pa(eentry), LOONGARCH_CSR_MERRENTRY);
+	csr_write64(__pa(tlbrentry), LOONGARCH_CSR_TLBRENTRY);
 }
 
 void per_cpu_trap_init(int cpu)

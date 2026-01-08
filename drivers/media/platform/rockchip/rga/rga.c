@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
+ * Copyright (C) Rockchip Electronics Co., Ltd.
  * Author: Jacob Chen <jacob-chen@iotwrt.com>
  */
 
@@ -972,7 +972,7 @@ MODULE_DEVICE_TABLE(of, rockchip_rga_match);
 
 static struct platform_driver rga_pdrv = {
 	.probe = rga_probe,
-	.remove_new = rga_remove,
+	.remove = rga_remove,
 	.driver = {
 		.name = RGA_NAME,
 		.pm = &rga_pm,

@@ -14,6 +14,8 @@ use of $(ARCH) needs to be moved after this.
 
 [bwh: Updated for 5.3: include .kernelvariables from current directory
  rather than using undefined $(obj).]
+
+[carnil: Update for 6.13: Include .kernelvariables from $(objtree).]
 ---
 --- a/Makefile
 +++ b/Makefile
@@ -58,7 +60,7 @@ use of $(ARCH) needs to be moved after this.
  AFLAGS_KERNEL	=
  LDFLAGS_vmlinux =
  
-+-include .kernelvariables
++-include $(objtree)/.kernelvariables
 +
 +# Architecture as present in compile.h
 +UTS_MACHINE 	:= $(ARCH)

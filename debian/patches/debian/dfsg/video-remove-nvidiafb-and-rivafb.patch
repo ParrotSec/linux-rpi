@@ -15,14 +15,13 @@ probably discontinued 10 years ago.
 ---
 --- a/drivers/video/fbdev/Kconfig
 +++ b/drivers/video/fbdev/Kconfig
-@@ -654,100 +654,6 @@ config FB_ATMEL
+@@ -658,102 +658,6 @@ config FB_ATMEL
  	help
  	  This enables support for the AT91 LCD Controller.
  
 -config FB_NVIDIA
 -	tristate "nVidia Framebuffer Support"
--	depends on FB && PCI
--	select FB_BACKLIGHT if FB_NVIDIA_BACKLIGHT
+-	depends on FB && PCI && HAS_IOPORT
 -	select FB_CFB_FILLRECT
 -	select FB_CFB_COPYAREA
 -	select FB_CFB_IMAGEBLIT
@@ -62,6 +61,8 @@ probably discontinued 10 years ago.
 -config FB_NVIDIA_BACKLIGHT
 -	bool "Support for backlight control"
 -	depends on FB_NVIDIA
+-	depends on BACKLIGHT_CLASS_DEVICE=y || BACKLIGHT_CLASS_DEVICE=FB_NVIDIA
+-	select FB_BACKLIGHT
 -	default y
 -	help
 -	  Say Y here if you want to control the backlight of your display.
@@ -69,7 +70,6 @@ probably discontinued 10 years ago.
 -config FB_RIVA
 -	tristate "nVidia Riva support"
 -	depends on FB && PCI
--	select FB_BACKLIGHT if FB_RIVA_BACKLIGHT
 -	select FB_CFB_FILLRECT
 -	select FB_CFB_COPYAREA
 -	select FB_CFB_IMAGEBLIT
@@ -109,6 +109,8 @@ probably discontinued 10 years ago.
 -config FB_RIVA_BACKLIGHT
 -	bool "Support for backlight control"
 -	depends on FB_RIVA
+-	depends on BACKLIGHT_CLASS_DEVICE=y || BACKLIGHT_CLASS_DEVICE=FB_RIVA
+-	select FB_BACKLIGHT
 -	default y
 -	help
 -	  Say Y here if you want to control the backlight of your display.

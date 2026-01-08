@@ -83,6 +83,11 @@ struct tnum tnum_sub(struct tnum a, struct tnum b)
 	return TNUM(dv & ~mu, mu);
 }
 
+struct tnum tnum_neg(struct tnum a)
+{
+	return tnum_sub(TNUM(0, 0), a);
+}
+
 struct tnum tnum_and(struct tnum a, struct tnum b)
 {
 	u64 alpha, beta, v;
@@ -136,6 +141,14 @@ struct tnum tnum_mul(struct tnum a, struct tnum b)
 		b = tnum_lshift(b, 1);
 	}
 	return tnum_add(TNUM(acc_v, 0), acc_m);
+}
+
+bool tnum_overlap(struct tnum a, struct tnum b)
+{
+	u64 mu;
+
+	mu = ~a.mask & ~b.mask;
+	return (a.value & mu) == (b.value & mu);
 }
 
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has

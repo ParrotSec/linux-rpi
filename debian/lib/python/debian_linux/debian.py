@@ -175,34 +175,6 @@ class VersionLinux(Version):
         .+?
     )
 )?
-(?:
-    \.dfsg\.
-    (?P<dfsg>
-        \d+
-    )
-)?
-$
-    """, re.X)
-    _revision_re = re.compile(r"""
-\d+
-(\.\d+)?
-(?:
-    (?P<revision_experimental>
-        ~exp\d+
-    )
-    |
-    (?P<revision_security>
-        (?:[~+]deb\d+u\d+)+
-    )?
-    (?P<revision_backports>
-        ~bpo\d+\+\d+
-    )?
-    |
-    (?P<revision_other>
-        .+?
-    )
-)
-(?:\+b\d+)?
 $
     """, re.X)
 
@@ -214,20 +186,12 @@ $
         if up_match is None or rev_match is None:
             raise RuntimeError(u"Invalid debian linux version")
         d = up_match.groupdict()
-        self.linux_modifier = d['modifier']
         self.linux_version = d['version']
+        self.linux_version_update = self.linux_version + d['update']
         if d['modifier'] is not None:
-            assert not d['update']
-            self.linux_upstream = '-'.join((d['version'], d['modifier']))
+            self.linux_upstream_full = '-'.join((self.linux_version_update, d['modifier']))
         else:
-            self.linux_upstream = d['version']
-        self.linux_upstream_full = self.linux_upstream + d['update']
-        self.linux_dfsg = d['dfsg']
-        d = rev_match.groupdict()
-        self.linux_revision_experimental = d['revision_experimental'] and True
-        self.linux_revision_security = d['revision_security'] and True
-        self.linux_revision_backports = d['revision_backports'] and True
-        self.linux_revision_other = d['revision_other'] and True
+            self.linux_upstream_full = self.linux_version_update
 
 
 class PackageArchitecture(set[str]):
@@ -370,9 +334,8 @@ class PackageRelationEntry:
             ret.append(f'({self.operator} {self.version})')
         if self.arches:
             ret.append(f'[{self.arches}]')
-        if self.restrictions:
-            ret.append(str(self.restrictions))
-        return ' '.join(ret)
+        ret.append(str(self.restrictions))
+        return ' '.join(i for i in ret if i)
 
 
 class PackageRelationGroup(list[PackageRelationEntry]):
@@ -443,8 +406,6 @@ class PackageBuildprofileEntry:
     pos: set[str] = dataclasses.field(default_factory=set)
     neg: set[str] = dataclasses.field(default_factory=set)
 
-    __re = re.compile(r'^<(?P<profiles>[a-z0-9. !-]+)>$')
-
     def copy(self) -> Self:
         return self.__class__(
             pos=set(self.pos),
@@ -453,17 +414,15 @@ class PackageBuildprofileEntry:
 
     @classmethod
     def parse(cls, v: str, /) -> Self:
-        match = cls.__re.match(v)
-        if not match:
-            raise RuntimeError('Unable to parse build profile "%s"' % v)
-
         ret = cls()
-        for i in re.split(r' ', match.group('profiles')):
+        for i in re.split(r' ', v):
             if i:
                 if i[0] == '!':
                     ret.neg.add(i[1:])
                 else:
                     ret.pos.add(i)
+        if ret.pos & ret.neg:
+            raise ValueError
         return ret
 
     def __eq__(self, other: object, /) -> bool:
@@ -494,7 +453,7 @@ class PackageBuildprofileEntry:
         return self.pos <= other.pos and self.neg >= other.neg
     __ge__ = issuperset
 
-    def update(self, other: Self, /) -> None:
+    def update(self, other: Self, /) -> Self:
         '''
         Update the build profiles, adding entries from other, merging if possible.
 
@@ -502,20 +461,40 @@ class PackageBuildprofileEntry:
         All others remain if they are used on both sides.
         '''
         diff = (self.pos & other.neg) | (self.neg & other.pos)
-        self.pos &= other.pos - diff
-        self.neg &= other.neg - diff
+        self.pos &= other.pos
+        self.neg &= other.neg
+        self.pos -= diff
+        self.neg -= diff
+        return self
     __ior__ = update
 
+    def intersection_update(self, other: Self, /) -> Self:
+        '''
+        Update the build profiles, creating an intersection of both.
+
+        Negating entries (profile vs !profile) are completely removed.
+        All others remain.
+        '''
+        diff = (self.pos & other.neg) | (self.neg & other.pos)
+        self.pos |= other.pos
+        self.neg |= other.neg
+        self.pos -= diff
+        self.neg -= diff
+        return self
+    __iand__ = intersection_update
+
+    def __len__(self) -> int:
+        return len(self.pos) + len(self.neg)
+
     def __str__(self) -> str:
-        s = ' '.join(itertools.chain(
+        return ' '.join(itertools.chain(
             sorted(self.pos),
             (f'!{i}' for i in sorted(self.neg)),
         ))
-        return f'<{s}>'
 
 
 class PackageBuildprofile(list[PackageBuildprofileEntry]):
-    __re = re.compile(r' *(<[^>]+>)(?: +|$)')
+    __re = re.compile(r' *<(?P<entry>[a-z0-9. !-]+)>(?: +|$)')
 
     def copy(self) -> Self:
         return self.__class__(i.copy() for i in self)
@@ -524,10 +503,10 @@ class PackageBuildprofile(list[PackageBuildprofileEntry]):
     def parse(cls, v: str, /) -> Self:
         ret = cls()
         for match in cls.__re.finditer(v):
-            ret.append(PackageBuildprofileEntry.parse(match.group(1)))
+            ret.append(PackageBuildprofileEntry.parse(match.group('entry')))
         return ret
 
-    def update(self, v: Self, /) -> None:
+    def update(self, v: Self, /) -> Self:
         for i in v:
             for j in self:
                 if not j.isdisjoint(i):
@@ -535,10 +514,23 @@ class PackageBuildprofile(list[PackageBuildprofileEntry]):
                     break
             else:
                 self.append(i)
+        return self
     __ior__ = update
 
+    def intersection_update(self, v: Self, /) -> Self:
+        if len(v) > 1:
+            raise ValueError
+        for i in v:
+            if self:
+                for j in self:
+                    j.intersection_update(i)
+            else:
+                self.append(i)
+        return self
+    __iand__ = intersection_update
+
     def __str__(self) -> str:
-        return ' '.join(str(i) for i in self)
+        return ' '.join(f'<{str(i)}>' for i in self if i)
 
 
 @dataclasses.dataclass

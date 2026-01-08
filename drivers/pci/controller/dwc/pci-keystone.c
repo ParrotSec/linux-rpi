@@ -492,13 +492,12 @@ static struct pci_ops ks_pcie_ops = {
  * @pci: A pointer to the dw_pcie structure which holds the DesignWare PCIe host
  *	 controller driver information.
  */
-static int ks_pcie_link_up(struct dw_pcie *pci)
+static bool ks_pcie_link_up(struct dw_pcie *pci)
 {
 	u32 val;
 
 	val = dw_pcie_readl_dbi(pci, PCIE_PORT_DEBUG0);
-	val &= PORT_LOGIC_LTSSM_STATE_MASK;
-	return (val == PORT_LOGIC_LTSSM_STATE_L0);
+	return (val & PORT_LOGIC_LTSSM_STATE_MASK) == PORT_LOGIC_LTSSM_STATE_L0;
 }
 
 static void ks_pcie_stop_link(struct dw_pcie *pci)
@@ -761,7 +760,7 @@ static int ks_pcie_config_intx_irq(struct keystone_pcie *ks_pcie)
 						 ks_pcie);
 	}
 
-	intx_irq_domain = irq_domain_add_linear(intc_np, PCI_NUM_INTX,
+	intx_irq_domain = irq_domain_create_linear(of_fwnode_handle(intc_np), PCI_NUM_INTX,
 					&ks_pcie_intx_irq_domain_ops, NULL);
 	if (!intx_irq_domain) {
 		dev_err(dev, "Failed to add irq domain for INTX irqs\n");
@@ -966,11 +965,11 @@ static const struct pci_epc_features ks_pcie_am654_epc_features = {
 	.msix_capable = true,
 	.bar[BAR_0] = { .type = BAR_RESERVED, },
 	.bar[BAR_1] = { .type = BAR_RESERVED, },
-	.bar[BAR_2] = { .type = BAR_FIXED, .fixed_size = SZ_1M, },
+	.bar[BAR_2] = { .type = BAR_RESIZABLE, },
 	.bar[BAR_3] = { .type = BAR_FIXED, .fixed_size = SZ_64K, },
 	.bar[BAR_4] = { .type = BAR_FIXED, .fixed_size = 256, },
-	.bar[BAR_5] = { .type = BAR_FIXED, .fixed_size = SZ_1M, },
-	.align = SZ_1M,
+	.bar[BAR_5] = { .type = BAR_RESIZABLE, },
+	.align = SZ_64K,
 };
 
 static const struct pci_epc_features*
@@ -1202,8 +1201,8 @@ static int ks_pcie_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	ret = request_irq(irq, ks_pcie_err_irq_handler, IRQF_SHARED,
-			  "ks-pcie-error-irq", ks_pcie);
+	ret = devm_request_irq(dev, irq, ks_pcie_err_irq_handler, IRQF_SHARED,
+			       "ks-pcie-error-irq", ks_pcie);
 	if (ret < 0) {
 		dev_err(dev, "failed to request error IRQ %d\n",
 			irq);
@@ -1339,6 +1338,8 @@ static int ks_pcie_probe(struct platform_device *pdev)
 		break;
 	default:
 		dev_err(dev, "INVALID device type %d\n", mode);
+		ret = -EINVAL;
+		goto err_get_sync;
 	}
 
 	ks_pcie_enable_error_irq(ks_pcie);
@@ -1375,7 +1376,7 @@ static void ks_pcie_remove(struct platform_device *pdev)
 
 static struct platform_driver ks_pcie_driver = {
 	.probe  = ks_pcie_probe,
-	.remove_new = ks_pcie_remove,
+	.remove = ks_pcie_remove,
 	.driver = {
 		.name	= "keystone-pcie",
 		.of_match_table = ks_pcie_of_match,

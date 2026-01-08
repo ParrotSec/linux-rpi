@@ -841,8 +841,6 @@ static int qmc_audio_dai_parse(struct qmc_audio *qmc_audio, struct device_node *
 				qmc_dai->id, i, ret);
 			return ret;
 		}
-		dev_info(qmc_audio->dev, "dai %d QMC channel %d mode %d, nb_tx_ts %u, nb_rx_ts %u\n",
-			 qmc_dai->id, i, info.mode, info.nb_tx_ts, info.nb_rx_ts);
 
 		if (info.mode != QMC_TRANSPARENT) {
 			dev_err(qmc_audio->dev, "dai %d QMC chan %d mode %d is not QMC_TRANSPARENT\n",
@@ -897,7 +895,7 @@ static int qmc_audio_dai_parse(struct qmc_audio *qmc_audio, struct device_node *
 		qmc_soc_dai_driver->playback.channels_max = count > 1 ? count : nb_tx_ts;
 	}
 	qmc_soc_dai_driver->playback.formats = qmc_audio_formats(nb_tx_ts,
-								 count > 1 ? true : false);
+								 count > 1);
 
 	qmc_soc_dai_driver->capture.channels_min = 0;
 	qmc_soc_dai_driver->capture.channels_max = 0;
@@ -906,7 +904,7 @@ static int qmc_audio_dai_parse(struct qmc_audio *qmc_audio, struct device_node *
 		qmc_soc_dai_driver->capture.channels_max = count > 1 ? count : nb_rx_ts;
 	}
 	qmc_soc_dai_driver->capture.formats = qmc_audio_formats(nb_rx_ts,
-								count > 1 ? true : false);
+								count > 1);
 
 	qmc_soc_dai_driver->playback.rates = snd_pcm_rate_to_rate_bit(tx_fs_rate);
 	qmc_soc_dai_driver->playback.rate_min = tx_fs_rate;

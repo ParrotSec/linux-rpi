@@ -101,9 +101,6 @@ CONFIG_ATM_HE_USE_SUNI=y
 ## file: drivers/block/Kconfig
 ##
 CONFIG_BLK_DEV_FD=m
-CONFIG_CDROM_PKTCDVD=m
-CONFIG_CDROM_PKTCDVD_BUFFERS=8
-CONFIG_CDROM_PKTCDVD_WCACHE=y
 
 ##
 ## file: drivers/bluetooth/Kconfig
@@ -160,16 +157,12 @@ CONFIG_EISA_NAMES=y
 CONFIG_DRM=m
 
 ##
-## file: drivers/gpu/drm/i2c/Kconfig
-##
-CONFIG_DRM_I2C_CH7006=m
-CONFIG_DRM_I2C_SIL164=m
-
-##
 ## file: drivers/gpu/drm/nouveau/Kconfig
 ##
 CONFIG_DRM_NOUVEAU=m
 # CONFIG_DRM_NOUVEAU_BACKLIGHT is not set
+CONFIG_DRM_NOUVEAU_CH7006=m
+CONFIG_DRM_NOUVEAU_SIL164=m
 
 ##
 ## file: drivers/gpu/drm/radeon/Kconfig
@@ -230,7 +223,6 @@ CONFIG_I2C_ALI1535=m
 CONFIG_I2C_ALI1563=m
 CONFIG_I2C_ALI15X3=m
 CONFIG_I2C_AMD756=m
-# CONFIG_I2C_AMD756_S4882 is not set
 CONFIG_I2C_AMD8111=m
 CONFIG_I2C_I801=m
 CONFIG_I2C_PIIX4=m
@@ -417,7 +409,6 @@ CONFIG_MTD_REDBOOT_PARTS_READONLY=y
 ## file: drivers/net/Kconfig
 ##
 CONFIG_NET_FC=y
-CONFIG_NET_SB1000=m
 
 ##
 ## file: drivers/net/arcnet/Kconfig
@@ -489,12 +480,6 @@ CONFIG_TULIP=m
 CONFIG_WINBOND_840=m
 CONFIG_DM9102=m
 CONFIG_PCMCIA_XIRCOM=m
-
-##
-## file: drivers/net/ethernet/dlink/Kconfig
-##
-CONFIG_SUNDANCE=m
-# CONFIG_SUNDANCE_MMIO is not set
 
 ##
 ## file: drivers/net/ethernet/fujitsu/Kconfig
@@ -783,16 +768,20 @@ CONFIG_USBPCWATCHDOG=m
 ##
 ## file: init/Kconfig
 ##
-CONFIG_USELIB=y
 #. TODO
 # CONFIG_AUDIT is not set
 CONFIG_SYSFS_SYSCALL=y
 
 ##
-## file: lib/Kconfig
+## file: lib/Kconfig.ubsan
 ##
-#. TODO
-CONFIG_CRC32=m
+# CONFIG_UBSAN is not set
+
+##
+## file: mm/Kconfig
+##
+#. Enabling compaction currently leads to memory corruption on alpha
+# CONFIG_COMPACTION is not set
 
 ##
 ## file: net/lapb/Kconfig
@@ -807,6 +796,11 @@ CONFIG_SND_VIRMIDI=m
 CONFIG_SND_MTPAV=m
 CONFIG_SND_SERIAL_U16550=m
 CONFIG_SND_MPU401=m
+
+##
+## file: sound/hda/controllers/Kconfig
+##
+CONFIG_SND_HDA_INTEL=m
 
 ##
 ## file: sound/isa/Kconfig
@@ -882,8 +876,3 @@ CONFIG_SND_VIA82XX=m
 CONFIG_SND_VIA82XX_MODEM=m
 CONFIG_SND_VX222=m
 CONFIG_SND_YMFPCI=m
-
-##
-## file: sound/pci/hda/Kconfig
-##
-CONFIG_SND_HDA_INTEL=m

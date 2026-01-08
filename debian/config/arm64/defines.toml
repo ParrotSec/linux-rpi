@@ -11,8 +11,6 @@ installer = true
 name = 'cloud-arm64'
 [flavour.build]
 config = ['config.cloud']
-[flavour.defs]
-is_quick = true
 [flavour.description]
 hardware = 'arm64 cloud'
 hardware_long = 'cloud platforms supporting arm64 virtual machines'
@@ -24,14 +22,23 @@ config = ['arm64/config-page-16k']
 [flavour.description]
 hardware = '64-bit ARMv8 machines with 16k pages'
 
-[[featureset]]
-name = 'none'
+[[flavour]]
+name = 'rt-arm64'
+[flavour.build]
+config = ['config.rt']
+[flavour.description]
+hardware = '64-bit ARMv8 machines'
+parts = ['rt']
+
+[[flavour]]
+name = 'test'
+[flavour.build]
+config = ['config.test', 'arm64/config.test']
+[flavour.defs]
+is_test = true
 
 [[featureset]]
-name = 'rt'
-# Override available flavours in rt featureset
-[[featureset.flavour]]
-name = 'arm64'
+name = 'none'
 
 [build]
 compiler_gnutype_compat = 'arm-linux-gnueabihf'

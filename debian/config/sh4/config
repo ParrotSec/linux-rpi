@@ -28,7 +28,7 @@ CONFIG_CACHE_WRITEBACK=y
 ##
 ## file: crypto/Kconfig
 ##
-CONFIG_CRYPTO_MANAGER_DISABLE_TESTS=y
+# CONFIG_CRYPTO_SELFTESTS is not set
 
 ##
 ## file: drivers/cpufreq/Kconfig
@@ -45,7 +45,7 @@ CONFIG_SH_CPU_FREQ=y
 ## file: init/Kconfig
 ##
 ## choice: Kernel compression mode
-CONFIG_KERNEL_XZ=y
+CONFIG_KERNEL_GZIP=y
 ## end choice
 ## choice: Compiler optimization level
 CONFIG_CC_OPTIMIZE_FOR_SIZE=y
@@ -67,3 +67,8 @@ CONFIG_KEXEC=y
 ## file: kernel/irq/Kconfig
 ##
 CONFIG_SPARSE_IRQ=y
+
+##
+## file: lib/Kconfig.ubsan
+##
+# CONFIG_UBSAN is not set

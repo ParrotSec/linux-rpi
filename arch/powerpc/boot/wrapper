@@ -269,11 +269,6 @@ pseries)
     fi
     make_space=n
     ;;
-maple)
-    platformo="$object/of.o $object/epapr.o"
-    link_address='0x400000'
-    make_space=n
-    ;;
 pmac|chrp)
     platformo="$object/of.o $object/epapr.o"
     make_space=n
@@ -515,7 +510,7 @@ fi
 
 # post-processing needed for some platforms
 case "$platform" in
-pseries|chrp|maple)
+pseries|chrp)
     $objbin/addnote "$ofile"
     ;;
 coff)

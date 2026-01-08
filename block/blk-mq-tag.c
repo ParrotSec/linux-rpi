@@ -190,8 +190,7 @@ unsigned int blk_mq_get_tag(struct blk_mq_alloc_data *data)
 		sbitmap_finish_wait(bt, ws, &wait);
 
 		data->ctx = blk_mq_get_ctx(data->q);
-		data->hctx = blk_mq_map_queue(data->q, data->cmd_flags,
-						data->ctx);
+		data->hctx = blk_mq_map_queue(data->cmd_flags, data->ctx);
 		tags = blk_mq_tags_from_data(data);
 		if (data->flags & BLK_MQ_REQ_RESERVED)
 			bt = &tags->breserved_tags;
@@ -544,30 +543,11 @@ static int bt_alloc(struct sbitmap_queue *bt, unsigned int depth,
 				       node);
 }
 
-int blk_mq_init_bitmaps(struct sbitmap_queue *bitmap_tags,
-			struct sbitmap_queue *breserved_tags,
-			unsigned int queue_depth, unsigned int reserved,
-			int node, int alloc_policy)
-{
-	unsigned int depth = queue_depth - reserved;
-	bool round_robin = alloc_policy == BLK_TAG_ALLOC_RR;
-
-	if (bt_alloc(bitmap_tags, depth, round_robin, node))
-		return -ENOMEM;
-	if (bt_alloc(breserved_tags, reserved, round_robin, node))
-		goto free_bitmap_tags;
-
-	return 0;
-
-free_bitmap_tags:
-	sbitmap_queue_free(bitmap_tags);
-	return -ENOMEM;
-}
-
 struct blk_mq_tags *blk_mq_init_tags(unsigned int total_tags,
-				     unsigned int reserved_tags,
-				     int node, int alloc_policy)
+		unsigned int reserved_tags, unsigned int flags, int node)
 {
+	unsigned int depth = total_tags - reserved_tags;
+	bool round_robin = flags & BLK_MQ_F_TAG_RR;
 	struct blk_mq_tags *tags;
 
 	if (total_tags > BLK_MQ_TAG_MAX) {
@@ -582,14 +562,18 @@ struct blk_mq_tags *blk_mq_init_tags(unsigned int total_tags,
 	tags->nr_tags = total_tags;
 	tags->nr_reserved_tags = reserved_tags;
 	spin_lock_init(&tags->lock);
+	if (bt_alloc(&tags->bitmap_tags, depth, round_robin, node))
+		goto out_free_tags;
+	if (bt_alloc(&tags->breserved_tags, reserved_tags, round_robin, node))
+		goto out_free_bitmap_tags;
 
-	if (blk_mq_init_bitmaps(&tags->bitmap_tags, &tags->breserved_tags,
-				total_tags, reserved_tags, node,
-				alloc_policy) < 0) {
-		kfree(tags);
-		return NULL;
-	}
 	return tags;
+
+out_free_bitmap_tags:
+	sbitmap_queue_free(&tags->bitmap_tags);
+out_free_tags:
+	kfree(tags);
+	return NULL;
 }
 
 void blk_mq_free_tags(struct blk_mq_tags *tags)
@@ -600,13 +584,9 @@ void blk_mq_free_tags(struct blk_mq_tags *tags)
 }
 
 int blk_mq_tag_update_depth(struct blk_mq_hw_ctx *hctx,
-			    struct blk_mq_tags **tagsptr, unsigned int tdepth,
-			    bool can_grow)
+			    struct blk_mq_tags **tagsptr, unsigned int tdepth)
 {
 	struct blk_mq_tags *tags = *tagsptr;
-
-	if (tdepth <= tags->nr_reserved_tags)
-		return -EINVAL;
 
 	/*
 	 * If we are allowed to grow beyond the original size, allocate
@@ -616,28 +596,12 @@ int blk_mq_tag_update_depth(struct blk_mq_hw_ctx *hctx,
 		struct blk_mq_tag_set *set = hctx->queue->tag_set;
 		struct blk_mq_tags *new;
 
-		if (!can_grow)
-			return -EINVAL;
-
-		/*
-		 * We need some sort of upper limit, set it high enough that
-		 * no valid use cases should require more.
-		 */
-		if (tdepth > MAX_SCHED_RQ)
-			return -EINVAL;
-
-		/*
-		 * Only the sbitmap needs resizing since we allocated the max
-		 * initially.
-		 */
-		if (blk_mq_is_shared_tags(set->flags))
-			return 0;
-
 		new = blk_mq_alloc_map_and_rqs(set, hctx->queue_num, tdepth);
 		if (!new)
 			return -ENOMEM;
 
 		blk_mq_free_map_and_rqs(set, *tagsptr, hctx->queue_num);
+		hctx->queue->elevator->et->tags[hctx->queue_num] = new;
 		*tagsptr = new;
 	} else {
 		/*
@@ -658,10 +622,11 @@ void blk_mq_tag_resize_shared_tags(struct blk_mq_tag_set *set, unsigned int size
 	sbitmap_queue_resize(&tags->bitmap_tags, size - set->reserved_tags);
 }
 
-void blk_mq_tag_update_sched_shared_tags(struct request_queue *q)
+void blk_mq_tag_update_sched_shared_tags(struct request_queue *q,
+					 unsigned int nr)
 {
 	sbitmap_queue_resize(&q->sched_shared_tags->bitmap_tags,
-			     q->nr_requests - q->tag_set->reserved_tags);
+			     nr - q->tag_set->reserved_tags);
 }
 
 /**

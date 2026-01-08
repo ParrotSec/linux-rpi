@@ -793,8 +793,8 @@ static int setup_crypto(struct ceph_connection *con,
 	return 0;  /* auth_x, secure mode */
 }
 
-static int hmac_sha256(struct ceph_connection *con, const struct kvec *kvecs,
-		       int kvec_cnt, u8 *hmac)
+static int ceph_hmac_sha256(struct ceph_connection *con,
+			    const struct kvec *kvecs, int kvec_cnt, u8 *hmac)
 {
 	SHASH_DESC_ON_STACK(desc, con->v2.hmac_tfm);  /* tfm arg is ignored */
 	int ret;
@@ -1087,13 +1087,16 @@ static int decrypt_control_remainder(struct ceph_connection *con)
 static int process_v2_sparse_read(struct ceph_connection *con,
 				  struct page **pages, int spos)
 {
-	struct ceph_msg_data_cursor *cursor = &con->v2.in_cursor;
+	struct ceph_msg_data_cursor cursor;
 	int ret;
+
+	ceph_msg_data_cursor_init(&cursor, con->in_msg,
+				  con->in_msg->sparse_read_total);
 
 	for (;;) {
 		char *buf = NULL;
 
-		ret = con->ops->sparse_read(con, cursor, &buf);
+		ret = con->ops->sparse_read(con, &cursor, &buf);
 		if (ret <= 0)
 			return ret;
 
@@ -1111,11 +1114,11 @@ static int process_v2_sparse_read(struct ceph_connection *con,
 			} else {
 				struct bio_vec bv;
 
-				get_bvec_at(cursor, &bv);
+				get_bvec_at(&cursor, &bv);
 				len = min_t(int, len, bv.bv_len);
 				memcpy_page(bv.bv_page, bv.bv_offset,
 					    spage, soff, len);
-				ceph_msg_data_advance(cursor, len);
+				ceph_msg_data_advance(&cursor, len);
 			}
 			spos += len;
 			ret -= len;
@@ -1462,8 +1465,8 @@ static int prepare_auth_signature(struct ceph_connection *con)
 	if (!buf)
 		return -ENOMEM;
 
-	ret = hmac_sha256(con, con->v2.in_sign_kvecs, con->v2.in_sign_kvec_cnt,
-			  CTRL_BODY(buf));
+	ret = ceph_hmac_sha256(con, con->v2.in_sign_kvecs,
+			       con->v2.in_sign_kvec_cnt, CTRL_BODY(buf));
 	if (ret)
 		return ret;
 
@@ -2460,8 +2463,8 @@ static int process_auth_signature(struct ceph_connection *con,
 		return -EINVAL;
 	}
 
-	ret = hmac_sha256(con, con->v2.out_sign_kvecs,
-			  con->v2.out_sign_kvec_cnt, hmac);
+	ret = ceph_hmac_sha256(con, con->v2.out_sign_kvecs,
+			       con->v2.out_sign_kvec_cnt, hmac);
 	if (ret)
 		return ret;
 

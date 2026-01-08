@@ -31,6 +31,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <crypto/hash.h>
+#include <crypto/utils.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/ip.h>
@@ -113,14 +114,6 @@ static void sctp_control_set_owner_w(struct sctp_chunk *chunk)
 	skb->sk = asoc ? asoc->base.sk : NULL;
 	skb_shinfo(skb)->destructor_arg = chunk;
 	skb->destructor = sctp_control_release_owner;
-}
-
-/* What was the inbound interface for this chunk? */
-int sctp_chunk_iif(const struct sctp_chunk *chunk)
-{
-	struct sk_buff *skb = chunk->skb;
-
-	return SCTP_INPUT_CB(skb)->af->skb_iif(skb);
 }
 
 /* RFC 2960 3.3.2 Initiation (INIT) (1)
@@ -1796,7 +1789,7 @@ struct sctp_association *sctp_unpack_cookie(
 		}
 	}
 
-	if (memcmp(digest, cookie->signature, SCTP_SIGNATURE_SIZE)) {
+	if (crypto_memneq(digest, cookie->signature, SCTP_SIGNATURE_SIZE)) {
 		*error = -SCTP_IERROR_BAD_SIG;
 		goto fail;
 	}

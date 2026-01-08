@@ -66,9 +66,7 @@ static inline bool queue_pm_work(struct work_struct *work)
 
 extern int pm_generic_runtime_suspend(struct device *dev);
 extern int pm_generic_runtime_resume(struct device *dev);
-extern bool pm_runtime_need_not_resume(struct device *dev);
 extern int pm_runtime_force_suspend(struct device *dev);
-extern int pm_runtime_force_resume(struct device *dev);
 
 extern int __pm_runtime_idle(struct device *dev, int rpmflags);
 extern int __pm_runtime_suspend(struct device *dev, int rpmflags);
@@ -78,6 +76,8 @@ extern int pm_runtime_get_if_in_use(struct device *dev);
 extern int pm_schedule_suspend(struct device *dev, unsigned int delay);
 extern int __pm_runtime_set_status(struct device *dev, unsigned int status);
 extern int pm_runtime_barrier(struct device *dev);
+extern bool pm_runtime_block_if_disabled(struct device *dev);
+extern void pm_runtime_unblock(struct device *dev);
 extern void pm_runtime_enable(struct device *dev);
 extern void __pm_runtime_disable(struct device *dev, bool check_resume);
 extern void pm_runtime_allow(struct device *dev);
@@ -94,7 +94,9 @@ extern void pm_runtime_new_link(struct device *dev);
 extern void pm_runtime_drop_link(struct device_link *link);
 extern void pm_runtime_release_supplier(struct device_link *link);
 
+int devm_pm_runtime_set_active_enabled(struct device *dev);
 extern int devm_pm_runtime_enable(struct device *dev);
+int devm_pm_runtime_get_noresume(struct device *dev);
 
 /**
  * pm_suspend_ignore_children - Set runtime PM behavior regarding children.
@@ -198,6 +200,17 @@ static inline bool pm_runtime_enabled(struct device *dev)
 }
 
 /**
+ * pm_runtime_blocked - Check if runtime PM enabling is blocked.
+ * @dev: Target device.
+ *
+ * Do not call this function outside system suspend/resume code paths.
+ */
+static inline bool pm_runtime_blocked(struct device *dev)
+{
+	return dev->power.last_status == RPM_BLOCKED;
+}
+
+/**
  * pm_runtime_has_no_callbacks - Check if runtime PM callbacks may be present.
  * @dev: Target device.
  *
@@ -242,9 +255,7 @@ static inline bool queue_pm_work(struct work_struct *work) { return false; }
 
 static inline int pm_generic_runtime_suspend(struct device *dev) { return 0; }
 static inline int pm_generic_runtime_resume(struct device *dev) { return 0; }
-static inline bool pm_runtime_need_not_resume(struct device *dev) {return true; }
 static inline int pm_runtime_force_suspend(struct device *dev) { return 0; }
-static inline int pm_runtime_force_resume(struct device *dev) { return 0; }
 
 static inline int __pm_runtime_idle(struct device *dev, int rpmflags)
 {
@@ -273,12 +284,17 @@ static inline int pm_runtime_get_if_active(struct device *dev)
 static inline int __pm_runtime_set_status(struct device *dev,
 					    unsigned int status) { return 0; }
 static inline int pm_runtime_barrier(struct device *dev) { return 0; }
+static inline bool pm_runtime_block_if_disabled(struct device *dev) { return true; }
+static inline void pm_runtime_unblock(struct device *dev) {}
 static inline void pm_runtime_enable(struct device *dev) {}
 static inline void __pm_runtime_disable(struct device *dev, bool c) {}
+static inline bool pm_runtime_blocked(struct device *dev) { return true; }
 static inline void pm_runtime_allow(struct device *dev) {}
 static inline void pm_runtime_forbid(struct device *dev) {}
 
+static inline int devm_pm_runtime_set_active_enabled(struct device *dev) { return 0; }
 static inline int devm_pm_runtime_enable(struct device *dev) { return 0; }
+static inline int devm_pm_runtime_get_noresume(struct device *dev) { return 0; }
 
 static inline void pm_suspend_ignore_children(struct device *dev, bool enable) {}
 static inline void pm_runtime_get_noresume(struct device *dev) {}
@@ -310,6 +326,18 @@ static inline void pm_runtime_release_supplier(struct device_link *link) {}
 
 #endif /* !CONFIG_PM */
 
+#ifdef CONFIG_PM_SLEEP
+
+bool pm_runtime_need_not_resume(struct device *dev);
+int pm_runtime_force_resume(struct device *dev);
+
+#else /* !CONFIG_PM_SLEEP */
+
+static inline bool pm_runtime_need_not_resume(struct device *dev) {return true; }
+static inline int pm_runtime_force_resume(struct device *dev) { return -ENXIO; }
+
+#endif /* CONFIG_PM_SLEEP */
+
 /**
  * pm_runtime_idle - Conditionally set up autosuspend of a device or suspend it.
  * @dev: Target device.
@@ -317,6 +345,19 @@ static inline void pm_runtime_release_supplier(struct device_link *link) {}
  * Invoke the "idle check" callback of @dev and, depending on its return value,
  * set up autosuspend of @dev or suspend it (depending on whether or not
  * autosuspend has been enabled for it).
+ *
+ * Return:
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter non-zero, Runtime PM status change
+ *            ongoing or device not in %RPM_ACTIVE state.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM idle and suspend callbacks.
  */
 static inline int pm_runtime_idle(struct device *dev)
 {
@@ -326,6 +367,19 @@ static inline int pm_runtime_idle(struct device *dev)
 /**
  * pm_runtime_suspend - Suspend a device synchronously.
  * @dev: Target device.
+ *
+ * Return:
+ * * 1: Success; device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter non-zero or Runtime PM status change
+ *            ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM suspend callbacks.
  */
 static inline int pm_runtime_suspend(struct device *dev)
 {
@@ -333,14 +387,30 @@ static inline int pm_runtime_suspend(struct device *dev)
 }
 
 /**
- * pm_runtime_autosuspend - Set up autosuspend of a device or suspend it.
+ * pm_runtime_autosuspend - Update the last access time and set up autosuspend
+ * of a device.
  * @dev: Target device.
  *
- * Set up autosuspend of @dev or suspend it (depending on whether or not
- * autosuspend is enabled for it) without engaging its "idle check" callback.
+ * First update the last access time, then set up autosuspend of @dev or suspend
+ * it (depending on whether or not autosuspend is enabled for it) without
+ * engaging its "idle check" callback.
+ *
+ * Return:
+ * * 1: Success; device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter non-zero or Runtime PM status change
+ *            ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM suspend callbacks.
  */
 static inline int pm_runtime_autosuspend(struct device *dev)
 {
+	pm_runtime_mark_last_busy(dev);
 	return __pm_runtime_suspend(dev, RPM_AUTO);
 }
 
@@ -359,6 +429,17 @@ static inline int pm_runtime_resume(struct device *dev)
  *
  * Queue up a work item to run an equivalent of pm_runtime_idle() for @dev
  * asynchronously.
+ *
+ * Return:
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter non-zero, Runtime PM status change
+ *            ongoing or device not in %RPM_ACTIVE state.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
  */
 static inline int pm_request_idle(struct device *dev)
 {
@@ -375,14 +456,28 @@ static inline int pm_request_resume(struct device *dev)
 }
 
 /**
- * pm_request_autosuspend - Queue up autosuspend of a device.
+ * pm_request_autosuspend - Update the last access time and queue up autosuspend
+ * of a device.
  * @dev: Target device.
  *
- * Queue up a work item to run an equivalent pm_runtime_autosuspend() for @dev
- * asynchronously.
+ * Update the last access time of a device and queue up a work item to run an
+ * equivalent pm_runtime_autosuspend() for @dev asynchronously.
+ *
+ * Return:
+ * * 1: Success; device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter non-zero or Runtime PM status change
+ *            ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
  */
 static inline int pm_request_autosuspend(struct device *dev)
 {
+	pm_runtime_mark_last_busy(dev);
 	return __pm_runtime_suspend(dev, RPM_ASYNC | RPM_AUTO);
 }
 
@@ -444,11 +539,25 @@ static inline int pm_runtime_resume_and_get(struct device *dev)
  *
  * Decrement the runtime PM usage counter of @dev and if it turns out to be
  * equal to 0, queue up a work item for @dev like in pm_request_idle().
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
  */
 static inline int pm_runtime_put(struct device *dev)
 {
 	return __pm_runtime_idle(dev, RPM_GET_PUT | RPM_ASYNC);
 }
+
+DEFINE_FREE(pm_runtime_put, struct device *, if (_T) pm_runtime_put(_T))
 
 /**
  * __pm_runtime_put_autosuspend - Drop device usage counter and queue autosuspend if 0.
@@ -456,6 +565,18 @@ static inline int pm_runtime_put(struct device *dev)
  *
  * Decrement the runtime PM usage counter of @dev and if it turns out to be
  * equal to 0, queue up a work item for @dev like in pm_request_autosuspend().
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
  */
 static inline int __pm_runtime_put_autosuspend(struct device *dev)
 {
@@ -463,16 +584,30 @@ static inline int __pm_runtime_put_autosuspend(struct device *dev)
 }
 
 /**
- * pm_runtime_put_autosuspend - Drop device usage counter and queue autosuspend if 0.
+ * pm_runtime_put_autosuspend - Update the last access time of a device, drop
+ * its usage counter and queue autosuspend if the usage counter becomes 0.
  * @dev: Target device.
  *
- * Decrement the runtime PM usage counter of @dev and if it turns out to be
- * equal to 0, queue up a work item for @dev like in pm_request_autosuspend().
+ * Update the last access time of @dev, decrement runtime PM usage counter of
+ * @dev and if it turns out to be equal to 0, queue up a work item for @dev like
+ * in pm_request_autosuspend().
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
  */
 static inline int pm_runtime_put_autosuspend(struct device *dev)
 {
-	return __pm_runtime_suspend(dev,
-	    RPM_GET_PUT | RPM_ASYNC | RPM_AUTO);
+	pm_runtime_mark_last_busy(dev);
+	return __pm_runtime_put_autosuspend(dev);
 }
 
 /**
@@ -484,9 +619,21 @@ static inline int pm_runtime_put_autosuspend(struct device *dev)
  * return value, set up autosuspend of @dev or suspend it (depending on whether
  * or not autosuspend has been enabled for it).
  *
- * The possible return values of this function are the same as for
- * pm_runtime_idle() and the runtime PM usage counter of @dev remains
- * decremented in all cases, even if it returns an error code.
+ * The runtime PM usage counter of @dev remains decremented in all cases, even
+ * if it returns an error code.
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM suspend callbacks.
  */
 static inline int pm_runtime_put_sync(struct device *dev)
 {
@@ -500,9 +647,21 @@ static inline int pm_runtime_put_sync(struct device *dev)
  * Decrement the runtime PM usage counter of @dev and if it turns out to be
  * equal to 0, carry out runtime-suspend of @dev synchronously.
  *
- * The possible return values of this function are the same as for
- * pm_runtime_suspend() and the runtime PM usage counter of @dev remains
- * decremented in all cases, even if it returns an error code.
+ * The runtime PM usage counter of @dev remains decremented in all cases, even
+ * if it returns an error code.
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM suspend callbacks.
  */
 static inline int pm_runtime_put_sync_suspend(struct device *dev)
 {
@@ -510,19 +669,35 @@ static inline int pm_runtime_put_sync_suspend(struct device *dev)
 }
 
 /**
- * pm_runtime_put_sync_autosuspend - Drop device usage counter and autosuspend if 0.
+ * pm_runtime_put_sync_autosuspend - Update the last access time of a device,
+ * drop device usage counter and autosuspend if 0.
  * @dev: Target device.
  *
- * Decrement the runtime PM usage counter of @dev and if it turns out to be
- * equal to 0, set up autosuspend of @dev or suspend it synchronously (depending
- * on whether or not autosuspend has been enabled for it).
+ * Update the last access time of @dev, decrement the runtime PM usage counter
+ * of @dev and if it turns out to be equal to 0, set up autosuspend of @dev or
+ * suspend it synchronously (depending on whether or not autosuspend has been
+ * enabled for it).
  *
- * The possible return values of this function are the same as for
- * pm_runtime_autosuspend() and the runtime PM usage counter of @dev remains
- * decremented in all cases, even if it returns an error code.
+ * The runtime PM usage counter of @dev remains decremented in all cases, even
+ * if it returns an error code.
+ *
+ * Return:
+ * * 1: Success. Usage counter dropped to zero, but device was already suspended.
+ * * 0: Success.
+ * * -EINVAL: Runtime PM error.
+ * * -EACCES: Runtime PM disabled.
+ * * -EAGAIN: Runtime PM usage counter became non-zero or Runtime PM status
+ *            change ongoing.
+ * * -EBUSY: Runtime PM child_count non-zero.
+ * * -EPERM: Device PM QoS resume latency 0.
+ * * -EINPROGRESS: Suspend already in progress.
+ * * -ENOSYS: CONFIG_PM not enabled.
+ * Other values and conditions for the above values are possible as returned by
+ * Runtime PM suspend callbacks.
  */
 static inline int pm_runtime_put_sync_autosuspend(struct device *dev)
 {
+	pm_runtime_mark_last_busy(dev);
 	return __pm_runtime_suspend(dev, RPM_GET_PUT | RPM_AUTO);
 }
 
@@ -558,11 +733,18 @@ static inline int pm_runtime_set_suspended(struct device *dev)
  * pm_runtime_disable - Disable runtime PM for a device.
  * @dev: Target device.
  *
- * Prevent the runtime PM framework from working with @dev (by incrementing its
- * "blocking" counter).
+ * Prevent the runtime PM framework from working with @dev by incrementing its
+ * "disable" counter.
  *
- * For each invocation of this function for @dev there must be a matching
- * pm_runtime_enable() call in order for runtime PM to be enabled for it.
+ * If the counter is zero when this function runs and there is a pending runtime
+ * resume request for @dev, it will be resumed.  If the counter is still zero at
+ * that point, all of the pending runtime PM requests for @dev will be canceled
+ * and all runtime PM operations in progress involving it will be waited for to
+ * complete.
+ *
+ * For each invocation of this function for @dev, there must be a matching
+ * pm_runtime_enable() call, so that runtime PM is eventually enabled for it
+ * again.
  */
 static inline void pm_runtime_disable(struct device *dev)
 {

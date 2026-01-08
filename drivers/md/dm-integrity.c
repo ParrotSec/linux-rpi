@@ -133,7 +133,7 @@ struct journal_sector {
 	commit_id_t commit_id;
 };
 
-#define MAX_TAG_SIZE			(JOURNAL_SECTOR_DATA - JOURNAL_MAC_PER_SECTOR - offsetof(struct journal_entry, last_bytes[MAX_SECTORS_PER_BLOCK]))
+#define MAX_TAG_SIZE			255
 
 #define METADATA_PADDING_SECTORS	8
 
@@ -1540,7 +1540,8 @@ static void sleep_on_endio_wait(struct dm_integrity_c *ic)
 
 static void autocommit_fn(struct timer_list *t)
 {
-	struct dm_integrity_c *ic = from_timer(ic, t, autocommit_timer);
+	struct dm_integrity_c *ic = timer_container_of(ic, t,
+						       autocommit_timer);
 
 	if (likely(!dm_integrity_failed(ic)))
 		queue_work(ic->commit_wq, &ic->commit_work);
@@ -2557,14 +2558,8 @@ static void dm_integrity_inline_recheck(struct work_struct *w)
 		char *mem;
 
 		outgoing_bio = bio_alloc_bioset(ic->dev->bdev, 1, REQ_OP_READ, GFP_NOIO, &ic->recheck_bios);
-
-		r = bio_add_page(outgoing_bio, virt_to_page(outgoing_data), ic->sectors_per_block << SECTOR_SHIFT, 0);
-		if (unlikely(r != (ic->sectors_per_block << SECTOR_SHIFT))) {
-			bio_put(outgoing_bio);
-			bio->bi_status = BLK_STS_RESOURCE;
-			bio_endio(bio);
-			return;
-		}
+		bio_add_virt_nofail(outgoing_bio, outgoing_data,
+				ic->sectors_per_block << SECTOR_SHIFT);
 
 		bip = bio_integrity_alloc(outgoing_bio, GFP_NOIO, 1);
 		if (IS_ERR(bip)) {
@@ -2707,7 +2702,7 @@ static void integrity_commit(struct work_struct *w)
 	unsigned int i, j, n;
 	struct bio *flushes;
 
-	del_timer(&ic->autocommit_timer);
+	timer_delete(&ic->autocommit_timer);
 
 	if (ic->mode == 'I')
 		return;
@@ -3211,7 +3206,8 @@ next_chunk:
 
 	bio = bio_alloc_bioset(ic->dev->bdev, 1, REQ_OP_READ, GFP_NOIO, &ic->recalc_bios);
 	bio->bi_iter.bi_sector = ic->start + SB_SECTORS + range.logical_sector;
-	__bio_add_page(bio, virt_to_page(recalc_buffer), range.n_sectors << SECTOR_SHIFT, offset_in_page(recalc_buffer));
+	bio_add_virt_nofail(bio, recalc_buffer,
+			range.n_sectors << SECTOR_SHIFT);
 	r = submit_bio_wait(bio);
 	bio_put(bio);
 	if (unlikely(r)) {
@@ -3228,7 +3224,8 @@ next_chunk:
 
 	bio = bio_alloc_bioset(ic->dev->bdev, 1, REQ_OP_WRITE, GFP_NOIO, &ic->recalc_bios);
 	bio->bi_iter.bi_sector = ic->start + SB_SECTORS + range.logical_sector;
-	__bio_add_page(bio, virt_to_page(recalc_buffer), range.n_sectors << SECTOR_SHIFT, offset_in_page(recalc_buffer));
+	bio_add_virt_nofail(bio, recalc_buffer,
+			range.n_sectors << SECTOR_SHIFT);
 
 	bip = bio_integrity_alloc(bio, GFP_NOIO, 1);
 	if (unlikely(IS_ERR(bip))) {
@@ -3606,7 +3603,7 @@ static void dm_integrity_postsuspend(struct dm_target *ti)
 
 	WARN_ON(unregister_reboot_notifier(&ic->reboot_notifier));
 
-	del_timer_sync(&ic->autocommit_timer);
+	timer_delete_sync(&ic->autocommit_timer);
 
 	if (ic->recalc_wq)
 		drain_workqueue(ic->recalc_wq);
@@ -3789,16 +3786,18 @@ static void dm_integrity_status(struct dm_target *ti, status_type_t type,
 		break;
 
 	case STATUSTYPE_TABLE: {
-		arg_count = 3;
+		arg_count = 1; /* buffer_sectors */
 		arg_count += !!ic->meta_dev;
 		arg_count += ic->sectors_per_block != 1;
 		arg_count += !!(ic->sb->flags & cpu_to_le32(SB_FLAG_RECALCULATING));
 		arg_count += ic->reset_recalculate_flag;
 		arg_count += ic->discard;
-		arg_count += ic->mode == 'J';
-		arg_count += ic->mode == 'J';
-		arg_count += ic->mode == 'B';
-		arg_count += ic->mode == 'B';
+		arg_count += ic->mode != 'I'; /* interleave_sectors */
+		arg_count += ic->mode == 'J'; /* journal_sectors */
+		arg_count += ic->mode == 'J'; /* journal_watermark */
+		arg_count += ic->mode == 'J'; /* commit_time */
+		arg_count += ic->mode == 'B'; /* sectors_per_bit */
+		arg_count += ic->mode == 'B'; /* bitmap_flush_interval */
 		arg_count += !!ic->internal_hash_alg.alg_string;
 		arg_count += !!ic->journal_crypt_alg.alg_string;
 		arg_count += !!ic->journal_mac_alg.alg_string;
@@ -3817,14 +3816,15 @@ static void dm_integrity_status(struct dm_target *ti, status_type_t type,
 			DMEMIT(" reset_recalculate");
 		if (ic->discard)
 			DMEMIT(" allow_discards");
-		DMEMIT(" journal_sectors:%u", ic->initial_sectors - SB_SECTORS);
-		DMEMIT(" interleave_sectors:%u", 1U << ic->sb->log2_interleave_sectors);
+		if (ic->mode != 'I')
+			DMEMIT(" interleave_sectors:%u", 1U << ic->sb->log2_interleave_sectors);
 		DMEMIT(" buffer_sectors:%u", 1U << ic->log2_buffer_sectors);
 		if (ic->mode == 'J') {
 			__u64 watermark_percentage = (__u64)(ic->journal_entries - ic->free_sectors_threshold) * 100;
 
 			watermark_percentage += ic->journal_entries / 2;
 			do_div(watermark_percentage, ic->journal_entries);
+			DMEMIT(" journal_sectors:%u", ic->initial_sectors - SB_SECTORS);
 			DMEMIT(" journal_watermark:%u", (unsigned int)watermark_percentage);
 			DMEMIT(" commit_time:%u", ic->autocommit_msec);
 		}
@@ -3906,8 +3906,8 @@ static void dm_integrity_io_hints(struct dm_target *ti, struct queue_limits *lim
 		struct blk_integrity *bi = &limits->integrity;
 
 		memset(bi, 0, sizeof(*bi));
-		bi->tuple_size = ic->tag_size;
-		bi->tag_size = bi->tuple_size;
+		bi->metadata_size = ic->tag_size;
+		bi->tag_size = bi->metadata_size;
 		bi->interval_exp =
 			ic->sb->log2_sectors_per_block + SECTOR_SHIFT;
 	}
@@ -4746,18 +4746,18 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned int argc, char **argv
 			ti->error = "Integrity profile not supported";
 			goto bad;
 		}
-		/*printk("tag_size: %u, tuple_size: %u\n", bi->tag_size, bi->tuple_size);*/
-		if (bi->tuple_size < ic->tag_size) {
+		/*printk("tag_size: %u, metadata_size: %u\n", bi->tag_size, bi->metadata_size);*/
+		if (bi->metadata_size < ic->tag_size) {
 			r = -EINVAL;
 			ti->error = "The integrity profile is smaller than tag size";
 			goto bad;
 		}
-		if ((unsigned long)bi->tuple_size > PAGE_SIZE / 2) {
+		if ((unsigned long)bi->metadata_size > PAGE_SIZE / 2) {
 			r = -EINVAL;
 			ti->error = "Too big tuple size";
 			goto bad;
 		}
-		ic->tuple_size = bi->tuple_size;
+		ic->tuple_size = bi->metadata_size;
 		if (1 << bi->interval_exp != ic->sectors_per_block << SECTOR_SHIFT) {
 			r = -EINVAL;
 			ti->error = "Integrity profile sector size mismatch";
@@ -4807,21 +4807,9 @@ static int dm_integrity_ctr(struct dm_target *ti, unsigned int argc, char **argv
 			ti->error = "Cannot allocate bio set";
 			goto bad;
 		}
-		r = bioset_integrity_create(&ic->recheck_bios, RECHECK_POOL_SIZE);
-		if (r) {
-			ti->error = "Cannot allocate bio integrity set";
-			r = -ENOMEM;
-			goto bad;
-		}
 		r = bioset_init(&ic->recalc_bios, 1, 0, BIOSET_NEED_BVECS);
 		if (r) {
 			ti->error = "Cannot allocate bio set";
-			goto bad;
-		}
-		r = bioset_integrity_create(&ic->recalc_bios, 1);
-		if (r) {
-			ti->error = "Cannot allocate bio integrity set";
-			r = -ENOMEM;
 			goto bad;
 		}
 	}

@@ -36,7 +36,7 @@ of the patch
 --- a/drivers/gpu/drm/radeon/radeon_drv.c
 +++ b/drivers/gpu/drm/radeon/radeon_drv.c
 @@ -32,6 +32,8 @@
- 
+ #include <linux/aperture.h>
  #include <linux/compat.h>
  #include <linux/module.h>
 +#include <linux/namei.h>
@@ -73,7 +73,7 @@ of the patch
  static int radeon_pci_probe(struct pci_dev *pdev,
  			    const struct pci_device_id *ent)
  {
-@@ -295,6 +319,12 @@ static int radeon_pci_probe(struct pci_d
+@@ -297,6 +321,12 @@ static int radeon_pci_probe(struct pci_d
  	if (vga_switcheroo_client_probe_defer(pdev))
  		return -EPROBE_DEFER;
  
@@ -84,5 +84,5 @@ of the patch
 +	}
 +
  	/* Get rid of things like offb */
- 	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &kms_driver);
+ 	ret = aperture_remove_conflicting_pci_devices(pdev, kms_driver.name);
  	if (ret)

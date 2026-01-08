@@ -86,6 +86,7 @@ static void smu_cmn_read_arg(struct smu_context *smu,
 #define SMU_RESP_BUSY_OTHER     0xFC
 #define SMU_RESP_DEBUG_END      0xFB
 
+#define SMU_RESP_UNEXP (~0U)
 /**
  * __smu_cmn_poll_stat -- poll for a status from the SMU
  * @smu: a pointer to SMU context
@@ -171,6 +172,15 @@ static void __smu_cmn_reg_print_error(struct smu_context *smu,
 		dev_err_ratelimited(adev->dev,
 				    "SMU: I'm debugging!");
 		break;
+	case SMU_RESP_UNEXP:
+		if (amdgpu_device_bus_status_check(smu->adev)) {
+			/* print error immediately if device is off the bus */
+			dev_err(adev->dev,
+				"SMU: response:0x%08X for index:%d param:0x%08X message:%s?",
+				reg_c2pmsg_90, msg_index, param, message);
+			break;
+		}
+		fallthrough;
 	default:
 		dev_err_ratelimited(adev->dev,
 				    "SMU: response:0x%08X for index:%d param:0x%08X message:%s?",
@@ -955,7 +965,7 @@ int smu_cmn_update_table(struct smu_context *smu,
 						      table_index);
 	uint32_t table_size;
 	int ret = 0;
-	if (!table_data || table_id >= SMU_TABLE_COUNT || table_id < 0)
+	if (!table_data || table_index >= SMU_TABLE_COUNT || table_id < 0)
 		return -EINVAL;
 
 	table_size = smu_table->tables[table_index].size;
@@ -1049,64 +1059,6 @@ int smu_cmn_get_combo_pptable(struct smu_context *smu)
 				    0,
 				    pptable,
 				    false);
-}
-
-void smu_cmn_init_soft_gpu_metrics(void *table, uint8_t frev, uint8_t crev)
-{
-	struct metrics_table_header *header = (struct metrics_table_header *)table;
-	uint16_t structure_size;
-
-#define METRICS_VERSION(a, b)	((a << 16) | b)
-
-	switch (METRICS_VERSION(frev, crev)) {
-	case METRICS_VERSION(1, 0):
-		structure_size = sizeof(struct gpu_metrics_v1_0);
-		break;
-	case METRICS_VERSION(1, 1):
-		structure_size = sizeof(struct gpu_metrics_v1_1);
-		break;
-	case METRICS_VERSION(1, 2):
-		structure_size = sizeof(struct gpu_metrics_v1_2);
-		break;
-	case METRICS_VERSION(1, 3):
-		structure_size = sizeof(struct gpu_metrics_v1_3);
-		break;
-	case METRICS_VERSION(1, 4):
-		structure_size = sizeof(struct gpu_metrics_v1_4);
-		break;
-	case METRICS_VERSION(1, 5):
-		structure_size = sizeof(struct gpu_metrics_v1_5);
-		break;
-	case METRICS_VERSION(2, 0):
-		structure_size = sizeof(struct gpu_metrics_v2_0);
-		break;
-	case METRICS_VERSION(2, 1):
-		structure_size = sizeof(struct gpu_metrics_v2_1);
-		break;
-	case METRICS_VERSION(2, 2):
-		structure_size = sizeof(struct gpu_metrics_v2_2);
-		break;
-	case METRICS_VERSION(2, 3):
-		structure_size = sizeof(struct gpu_metrics_v2_3);
-		break;
-	case METRICS_VERSION(2, 4):
-		structure_size = sizeof(struct gpu_metrics_v2_4);
-		break;
-	case METRICS_VERSION(3, 0):
-		structure_size = sizeof(struct gpu_metrics_v3_0);
-		break;
-	default:
-		return;
-	}
-
-#undef METRICS_VERSION
-
-	memset(header, 0xFF, structure_size);
-
-	header->format_revision = frev;
-	header->content_revision = crev;
-	header->structure_size = structure_size;
-
 }
 
 int smu_cmn_set_mp1_state(struct smu_context *smu,

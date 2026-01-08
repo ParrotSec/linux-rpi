@@ -1639,7 +1639,7 @@ MODULE_PARM_DESC(allow_dio, "allow direct I/O (default: 0 (disallow))");
 #ifdef CONFIG_SYSCTL
 #include <linux/sysctl.h>
 
-static struct ctl_table sg_sysctls[] = {
+static const struct ctl_table sg_sysctls[] = {
 	{
 		.procname	= "sg-big-buff",
 		.data		= &sg_big_buff,
@@ -1658,8 +1658,7 @@ static void register_sg_sysctls(void)
 
 static void unregister_sg_sysctls(void)
 {
-	if (hdr)
-		unregister_sysctl_table(hdr);
+	unregister_sysctl_table(hdr);
 }
 #else
 #define register_sg_sysctls() do { } while (0)
@@ -2210,9 +2209,17 @@ sg_remove_sfp_usercontext(struct work_struct *work)
 	write_lock_irqsave(&sfp->rq_list_lock, iflags);
 	while (!list_empty(&sfp->rq_list)) {
 		srp = list_first_entry(&sfp->rq_list, Sg_request, entry);
-		sg_finish_rem_req(srp);
 		list_del(&srp->entry);
+		write_unlock_irqrestore(&sfp->rq_list_lock, iflags);
+
+		sg_finish_rem_req(srp);
+		/*
+		 * sg_rq_end_io() uses srp->parentfp. Hence, only clear
+		 * srp->parentfp after blk_mq_free_request() has been called.
+		 */
 		srp->parentfp = NULL;
+
+		write_lock_irqsave(&sfp->rq_list_lock, iflags);
 	}
 	write_unlock_irqrestore(&sfp->rq_list_lock, iflags);
 

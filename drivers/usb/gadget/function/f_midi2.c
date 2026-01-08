@@ -1285,10 +1285,8 @@ static int f_midi2_set_alt(struct usb_function *fn, unsigned int intf,
 
 	if (alt == 0)
 		op_mode = MIDI_OP_MODE_MIDI1;
-	else if (alt == 1)
-		op_mode = MIDI_OP_MODE_MIDI2;
 	else
-		op_mode = MIDI_OP_MODE_UNSET;
+		op_mode = MIDI_OP_MODE_MIDI2;
 
 	if (midi2->operation_mode == op_mode)
 		return 0;
@@ -1601,6 +1599,7 @@ static int f_midi2_create_card(struct f_midi2 *midi2)
 			strscpy(fb->info.name, ump_fb_name(b),
 				sizeof(fb->info.name));
 		}
+		snd_ump_update_group_attrs(ump);
 	}
 
 	for (i = 0; i < midi2->num_eps; i++) {
@@ -1738,9 +1737,12 @@ static int f_midi2_create_usb_configs(struct f_midi2 *midi2,
 	case USB_SPEED_HIGH:
 		midi2_midi1_ep_out_desc.wMaxPacketSize = cpu_to_le16(512);
 		midi2_midi1_ep_in_desc.wMaxPacketSize = cpu_to_le16(512);
-		for (i = 0; i < midi2->num_eps; i++)
+		for (i = 0; i < midi2->num_eps; i++) {
 			midi2_midi2_ep_out_desc[i].wMaxPacketSize =
 				cpu_to_le16(512);
+			midi2_midi2_ep_in_desc[i].wMaxPacketSize =
+				cpu_to_le16(512);
+		}
 		fallthrough;
 	case USB_SPEED_FULL:
 		midi1_in_eps = midi2_midi1_ep_in_descs;
@@ -1749,9 +1751,12 @@ static int f_midi2_create_usb_configs(struct f_midi2 *midi2,
 	case USB_SPEED_SUPER:
 		midi2_midi1_ep_out_desc.wMaxPacketSize = cpu_to_le16(1024);
 		midi2_midi1_ep_in_desc.wMaxPacketSize = cpu_to_le16(1024);
-		for (i = 0; i < midi2->num_eps; i++)
+		for (i = 0; i < midi2->num_eps; i++) {
 			midi2_midi2_ep_out_desc[i].wMaxPacketSize =
 				cpu_to_le16(1024);
+			midi2_midi2_ep_in_desc[i].wMaxPacketSize =
+				cpu_to_le16(1024);
+		}
 		midi1_in_eps = midi2_midi1_ep_in_ss_descs;
 		midi1_out_eps = midi2_midi1_ep_out_ss_descs;
 		break;

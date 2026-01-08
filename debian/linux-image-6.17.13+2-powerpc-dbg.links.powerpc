@@ -1,0 +1,4 @@
+# Add symlinks to vmlinux from the locations expected by kdump-tools,
+# systemtap and others
+usr/lib/debug/boot/vmlinux-6.17.13+2-powerpc  usr/lib/debug/vmlinux-6.17.13+2-powerpc
+usr/lib/debug/boot/vmlinux-6.17.13+2-powerpc  usr/lib/debug/lib/modules/6.17.13+2-powerpc/vmlinux

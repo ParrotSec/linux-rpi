@@ -8,7 +8,7 @@ use crate::{
     bindings, device, devres, drm,
     error::{to_result, Result},
     prelude::*,
-    types::ARef,
+    sync::aref::ARef,
 };
 use macros::vtable;
 
@@ -86,6 +86,9 @@ pub struct AllocOps {
 
 /// Trait for memory manager implementations. Implemented internally.
 pub trait AllocImpl: super::private::Sealed + drm::gem::IntoGEMObject {
+    /// The [`Driver`] implementation for this [`AllocImpl`].
+    type Driver: drm::Driver;
+
     /// The C callback operations for this memory manager.
     const ALLOC_OPS: AllocOps;
 }
@@ -118,7 +121,6 @@ pub trait Driver {
 pub struct Registration<T: Driver>(ARef<drm::Device<T>>);
 
 impl<T: Driver> Registration<T> {
-    /// Creates a new [`Registration`] and registers it.
     fn new(drm: &drm::Device<T>, flags: usize) -> Result<Self> {
         // SAFETY: `drm.as_raw()` is valid by the invariants of `drm::Device`.
         to_result(unsafe { bindings::drm_dev_register(drm.as_raw(), flags) })?;
@@ -126,8 +128,9 @@ impl<T: Driver> Registration<T> {
         Ok(Self(drm.into()))
     }
 
-    /// Same as [`Registration::new`}, but transfers ownership of the [`Registration`] to
-    /// [`devres::register`].
+    /// Registers a new [`Device`](drm::Device) with userspace.
+    ///
+    /// Ownership of the [`Registration`] object is passed to [`devres::register`].
     pub fn new_foreign_owned(
         drm: &drm::Device<T>,
         dev: &device::Device<device::Bound>,

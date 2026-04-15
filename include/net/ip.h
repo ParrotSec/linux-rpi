@@ -101,7 +101,7 @@ static inline void ipcm_init_sk(struct ipcm_cookie *ipcm,
 
 	ipcm->oif = READ_ONCE(inet->sk.sk_bound_dev_if);
 	ipcm->addr = inet->inet_saddr;
-	ipcm->protocol = inet->inet_num;
+	ipcm->protocol = READ_ONCE(inet->inet_num);
 }
 
 #define IPCB(skb) ((struct inet_skb_parm*)((skb)->cb))
@@ -261,8 +261,8 @@ static inline u8 ip_sendmsg_scope(const struct inet_sock *inet,
 }
 
 /* datagram.c */
-int __ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
-int ip4_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
+int __ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len);
+int ip4_datagram_connect(struct sock *sk, struct sockaddr_unsized *uaddr, int addr_len);
 
 void ip4_datagram_release_cb(struct sock *sk);
 
@@ -326,18 +326,6 @@ static inline u64 snmp_fold_field64(void __percpu *mib, int offt, size_t syncp_o
 }
 #endif
 
-#define snmp_get_cpu_field64_batch(buff64, stats_list, mib_statistic, offset) \
-{ \
-	int i, c; \
-	for_each_possible_cpu(c) { \
-		for (i = 0; stats_list[i].name; i++) \
-			buff64[i] += snmp_get_cpu_field64( \
-					mib_statistic, \
-					c, stats_list[i].entry, \
-					offset); \
-	} \
-}
-
 #define snmp_get_cpu_field64_batch_cnt(buff64, stats_list, cnt,	\
 				       mib_statistic, offset)	\
 { \
@@ -348,17 +336,6 @@ static inline u64 snmp_fold_field64(void __percpu *mib, int offt, size_t syncp_o
 					mib_statistic, \
 					c, stats_list[i].entry, \
 					offset); \
-	} \
-}
-
-#define snmp_get_cpu_field_batch(buff, stats_list, mib_statistic) \
-{ \
-	int i, c; \
-	for_each_possible_cpu(c) { \
-		for (i = 0; stats_list[i].name; i++) \
-			buff[i] += snmp_get_cpu_field( \
-						mib_statistic, \
-						c, stats_list[i].entry); \
 	} \
 }
 

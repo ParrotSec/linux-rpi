@@ -563,6 +563,7 @@ xqcheck_compare_dquot(
 		return -ECANCELED;
 	}
 
+	mutex_lock(&dq->q_qlock);
 	mutex_lock(&xqc->lock);
 	error = xfarray_load_sparse(counts, dq->q_id, &xcdq);
 	if (error)
@@ -589,7 +590,9 @@ xqcheck_compare_dquot(
 		xchk_set_incomplete(xqc->sc);
 		error = -ECANCELED;
 	}
+out_unlock:
 	mutex_unlock(&xqc->lock);
+	mutex_unlock(&dq->q_qlock);
 	if (error)
 		return error;
 
@@ -597,10 +600,6 @@ xqcheck_compare_dquot(
 		return -ECANCELED;
 
 	return 0;
-
-out_unlock:
-	mutex_unlock(&xqc->lock);
-	return error;
 }
 
 /*
@@ -636,7 +635,7 @@ xqcheck_walk_observations(
 			return error;
 
 		error = xqcheck_compare_dquot(xqc, dqtype, dq);
-		xfs_qm_dqput(dq);
+		xfs_qm_dqrele(dq);
 		if (error)
 			return error;
 
@@ -674,7 +673,7 @@ xqcheck_compare_dqtype(
 	xchk_dqiter_init(&cursor, sc, dqtype);
 	while ((error = xchk_dquot_iter(&cursor, &dq)) == 1) {
 		error = xqcheck_compare_dquot(xqc, dqtype, dq);
-		xfs_qm_dqput(dq);
+		xfs_qm_dqrele(dq);
 		if (error)
 			break;
 	}
@@ -742,7 +741,6 @@ xqcheck_setup_scan(
 	struct xfs_scrub	*sc,
 	struct xqcheck		*xqc)
 {
-	char			*descr;
 	struct xfs_quotainfo	*qi = sc->mp->m_quotainfo;
 	unsigned long long	max_dquots = XFS_DQ_ID_MAX + 1ULL;
 	int			error;
@@ -757,28 +755,22 @@ xqcheck_setup_scan(
 
 	error = -ENOMEM;
 	if (xfs_this_quota_on(sc->mp, XFS_DQTYPE_USER)) {
-		descr = xchk_xfile_descr(sc, "user dquot records");
-		error = xfarray_create(descr, max_dquots,
+		error = xfarray_create("user dquot records", max_dquots,
 				sizeof(struct xqcheck_dquot), &xqc->ucounts);
-		kfree(descr);
 		if (error)
 			goto out_teardown;
 	}
 
 	if (xfs_this_quota_on(sc->mp, XFS_DQTYPE_GROUP)) {
-		descr = xchk_xfile_descr(sc, "group dquot records");
-		error = xfarray_create(descr, max_dquots,
+		error = xfarray_create("group dquot records", max_dquots,
 				sizeof(struct xqcheck_dquot), &xqc->gcounts);
-		kfree(descr);
 		if (error)
 			goto out_teardown;
 	}
 
 	if (xfs_this_quota_on(sc->mp, XFS_DQTYPE_PROJ)) {
-		descr = xchk_xfile_descr(sc, "project dquot records");
-		error = xfarray_create(descr, max_dquots,
+		error = xfarray_create("project dquot records", max_dquots,
 				sizeof(struct xqcheck_dquot), &xqc->pcounts);
-		kfree(descr);
 		if (error)
 			goto out_teardown;
 	}

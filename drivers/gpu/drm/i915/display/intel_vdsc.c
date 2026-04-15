@@ -11,10 +11,10 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_print.h>
 
-#include "i915_utils.h"
 #include "intel_crtc.h"
 #include "intel_de.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dp.h"
 #include "intel_dsi.h"
 #include "intel_qp_tables.h"
@@ -370,6 +370,22 @@ int intel_dsc_compute_params(struct intel_crtc_state *pipe_config)
 		(vdsc_cfg->rc_model_size - vdsc_cfg->initial_offset);
 
 	return 0;
+}
+
+void intel_dsc_enable_on_crtc(struct intel_crtc_state *crtc_state)
+{
+	crtc_state->dsc.compression_enabled_on_link = true;
+	crtc_state->dsc.compression_enable = true;
+}
+
+bool intel_dsc_enabled_on_link(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+
+	drm_WARN_ON(display->drm, crtc_state->dsc.compression_enable &&
+		    !crtc_state->dsc.compression_enabled_on_link);
+
+	return crtc_state->dsc.compression_enabled_on_link;
 }
 
 enum intel_display_power_domain
@@ -751,6 +767,29 @@ void intel_dsc_dp_pps_write(struct intel_encoder *encoder,
 				  sizeof(dp_dsc_pps_sdp));
 }
 
+void intel_dsc_su_et_parameters_configure(struct intel_dsb *dsb, struct intel_encoder *encoder,
+					  const struct intel_crtc_state *crtc_state, int su_lines)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
+	const struct drm_dsc_config *vdsc_cfg = &crtc_state->dsc.config;
+	enum pipe pipe = crtc->pipe;
+	int vdsc_instances_per_pipe = intel_dsc_get_vdsc_per_pipe(crtc_state);
+	int slice_row_per_frame = su_lines / vdsc_cfg->slice_height;
+	u32 val;
+
+	drm_WARN_ON_ONCE(display->drm, su_lines % vdsc_cfg->slice_height);
+	drm_WARN_ON_ONCE(display->drm, vdsc_instances_per_pipe > 2);
+
+	val = DSC_SUPS0_SU_SLICE_ROW_PER_FRAME(slice_row_per_frame);
+	val |= DSC_SUPS0_SU_PIC_HEIGHT(su_lines);
+
+	intel_de_write_dsb(display, dsb, LNL_DSC0_SU_PARAMETER_SET_0(pipe), val);
+
+	if (vdsc_instances_per_pipe == 2)
+		intel_de_write_dsb(display, dsb, LNL_DSC1_SU_PARAMETER_SET_0(pipe), val);
+}
+
 static i915_reg_t dss_ctl1_reg(struct intel_crtc *crtc, enum transcoder cpu_transcoder)
 {
 	return is_pipe_dsc(crtc, cpu_transcoder) ?
@@ -1076,4 +1115,12 @@ int intel_vdsc_min_cdclk(const struct intel_crtc_state *crtc_state)
 	}
 
 	return min_cdclk;
+}
+
+unsigned int intel_vdsc_prefill_lines(const struct intel_crtc_state *crtc_state)
+{
+	if (!crtc_state->dsc.compression_enable)
+		return 0;
+
+	return 0x18000; /* 1.5 */
 }

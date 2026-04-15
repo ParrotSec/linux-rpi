@@ -1184,6 +1184,8 @@ static void mpi3mr_update_tgtdev(struct mpi3mr_ioc *mrioc,
 	if (is_added == true)
 		tgtdev->io_throttle_enabled =
 		    (flags & MPI3_DEVICE0_FLAGS_IO_THROTTLING_REQUIRED) ? 1 : 0;
+	if (!mrioc->sas_transport_enabled)
+		tgtdev->non_stl = 1;
 
 	switch (flags & MPI3_DEVICE0_FLAGS_MAX_WRITE_SAME_MASK) {
 	case MPI3_DEVICE0_FLAGS_MAX_WRITE_SAME_256_LB:
@@ -1308,6 +1310,12 @@ static void mpi3mr_update_tgtdev(struct mpi3mr_ioc *mrioc,
 		if (vdinf->vd_state == MPI3_DEVICE0_VD_STATE_OFFLINE)
 			tgtdev->is_hidden = 1;
 		tgtdev->non_stl = 1;
+		tgtdev->dev_spec.vd_inf.reset_to =
+			max_t(u8, vdinf->vd_reset_to,
+			      MPI3MR_INTADMCMD_TIMEOUT);
+		tgtdev->dev_spec.vd_inf.abort_to =
+			max_t(u8, vdinf->vd_abort_to,
+			      MPI3MR_INTADMCMD_TIMEOUT);
 		tgtdev->dev_spec.vd_inf.tg_id = vdinf_io_throttle_group;
 		tgtdev->dev_spec.vd_inf.tg_high =
 		    le16_to_cpu(vdinf->io_throttle_group_high) * 2048;
@@ -3917,11 +3925,13 @@ int mpi3mr_issue_tm(struct mpi3mr_ioc *mrioc, u8 tm_type,
 	if (scsi_tgt_priv_data)
 		atomic_inc(&scsi_tgt_priv_data->block_io);
 
-	if (tgtdev && (tgtdev->dev_type == MPI3_DEVICE_DEVFORM_PCIE)) {
-		if (cmd_priv && tgtdev->dev_spec.pcie_inf.abort_to)
-			timeout = tgtdev->dev_spec.pcie_inf.abort_to;
-		else if (!cmd_priv && tgtdev->dev_spec.pcie_inf.reset_to)
-			timeout = tgtdev->dev_spec.pcie_inf.reset_to;
+	if (tgtdev) {
+		if (tgtdev->dev_type == MPI3_DEVICE_DEVFORM_PCIE)
+			timeout = cmd_priv ? tgtdev->dev_spec.pcie_inf.abort_to
+					   : tgtdev->dev_spec.pcie_inf.reset_to;
+		else if (tgtdev->dev_type == MPI3_DEVICE_DEVFORM_VD)
+			timeout = cmd_priv ? tgtdev->dev_spec.vd_inf.abort_to
+					   : tgtdev->dev_spec.vd_inf.reset_to;
 	}
 
 	init_completion(&drv_cmd->done);
@@ -4033,7 +4043,7 @@ out:
 /**
  * mpi3mr_bios_param - BIOS param callback
  * @sdev: SCSI device reference
- * @bdev: Block device reference
+ * @unused: gendisk reference
  * @capacity: Capacity in logical sectors
  * @params: Parameter array
  *
@@ -4042,7 +4052,7 @@ out:
  * Return: 0 always
  */
 static int mpi3mr_bios_param(struct scsi_device *sdev,
-	struct block_device *bdev, sector_t capacity, int params[])
+	struct gendisk *unused, sector_t capacity, int params[])
 {
 	int heads;
 	int sectors;
@@ -4836,7 +4846,7 @@ static int mpi3mr_target_alloc(struct scsi_target *starget)
 	spin_lock_irqsave(&mrioc->tgtdev_lock, flags);
 	if (starget->channel == mrioc->scsi_device_channel) {
 		tgt_dev = __mpi3mr_get_tgtdev_by_perst_id(mrioc, starget->id);
-		if (tgt_dev && !tgt_dev->is_hidden) {
+		if (tgt_dev && !tgt_dev->is_hidden && tgt_dev->non_stl) {
 			scsi_tgt_priv_data->starget = starget;
 			scsi_tgt_priv_data->dev_handle = tgt_dev->dev_handle;
 			scsi_tgt_priv_data->perst_id = tgt_dev->perst_id;

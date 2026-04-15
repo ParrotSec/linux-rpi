@@ -507,7 +507,6 @@ static int amdgpu_atif_handler(struct amdgpu_device *adev,
 				pm_runtime_get_sync(adev_to_drm(adev)->dev);
 				/* Just fire off a uevent and let userspace tell us what to do */
 				drm_helper_hpd_irq_event(adev_to_drm(adev));
-				pm_runtime_mark_last_busy(adev_to_drm(adev)->dev);
 				pm_runtime_put_autosuspend(adev_to_drm(adev)->dev);
 			}
 		}
@@ -1136,8 +1135,10 @@ static int amdgpu_acpi_enumerate_xcc(void)
 		if (!dev_info)
 			ret = amdgpu_acpi_dev_init(&dev_info, xcc_info, sbdf);
 
-		if (ret == -ENOMEM)
+		if (ret == -ENOMEM) {
+			kfree(xcc_info);
 			return ret;
+		}
 
 		if (!dev_info) {
 			kfree(xcc_info);

@@ -211,7 +211,8 @@ make_connection()
 	ip netns exec "$ns1" \
 	   ./mptcp_connect -s MPTCP -w 300 -p $app_port -l $listen_addr > /dev/null 2>&1 &
 	local server_pid=$!
-	sleep 0.5
+
+	mptcp_lib_wait_local_port_listen "${ns1}" "${port}"
 
 	# Run the client, transfer $file and stay connected to the server
 	# to conduct tests
@@ -241,7 +242,7 @@ make_connection()
 
 	print_test "Established IP${is_v6} MPTCP Connection ns2 => ns1"
 	if [ "${client_token}" != "" ] && [ "${server_token}" != "" ] &&
-	   [ "${client_serverside}" = 0 ] && [ "${server_serverside}" = 1 ] &&
+	   [ "${client_serverside:-0}" = 0 ] && [ "${server_serverside:-0}" = 1 ] &&
 	   [ "${client_nojoin:-0}" = 0 ] && [ "${server_nojoin:-0}" = 1 ]
 	then
 		test_pass

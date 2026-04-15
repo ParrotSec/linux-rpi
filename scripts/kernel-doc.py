@@ -111,10 +111,12 @@ import sys
 
 # Import Python modules
 
-LIB_DIR = "lib/kdoc"
+LIB_DIR = "../tools/lib/python"
 SRC_DIR = os.path.dirname(os.path.realpath(__file__))
 
 sys.path.insert(0, os.path.join(SRC_DIR, LIB_DIR))
+
+WERROR_RETURN_CODE = 3
 
 DESC = """
 Read C language source or header FILEs, extract embedded documentation comments,
@@ -176,7 +178,21 @@ class MsgFormatter(logging.Formatter):
         return logging.Formatter.format(self, record)
 
 def main():
-    """Main program"""
+    """
+    Main program.
+
+    By default, the return value is:
+
+    - 0: success or Python version is not compatible with
+      kernel-doc.  If -Werror is not used, it will also
+      return 0 if there are issues at kernel-doc markups;
+
+    - 1: an abnormal condition happened;
+
+    - 2: argparse issued an error;
+
+    - 3: -Werror is used, and one or more unfiltered parse warnings happened.
+    """
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                      description=DESC)
@@ -292,8 +308,8 @@ def main():
         logger.warning("Python 3.7 or later is required for correct results")
 
     # Import kernel-doc libraries only after checking Python version
-    from kdoc_files import KernelFiles                  # pylint: disable=C0415
-    from kdoc_output import RestFormat, ManFormat       # pylint: disable=C0415
+    from kdoc.kdoc_files import KernelFiles             # pylint: disable=C0415
+    from kdoc.kdoc_output import RestFormat, ManFormat  # pylint: disable=C0415
 
     if args.man:
         out_style = ManFormat(modulename=args.modulename)
@@ -323,16 +339,12 @@ def main():
 
     if args.werror:
         print("%s warnings as errors" % error_count)    # pylint: disable=C0209
-        sys.exit(error_count)
+        sys.exit(WERROR_RETURN_CODE)
 
     if args.verbose:
         print("%s errors" % error_count)                # pylint: disable=C0209
 
-    if args.none:
-        sys.exit(0)
-
-    sys.exit(error_count)
-
+    sys.exit(0)
 
 # Call main method
 if __name__ == "__main__":

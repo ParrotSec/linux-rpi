@@ -18,6 +18,9 @@ static unsigned int list_count;
 
 static struct resource *target_resource;
 
+/* Pages to subtract from the memory count when setting balloon target. */
+unsigned long xen_unpopulated_pages __initdata;
+
 /*
  * If arch is not happy with system "iomem_resource" being used for
  * the region allocation it can provide it's own view by creating specific
@@ -105,7 +108,7 @@ static int fill_list(unsigned int nr_pages)
          * are not restored since this region is now known not to
          * conflict with any devices.
          */
-	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
+	if (xen_pv_domain()) {
 		xen_pfn_t pfn = PFN_DOWN(res->start);
 
 		for (i = 0; i < alloc_pages; i++) {
@@ -184,7 +187,7 @@ int xen_alloc_unpopulated_pages(unsigned int nr_pages, struct page **pages)
 		pages[i] = pg;
 
 #ifdef CONFIG_XEN_HAVE_PVMMU
-		if (!xen_feature(XENFEAT_auto_translated_physmap)) {
+		if (xen_pv_domain()) {
 			ret = xen_alloc_p2m_entry(page_to_pfn(pg));
 			if (ret < 0) {
 				unsigned int j;

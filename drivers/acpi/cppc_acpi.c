@@ -362,7 +362,7 @@ static int send_pcc_cmd(int pcc_ss_id, u16 cmd)
 end:
 	if (cmd == CMD_WRITE) {
 		if (unlikely(ret)) {
-			for_each_possible_cpu(i) {
+			for_each_online_cpu(i) {
 				struct cpc_desc *desc = per_cpu(cpc_desc_ptr, i);
 
 				if (!desc)
@@ -524,7 +524,7 @@ int acpi_get_psd_map(unsigned int cpu, struct cppc_cpudata *cpu_data)
 	else if (pdomain->coord_type == DOMAIN_COORD_TYPE_SW_ANY)
 		cpu_data->shared_type = CPUFREQ_SHARED_TYPE_ANY;
 
-	for_each_possible_cpu(i) {
+	for_each_online_cpu(i) {
 		if (i == cpu)
 			continue;
 
@@ -750,7 +750,7 @@ int acpi_cppc_processor_probe(struct acpi_processor *pr)
 	}
 
 	/*
-	 * Disregard _CPC if the number of entries in the return pachage is not
+	 * Disregard _CPC if the number of entries in the return package is not
 	 * as expected, but support future revisions being proper supersets of
 	 * the v3 and only causing more entries to be returned by _CPC.
 	 */
@@ -1366,7 +1366,8 @@ int cppc_get_perf_caps(int cpunum, struct cppc_perf_caps *perf_caps)
 	/* Are any of the regs PCC ?*/
 	if (CPC_IN_PCC(highest_reg) || CPC_IN_PCC(lowest_reg) ||
 		CPC_IN_PCC(lowest_non_linear_reg) || CPC_IN_PCC(nominal_reg) ||
-		CPC_IN_PCC(low_freq_reg) || CPC_IN_PCC(nom_freq_reg)) {
+		CPC_IN_PCC(low_freq_reg) || CPC_IN_PCC(nom_freq_reg) ||
+		CPC_IN_PCC(guaranteed_reg)) {
 		if (pcc_ss_id < 0) {
 			pr_debug("Invalid pcc_ss_id\n");
 			return -ENODEV;
@@ -1876,7 +1877,7 @@ EXPORT_SYMBOL_GPL(cppc_set_perf);
  * If desired_reg is in the SystemMemory or SystemIo ACPI address space,
  * then assume there is no latency.
  */
-unsigned int cppc_get_transition_latency(int cpu_num)
+int cppc_get_transition_latency(int cpu_num)
 {
 	/*
 	 * Expected transition latency is based on the PCCT timing values
@@ -1889,31 +1890,29 @@ unsigned int cppc_get_transition_latency(int cpu_num)
 	 *              completion of a command before issuing the next command,
 	 *              in microseconds.
 	 */
-	unsigned int latency_ns = 0;
 	struct cpc_desc *cpc_desc;
 	struct cpc_register_resource *desired_reg;
 	int pcc_ss_id = per_cpu(cpu_pcc_subspace_idx, cpu_num);
 	struct cppc_pcc_data *pcc_ss_data;
+	int latency_ns = 0;
 
 	cpc_desc = per_cpu(cpc_desc_ptr, cpu_num);
 	if (!cpc_desc)
-		return CPUFREQ_ETERNAL;
+		return -ENODATA;
 
 	desired_reg = &cpc_desc->cpc_regs[DESIRED_PERF];
 	if (CPC_IN_SYSTEM_MEMORY(desired_reg) || CPC_IN_SYSTEM_IO(desired_reg))
 		return 0;
-	else if (!CPC_IN_PCC(desired_reg))
-		return CPUFREQ_ETERNAL;
 
-	if (pcc_ss_id < 0)
-		return CPUFREQ_ETERNAL;
+	if (!CPC_IN_PCC(desired_reg) || pcc_ss_id < 0)
+		return -ENODATA;
 
 	pcc_ss_data = pcc_data[pcc_ss_id];
 	if (pcc_ss_data->pcc_mpar)
 		latency_ns = 60 * (1000 * 1000 * 1000 / pcc_ss_data->pcc_mpar);
 
-	latency_ns = max(latency_ns, pcc_ss_data->pcc_nominal * 1000);
-	latency_ns = max(latency_ns, pcc_ss_data->pcc_mrtt * 1000);
+	latency_ns = max_t(int, latency_ns, pcc_ss_data->pcc_nominal * 1000);
+	latency_ns = max_t(int, latency_ns, pcc_ss_data->pcc_mrtt * 1000);
 
 	return latency_ns;
 }

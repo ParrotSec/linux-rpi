@@ -399,7 +399,7 @@ static int at25_fram_to_chip(struct device *dev, struct spi_eeprom *chip)
 				id[j] = tmp;
 			}
 		if (id[6] != 0xc2) {
-			dev_err(dev, "Error: no Cypress FRAM (id %02x)\n", id[6]);
+			dev_err(dev, "Error: no Cypress FRAM with device ID (manufacturer ID bank 7: %02x)\n", id[6]);
 			return -ENODEV;
 		}
 
@@ -408,7 +408,7 @@ static int at25_fram_to_chip(struct device *dev, struct spi_eeprom *chip)
 			chip->byte_len = BIT(id[7] - 0x21 + 4) * 1024;
 			break;
 		case 0x2a ... 0x30:
-			/* CY15B116QN ... CY15B116QN */
+			/* CY15B102QN ... CY15B116QN */
 			chip->byte_len = BIT(((id[7] >> 1) & 0xf) + 13);
 			break;
 		default:

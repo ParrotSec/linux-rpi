@@ -764,12 +764,11 @@ static void azx_clear_irq_pending(struct azx *chip)
 	struct hdac_bus *bus = azx_bus(chip);
 	struct hdac_stream *s;
 
-	spin_lock_irq(&bus->reg_lock);
+	guard(spinlock_irq)(&bus->reg_lock);
 	list_for_each_entry(s, &bus->stream_list, list) {
 		struct azx_dev *azx_dev = stream_to_azx_dev(s);
 		azx_dev->irq_pending = 0;
 	}
-	spin_unlock_irq(&bus->reg_lock);
 }
 
 static int azx_acquire_irq(struct azx *chip, int do_disconnect)
@@ -915,17 +914,17 @@ static void azx_shutdown_chip(struct azx *chip)
 static void azx_add_card_list(struct azx *chip)
 {
 	struct hda_intel *hda = container_of(chip, struct hda_intel, chip);
-	mutex_lock(&card_list_lock);
+
+	guard(mutex)(&card_list_lock);
 	list_add(&hda->list, &card_list);
-	mutex_unlock(&card_list_lock);
 }
 
 static void azx_del_card_list(struct azx *chip)
 {
 	struct hda_intel *hda = container_of(chip, struct hda_intel, chip);
-	mutex_lock(&card_list_lock);
+
+	guard(mutex)(&card_list_lock);
 	list_del_init(&hda->list);
-	mutex_unlock(&card_list_lock);
 }
 
 /* trigger power-save check at writing parameter */
@@ -942,7 +941,7 @@ static int __maybe_unused param_set_xint(const char *val, const struct kernel_pa
 	if (pm_blacklist > 0)
 		return 0;
 
-	mutex_lock(&card_list_lock);
+	guard(mutex)(&card_list_lock);
 	list_for_each_entry(hda, &card_list, list) {
 		chip = &hda->chip;
 		if (!hda->probe_continued || chip->disabled ||
@@ -950,7 +949,6 @@ static int __maybe_unused param_set_xint(const char *val, const struct kernel_pa
 			continue;
 		snd_hda_set_power_save(&chip->bus, power_save * 1000);
 	}
-	mutex_unlock(&card_list_lock);
 	return 0;
 }
 
@@ -1753,6 +1751,8 @@ static int default_bdl_pos_adj(struct azx *chip)
 		return 1;
 	case AZX_DRIVER_ZHAOXINHDMI:
 		return 128;
+	case AZX_DRIVER_NVIDIA:
+		return 64;
 	default:
 		return 32;
 	}
@@ -2552,6 +2552,9 @@ static const struct pci_device_id azx_ids[] = {
 	{ PCI_DEVICE_DATA(INTEL, HDA_PTL_H, AZX_DRIVER_SKL | AZX_DCAPS_INTEL_LNL) },
 	/* Wildcat Lake */
 	{ PCI_DEVICE_DATA(INTEL, HDA_WCL, AZX_DRIVER_SKL | AZX_DCAPS_INTEL_LNL) },
+	/* Nova Lake */
+	{ PCI_DEVICE_DATA(INTEL, HDA_NVL, AZX_DRIVER_SKL | AZX_DCAPS_INTEL_LNL) },
+	{ PCI_DEVICE_DATA(INTEL, HDA_NVL_S, AZX_DRIVER_SKL | AZX_DCAPS_INTEL_LNL) },
 	/* Apollolake (Broxton-P) */
 	{ PCI_DEVICE_DATA(INTEL, HDA_APL, AZX_DRIVER_SKL | AZX_DCAPS_INTEL_BROXTON) },
 	/* Gemini-Lake */

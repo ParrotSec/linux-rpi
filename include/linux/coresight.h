@@ -6,7 +6,6 @@
 #ifndef _LINUX_CORESIGHT_H
 #define _LINUX_CORESIGHT_H
 
-#include <linux/acpi.h>
 #include <linux/amba/bus.h>
 #include <linux/clk.h>
 #include <linux/device.h>
@@ -364,7 +363,7 @@ enum cs_mode {
  */
 struct coresight_ops_sink {
 	int (*enable)(struct coresight_device *csdev, enum cs_mode mode,
-		      void *data);
+		      struct coresight_path *path);
 	int (*disable)(struct coresight_device *csdev);
 	void *(*alloc_buffer)(struct coresight_device *csdev,
 			      struct perf_event *event, void **pages,
@@ -421,8 +420,9 @@ struct coresight_ops_source {
  */
 struct coresight_ops_helper {
 	int (*enable)(struct coresight_device *csdev, enum cs_mode mode,
-		      void *data);
-	int (*disable)(struct coresight_device *csdev, void *data);
+		      struct coresight_path *path);
+	int (*disable)(struct coresight_device *csdev,
+		       struct coresight_path *path);
 };
 
 
@@ -471,33 +471,6 @@ static inline bool is_coresight_device(void __iomem *base)
 	u32 cid = coresight_get_cid(base);
 
 	return cid == CORESIGHT_CID;
-}
-
-/*
- * Attempt to find and enable "APB clock" for the given device
- *
- * Returns:
- *
- * clk   - Clock is found and enabled
- * NULL  - Clock is controlled by firmware (ACPI device only) or when managed
- *	   by the AMBA bus driver instead
- * ERROR - Clock is found but failed to enable
- */
-static inline struct clk *coresight_get_enable_apb_pclk(struct device *dev)
-{
-	struct clk *pclk = NULL;
-
-	/* Firmware controls clocks for an ACPI device. */
-	if (has_acpi_companion(dev))
-		return NULL;
-
-	if (!dev_is_amba(dev)) {
-		pclk = devm_clk_get_optional_enabled(dev, "apb_pclk");
-		if (!pclk)
-			pclk = devm_clk_get_optional_enabled(dev, "apb");
-	}
-
-	return pclk;
 }
 
 #define CORESIGHT_PIDRn(i)	(0xFE0 + ((i) * 4))
@@ -731,4 +704,6 @@ void coresight_remove_driver(struct amba_driver *amba_drv,
 			     struct platform_driver *pdev_drv);
 int coresight_etm_get_trace_id(struct coresight_device *csdev, enum cs_mode mode,
 			       struct coresight_device *sink);
+int coresight_get_enable_clocks(struct device *dev, struct clk **pclk,
+				struct clk **atclk);
 #endif		/* _LINUX_COREISGHT_H */

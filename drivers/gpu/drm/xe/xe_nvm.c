@@ -43,17 +43,17 @@ static void xe_nvm_release_dev(struct device *dev)
 
 static bool xe_nvm_non_posted_erase(struct xe_device *xe)
 {
-	struct xe_gt *gt = xe_root_mmio_gt(xe);
+	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
 
 	if (xe->info.platform != XE_BATTLEMAGE)
 		return false;
-	return !(xe_mmio_read32(&gt->mmio, XE_REG(GEN12_CNTL_PROTECTED_NVM_REG)) &
+	return !(xe_mmio_read32(mmio, XE_REG(GEN12_CNTL_PROTECTED_NVM_REG)) &
 		 NVM_NON_POSTED_ERASE_CHICKEN_BIT);
 }
 
 static bool xe_nvm_writable_override(struct xe_device *xe)
 {
-	struct xe_gt *gt = xe_root_mmio_gt(xe);
+	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
 	bool writable_override;
 	resource_size_t base;
 
@@ -76,11 +76,32 @@ static bool xe_nvm_writable_override(struct xe_device *xe)
 	}
 
 	writable_override =
-		!(xe_mmio_read32(&gt->mmio, HECI_FWSTS2(base)) &
+		!(xe_mmio_read32(mmio, HECI_FWSTS2(base)) &
 		  HECI_FW_STATUS_2_NVM_ACCESS_MODE);
 	if (writable_override)
 		drm_info(&xe->drm, "NVM access overridden by jumper\n");
 	return writable_override;
+}
+
+static void xe_nvm_fini(void *arg)
+{
+	struct xe_device *xe = arg;
+	struct intel_dg_nvm_dev *nvm = xe->nvm;
+
+	if (!xe->info.has_gsc_nvm)
+		return;
+
+	/* No access to internal NVM from VFs */
+	if (IS_SRIOV_VF(xe))
+		return;
+
+	/* Nvm pointer should not be NULL here */
+	if (WARN_ON(!nvm))
+		return;
+
+	auxiliary_device_delete(&nvm->aux_dev);
+	auxiliary_device_uninit(&nvm->aux_dev);
+	xe->nvm = NULL;
 }
 
 int xe_nvm_init(struct xe_device *xe)
@@ -132,39 +153,17 @@ int xe_nvm_init(struct xe_device *xe)
 	ret = auxiliary_device_init(aux_dev);
 	if (ret) {
 		drm_err(&xe->drm, "xe-nvm aux init failed %d\n", ret);
-		goto err;
+		kfree(nvm);
+		xe->nvm = NULL;
+		return ret;
 	}
 
 	ret = auxiliary_device_add(aux_dev);
 	if (ret) {
 		drm_err(&xe->drm, "xe-nvm aux add failed %d\n", ret);
 		auxiliary_device_uninit(aux_dev);
-		goto err;
+		xe->nvm = NULL;
+		return ret;
 	}
-	return 0;
-
-err:
-	kfree(nvm);
-	xe->nvm = NULL;
-	return ret;
-}
-
-void xe_nvm_fini(struct xe_device *xe)
-{
-	struct intel_dg_nvm_dev *nvm = xe->nvm;
-
-	if (!xe->info.has_gsc_nvm)
-		return;
-
-	/* No access to internal NVM from VFs */
-	if (IS_SRIOV_VF(xe))
-		return;
-
-	/* Nvm pointer should not be NULL here */
-	if (WARN_ON(!nvm))
-		return;
-
-	auxiliary_device_delete(&nvm->aux_dev);
-	auxiliary_device_uninit(&nvm->aux_dev);
-	xe->nvm = NULL;
+	return devm_add_action_or_reset(xe->drm.dev, xe_nvm_fini, xe);
 }

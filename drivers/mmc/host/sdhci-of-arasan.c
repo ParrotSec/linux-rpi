@@ -99,7 +99,7 @@
 #define HIWORD_UPDATE(val, mask, shift) \
 		((val) << (shift) | (mask) << ((shift) + 16))
 
-#define CD_STABLE_TIMEOUT_US		1000000
+#define CD_STABLE_TIMEOUT_US		2000000
 #define CD_STABLE_MAX_SLEEP_US		10
 
 /**
@@ -605,7 +605,6 @@ static const struct sdhci_pltfm_data sdhci_arasan_cqe_pdata = {
 			SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN,
 };
 
-#ifdef CONFIG_PM_SLEEP
 /**
  * sdhci_arasan_suspend - Suspend method for the driver
  * @dev:	Address of the device structure
@@ -699,10 +698,9 @@ static int sdhci_arasan_resume(struct device *dev)
 
 	return 0;
 }
-#endif /* ! CONFIG_PM_SLEEP */
 
-static SIMPLE_DEV_PM_OPS(sdhci_arasan_dev_pm_ops, sdhci_arasan_suspend,
-			 sdhci_arasan_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(sdhci_arasan_dev_pm_ops, sdhci_arasan_suspend,
+				sdhci_arasan_resume);
 
 /**
  * sdhci_arasan_sdcardclk_recalc_rate - Return the card clock rate
@@ -1993,7 +1991,7 @@ static int sdhci_arasan_probe(struct platform_device *pdev)
 
 	ret = mmc_of_parse(host->mmc);
 	if (ret) {
-		ret = dev_err_probe(dev, ret, "parsing dt failed.\n");
+		dev_err_probe(dev, ret, "parsing dt failed.\n");
 		goto unreg_clk;
 	}
 
@@ -2080,7 +2078,7 @@ static struct platform_driver sdhci_arasan_driver = {
 		.name = "sdhci-arasan",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = sdhci_arasan_of_match,
-		.pm = &sdhci_arasan_dev_pm_ops,
+		.pm = pm_sleep_ptr(&sdhci_arasan_dev_pm_ops),
 	},
 	.probe = sdhci_arasan_probe,
 	.remove = sdhci_arasan_remove,

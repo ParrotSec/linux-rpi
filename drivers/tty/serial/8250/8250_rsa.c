@@ -152,9 +152,8 @@ void rsa_enable(struct uart_8250_port *up)
 		return;
 
 	if (up->port.uartclk != SERIAL_RSA_BAUD_BASE * 16) {
-		uart_port_lock_irq(&up->port);
+		guard(uart_port_lock_irq)(&up->port);
 		__rsa_enable(up);
-		uart_port_unlock_irq(&up->port);
 	}
 	if (up->port.uartclk == SERIAL_RSA_BAUD_BASE * 16)
 		serial_out(up, UART_RSA_FRR, 0);
@@ -176,7 +175,8 @@ void rsa_disable(struct uart_8250_port *up)
 	if (up->port.uartclk != SERIAL_RSA_BAUD_BASE * 16)
 		return;
 
-	uart_port_lock_irq(&up->port);
+	guard(uart_port_lock_irq)(&up->port);
+
 	mode = serial_in(up, UART_RSA_MSR);
 	result = !(mode & UART_RSA_MSR_FIFO);
 
@@ -188,7 +188,6 @@ void rsa_disable(struct uart_8250_port *up)
 
 	if (result)
 		up->port.uartclk = SERIAL_RSA_BAUD_BASE_LO * 16;
-	uart_port_unlock_irq(&up->port);
 }
 
 void rsa_autoconfig(struct uart_8250_port *up)
@@ -210,27 +209,3 @@ void rsa_reset(struct uart_8250_port *up)
 
 	serial_out(up, UART_RSA_FRR, 0);
 }
-
-#ifdef CONFIG_SERIAL_8250_DEPRECATED_OPTIONS
-#ifndef MODULE
-/*
- * Keep the old "8250" name working as well for the module options so we don't
- * break people. We need to keep the names identical and the convenient macros
- * will happily refuse to let us do that by failing the build with redefinition
- * errors of global variables.  So we stick them inside a dummy function to
- * avoid those conflicts.  The options still get parsed, and the redefined
- * MODULE_PARAM_PREFIX lets us keep the "8250." syntax alive.
- *
- * This is hacky. I'm sorry.
- */
-static void __used rsa8250_options(void)
-{
-#undef MODULE_PARAM_PREFIX
-#define MODULE_PARAM_PREFIX "8250_core."
-
-	__module_param_call(MODULE_PARAM_PREFIX, probe_rsa,
-		&param_array_ops, .arr = &__param_arr_probe_rsa,
-		0444, -1, 0);
-}
-#endif
-#endif

@@ -658,8 +658,6 @@ static umode_t xe_hwmon_attributes_visible(struct kobject *kobj,
 	struct xe_reg rapl_limit;
 	struct xe_mmio *mmio = xe_root_tile_mmio(hwmon->xe);
 
-	xe_pm_runtime_get(hwmon->xe);
-
 	if (hwmon->xe->info.has_mbx_power_limits) {
 		xe_hwmon_pcode_read_power_limit(hwmon, power_attr, channel, &uval);
 	} else if (power_attr != PL2_HWMON_ATTR) {
@@ -668,8 +666,6 @@ static umode_t xe_hwmon_attributes_visible(struct kobject *kobj,
 			uval = xe_mmio_read32(mmio, rapl_limit);
 	}
 	ret = (uval & PWR_LIM_EN) ? attr->mode : 0;
-
-	xe_pm_runtime_put(hwmon->xe);
 
 	return ret;
 }
@@ -1096,8 +1092,6 @@ xe_hwmon_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 	struct xe_hwmon *hwmon = (struct xe_hwmon *)drvdata;
 	int ret;
 
-	xe_pm_runtime_get(hwmon->xe);
-
 	switch (type) {
 	case hwmon_temp:
 		ret = xe_hwmon_temp_is_visible(hwmon, attr, channel);
@@ -1121,8 +1115,6 @@ xe_hwmon_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 		ret = 0;
 		break;
 	}
-
-	xe_pm_runtime_put(hwmon->xe);
 
 	return ret;
 }
@@ -1297,13 +1289,6 @@ xe_hwmon_get_preregistration_info(struct xe_hwmon *hwmon)
 			xe_hwmon_fan_input_read(hwmon, channel, &fan_speed);
 }
 
-static void xe_hwmon_mutex_destroy(void *arg)
-{
-	struct xe_hwmon *hwmon = arg;
-
-	mutex_destroy(&hwmon->hwmon_lock);
-}
-
 int xe_hwmon_register(struct xe_device *xe)
 {
 	struct device *dev = xe->drm.dev;
@@ -1322,8 +1307,7 @@ int xe_hwmon_register(struct xe_device *xe)
 	if (!hwmon)
 		return -ENOMEM;
 
-	mutex_init(&hwmon->hwmon_lock);
-	ret = devm_add_action_or_reset(dev, xe_hwmon_mutex_destroy, hwmon);
+	ret = devm_mutex_init(dev, &hwmon->hwmon_lock);
 	if (ret)
 		return ret;
 

@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+2-parisc64
-scripts/module.lds                       usr/src/linux-headers-6.17.13+2-parisc64/arch/parisc
-arch/parisc/include             usr/src/linux-headers-6.17.13+2-parisc64/arch/parisc

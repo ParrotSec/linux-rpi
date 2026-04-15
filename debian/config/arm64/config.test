@@ -1,4 +1,10 @@
 ##
+## file: arch/Kconfig
+##
+CONFIG_SCHED_SMT=y
+CONFIG_SCHED_MC=y
+
+##
 ## file: arch/arm64/Kconfig
 ##
 CONFIG_ARM64_ERRATUM_834220=y
@@ -10,8 +16,6 @@ CONFIG_ARM64_4K_PAGES=y
 ## choice: Virtual address space size
 CONFIG_ARM64_VA_BITS_52=y
 ## end choice
-CONFIG_SCHED_MC=y
-CONFIG_SCHED_SMT=y
 CONFIG_NR_CPUS=512
 CONFIG_NUMA=y
 CONFIG_XEN=y
@@ -23,6 +27,12 @@ CONFIG_ARM64_PMEM=y
 CONFIG_RANDOMIZE_BASE=y
 CONFIG_RANDOMIZE_MODULE_REGION_FULL=y
 CONFIG_ARM64_ACPI_PARKING_PROTOCOL=y
+
+##
+## file: arch/arm64/Kconfig.platforms
+##
+#. Testing dtb installation
+CONFIG_ARCH_KEEMBAY=y
 
 ##
 ## file: drivers/acpi/Kconfig
@@ -42,3 +52,9 @@ CONFIG_ACPI_APEI_GHES=y
 CONFIG_ACPI_APEI_PCIEAER=y
 CONFIG_ACPI_APEI_MEMORY_FAILURE=y
 CONFIG_ACPI_APEI_EINJ=m
+
+##
+## file: drivers/android/Kconfig
+##
+#. Testing debian/patches/debian/android-enable-building-binder-as-module.patch
+CONFIG_ANDROID_BINDER_IPC=m

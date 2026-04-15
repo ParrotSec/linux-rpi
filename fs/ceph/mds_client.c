@@ -24,6 +24,7 @@
 #include <linux/ceph/pagelist.h>
 #include <linux/ceph/auth.h>
 #include <linux/ceph/debugfs.h>
+#include <trace/events/ceph.h>
 
 #define RECONNECT_MAX_SIZE (INT_MAX - PAGE_SIZE)
 
@@ -979,14 +980,15 @@ static struct ceph_mds_session *register_session(struct ceph_mds_client *mdsc,
 	if (mds >= mdsc->max_sessions) {
 		int newmax = 1 << get_count_order(mds + 1);
 		struct ceph_mds_session **sa;
+		size_t ptr_size = sizeof(struct ceph_mds_session *);
 
 		doutc(cl, "realloc to %d\n", newmax);
-		sa = kcalloc(newmax, sizeof(void *), GFP_NOFS);
+		sa = kcalloc(newmax, ptr_size, GFP_NOFS);
 		if (!sa)
 			goto fail_realloc;
 		if (mdsc->sessions) {
 			memcpy(sa, mdsc->sessions,
-			       mdsc->max_sessions * sizeof(void *));
+			       mdsc->max_sessions * ptr_size);
 			kfree(mdsc->sessions);
 		}
 		mdsc->sessions = sa;
@@ -2221,7 +2223,7 @@ static int trim_caps_cb(struct inode *inode, int mds, void *arg)
 			int count;
 			dput(dentry);
 			d_prune_aliases(inode);
-			count = atomic_read(&inode->i_count);
+			count = icount_read(inode);
 			if (count == 1)
 				(*remaining)--;
 			doutc(cl, "%p %llx.%llx cap %p pruned, count now %d\n",
@@ -2532,6 +2534,7 @@ int ceph_alloc_readdir_reply_buffer(struct ceph_mds_request *req,
 	struct ceph_mount_options *opt = req->r_mdsc->fsc->mount_options;
 	size_t size = sizeof(struct ceph_mds_reply_dir_entry);
 	unsigned int num_entries;
+	u64 bytes_count;
 	int order;
 
 	spin_lock(&ci->i_ceph_lock);
@@ -2540,7 +2543,11 @@ int ceph_alloc_readdir_reply_buffer(struct ceph_mds_request *req,
 	num_entries = max(num_entries, 1U);
 	num_entries = min(num_entries, opt->max_readdir);
 
-	order = get_order(size * num_entries);
+	bytes_count = (u64)size * num_entries;
+	if (unlikely(bytes_count > ULONG_MAX))
+		bytes_count = ULONG_MAX;
+
+	order = get_order((unsigned long)bytes_count);
 	while (order >= 0) {
 		rinfo->dir_entries = (void*)__get_free_pages(GFP_KERNEL |
 							     __GFP_NOWARN |
@@ -2550,7 +2557,7 @@ int ceph_alloc_readdir_reply_buffer(struct ceph_mds_request *req,
 			break;
 		order--;
 	}
-	if (!rinfo->dir_entries)
+	if (!rinfo->dir_entries || unlikely(order < 0))
 		return -ENOMEM;
 
 	num_entries = (PAGE_SIZE << order) / size;
@@ -2761,6 +2768,7 @@ retry:
 			if (ret < 0) {
 				dput(parent);
 				dput(cur);
+				__putname(path);
 				return ERR_PTR(ret);
 			}
 
@@ -2770,6 +2778,7 @@ retry:
 				if (len < 0) {
 					dput(parent);
 					dput(cur);
+					__putname(path);
 					return ERR_PTR(len);
 				}
 			}
@@ -2806,6 +2815,7 @@ retry:
 		 * cannot ever succeed.  Creating paths that long is
 		 * possible with Ceph, but Linux cannot use them.
 		 */
+		__putname(path);
 		return ERR_PTR(-ENAMETOOLONG);
 	}
 
@@ -3282,6 +3292,8 @@ static void complete_request(struct ceph_mds_client *mdsc,
 {
 	req->r_end_latency = ktime_get();
 
+	trace_ceph_mdsc_complete_request(mdsc, req);
+
 	if (req->r_callback)
 		req->r_callback(mdsc, req);
 	complete_all(&req->r_completion);
@@ -3413,6 +3425,8 @@ static int __send_request(struct ceph_mds_session *session,
 {
 	int err;
 
+	trace_ceph_mdsc_send_request(session, req);
+
 	err = __prepare_send_request(session, req, drop_cap_releases);
 	if (!err) {
 		ceph_msg_get(req->r_request);
@@ -3464,6 +3478,8 @@ static void __do_request(struct ceph_mds_client *mdsc,
 		}
 		if (mdsc->mdsmap->m_epoch == 0) {
 			doutc(cl, "no mdsmap, waiting for map\n");
+			trace_ceph_mdsc_suspend_request(mdsc, session, req,
+							ceph_mdsc_suspend_reason_no_mdsmap);
 			list_add(&req->r_wait, &mdsc->waiting_for_map);
 			return;
 		}
@@ -3485,6 +3501,8 @@ static void __do_request(struct ceph_mds_client *mdsc,
 			goto finish;
 		}
 		doutc(cl, "no mds or not active, waiting for map\n");
+		trace_ceph_mdsc_suspend_request(mdsc, session, req,
+						ceph_mdsc_suspend_reason_no_active_mds);
 		list_add(&req->r_wait, &mdsc->waiting_for_map);
 		return;
 	}
@@ -3530,9 +3548,11 @@ static void __do_request(struct ceph_mds_client *mdsc,
 		 * it to the mdsc queue.
 		 */
 		if (session->s_state == CEPH_MDS_SESSION_REJECTED) {
-			if (ceph_test_mount_opt(mdsc->fsc, CLEANRECOVER))
+			if (ceph_test_mount_opt(mdsc->fsc, CLEANRECOVER)) {
+				trace_ceph_mdsc_suspend_request(mdsc, session, req,
+								ceph_mdsc_suspend_reason_rejected);
 				list_add(&req->r_wait, &mdsc->waiting_for_map);
-			else
+			} else
 				err = -EACCES;
 			goto out_session;
 		}
@@ -3546,6 +3566,8 @@ static void __do_request(struct ceph_mds_client *mdsc,
 			if (random)
 				req->r_resend_mds = mds;
 		}
+		trace_ceph_mdsc_suspend_request(mdsc, session, req,
+						ceph_mdsc_suspend_reason_session);
 		list_add(&req->r_wait, &session->s_waiting);
 		goto out_session;
 	}
@@ -3646,6 +3668,7 @@ static void __wake_requests(struct ceph_mds_client *mdsc,
 		list_del_init(&req->r_wait);
 		doutc(cl, " wake request %p tid %llu\n", req,
 		      req->r_tid);
+		trace_ceph_mdsc_resume_request(mdsc, req);
 		__do_request(mdsc, req);
 	}
 }
@@ -3672,6 +3695,7 @@ static void kick_requests(struct ceph_mds_client *mdsc, int mds)
 		    req->r_session->s_mds == mds) {
 			doutc(cl, " kicking tid %llu\n", req->r_tid);
 			list_del_init(&req->r_wait);
+			trace_ceph_mdsc_resume_request(mdsc, req);
 			__do_request(mdsc, req);
 		}
 	}
@@ -3718,6 +3742,7 @@ int ceph_mdsc_submit_request(struct ceph_mds_client *mdsc, struct inode *dir,
 	doutc(cl, "submit_request on %p for inode %p\n", req, dir);
 	mutex_lock(&mdsc->mutex);
 	__register_request(mdsc, req, dir);
+	trace_ceph_mdsc_submit_request(mdsc, req);
 	__do_request(mdsc, req);
 	err = req->r_err;
 	mutex_unlock(&mdsc->mutex);
@@ -5649,7 +5674,7 @@ static int ceph_mds_auth_match(struct ceph_mds_client *mdsc,
 	u32 caller_uid = from_kuid(&init_user_ns, cred->fsuid);
 	u32 caller_gid = from_kgid(&init_user_ns, cred->fsgid);
 	struct ceph_client *cl = mdsc->fsc->client;
-	const char *fs_name = mdsc->fsc->mount_options->mds_namespace;
+	const char *fs_name = mdsc->mdsmap->m_fs_name;
 	const char *spath = mdsc->fsc->mount_options->server_path;
 	bool gid_matched = false;
 	u32 gid, tlen, len;
@@ -5657,7 +5682,8 @@ static int ceph_mds_auth_match(struct ceph_mds_client *mdsc,
 
 	doutc(cl, "fsname check fs_name=%s  match.fs_name=%s\n",
 	      fs_name, auth->match.fs_name ? auth->match.fs_name : "");
-	if (auth->match.fs_name && strcmp(auth->match.fs_name, fs_name)) {
+
+	if (!ceph_namespace_match(auth->match.fs_name, fs_name)) {
 		/* fsname mismatch, try next one */
 		return 0;
 	}

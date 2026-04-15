@@ -83,6 +83,7 @@ enum amdgpu_ring_type {
 	AMDGPU_RING_TYPE_MES,
 	AMDGPU_RING_TYPE_UMSCH_MM,
 	AMDGPU_RING_TYPE_CPER,
+	AMDGPU_RING_TYPE_MAX,
 };
 
 enum amdgpu_ib_pool_type {
@@ -114,7 +115,7 @@ struct amdgpu_sched {
  */
 struct amdgpu_fence_driver {
 	uint64_t			gpu_addr;
-	volatile uint32_t		*cpu_addr;
+	uint32_t			*cpu_addr;
 	/* sync_seq is protected by ring emission lock */
 	uint32_t			sync_seq;
 	atomic_t			last_seq;
@@ -143,20 +144,23 @@ struct amdgpu_fence {
 	struct amdgpu_ring		*ring;
 	ktime_t				start_timestamp;
 
-	/* wptr for the fence for resets */
+	/* wptr for the total submission for resets */
 	u64				wptr;
 	/* fence context for resets */
 	u64				context;
-	uint32_t			seq;
+	/* has this fence been reemitted */
+	unsigned int			reemitted;
+	/* wptr for the fence for the submission */
+	u64				fence_wptr_start;
+	u64				fence_wptr_end;
 };
 
 extern const struct drm_sched_backend_ops amdgpu_sched_ops;
 
-void amdgpu_fence_driver_clear_job_fences(struct amdgpu_ring *ring);
 void amdgpu_fence_driver_set_error(struct amdgpu_ring *ring, int error);
 void amdgpu_fence_driver_force_completion(struct amdgpu_ring *ring);
 void amdgpu_fence_driver_guilty_force_completion(struct amdgpu_fence *af);
-void amdgpu_fence_save_wptr(struct dma_fence *fence);
+void amdgpu_fence_save_wptr(struct amdgpu_fence *af);
 
 int amdgpu_fence_driver_init_ring(struct amdgpu_ring *ring);
 int amdgpu_fence_driver_start_ring(struct amdgpu_ring *ring,
@@ -166,8 +170,8 @@ void amdgpu_fence_driver_hw_init(struct amdgpu_device *adev);
 void amdgpu_fence_driver_hw_fini(struct amdgpu_device *adev);
 int amdgpu_fence_driver_sw_init(struct amdgpu_device *adev);
 void amdgpu_fence_driver_sw_fini(struct amdgpu_device *adev);
-int amdgpu_fence_emit(struct amdgpu_ring *ring, struct dma_fence **f,
-		      struct amdgpu_fence *af, unsigned int flags);
+int amdgpu_fence_emit(struct amdgpu_ring *ring, struct amdgpu_fence *af,
+		      unsigned int flags);
 int amdgpu_fence_emit_polling(struct amdgpu_ring *ring, uint32_t *s,
 			      uint32_t timeout);
 bool amdgpu_fence_process(struct amdgpu_ring *ring);
@@ -309,7 +313,7 @@ struct amdgpu_ring {
 	unsigned int		ring_backup_entries_to_copy;
 	unsigned		rptr_offs;
 	u64			rptr_gpu_addr;
-	volatile u32		*rptr_cpu_addr;
+	u32			*rptr_cpu_addr;
 
 	/**
 	 * @wptr:
@@ -389,19 +393,19 @@ struct amdgpu_ring {
 	 * This is the CPU address pointer in the writeback slot. This is used
 	 * to commit changes to the GPU.
 	 */
-	volatile u32		*wptr_cpu_addr;
+	u32			*wptr_cpu_addr;
 	unsigned		fence_offs;
 	u64			fence_gpu_addr;
-	volatile u32		*fence_cpu_addr;
+	u32			*fence_cpu_addr;
 	uint64_t		current_ctx;
 	char			name[16];
 	u32                     trail_seq;
 	unsigned		trail_fence_offs;
 	u64			trail_fence_gpu_addr;
-	volatile u32		*trail_fence_cpu_addr;
+	u32			*trail_fence_cpu_addr;
 	unsigned		cond_exe_offs;
 	u64			cond_exe_gpu_addr;
-	volatile u32		*cond_exe_cpu_addr;
+	u32			*cond_exe_cpu_addr;
 	unsigned int		set_q_mode_offs;
 	u32			*set_q_mode_ptr;
 	u64			set_q_mode_token;
@@ -481,10 +485,7 @@ static inline void amdgpu_ring_set_preempt_cond_exec(struct amdgpu_ring *ring,
 
 static inline void amdgpu_ring_clear_ring(struct amdgpu_ring *ring)
 {
-	int i = 0;
-	while (i <= ring->buf_mask)
-		ring->ring[i++] = ring->funcs->nop;
-
+	memset32(ring->ring, ring->funcs->nop, ring->buf_mask + 1);
 }
 
 static inline void amdgpu_ring_write(struct amdgpu_ring *ring, uint32_t v)

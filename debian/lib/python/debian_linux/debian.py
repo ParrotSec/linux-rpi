@@ -187,11 +187,9 @@ $
             raise RuntimeError(u"Invalid debian linux version")
         d = up_match.groupdict()
         self.linux_version = d['version']
-        self.linux_version_update = self.linux_version + d['update']
+        self.linux_version_full = self.linux_version + d['update']
         if d['modifier'] is not None:
-            self.linux_upstream_full = '-'.join((self.linux_version_update, d['modifier']))
-        else:
-            self.linux_upstream_full = self.linux_version_update
+            self.linux_version_full += '-' + d['modifier']
 
 
 class PackageArchitecture(set[str]):
@@ -344,11 +342,13 @@ class PackageRelationGroup(list[PackageRelationEntry]):
         v: Iterable[PackageRelationEntry | str] | str | Self | None = None,
         /, *,
         arches: set[str] | None = None,
+        restrictions: PackageBuildprofile | str | None = None,
     ) -> None:
         if v:
             if isinstance(v, str):
                 v = (i.strip() for i in re.split(r'\|', v.strip()))
-            self.extend(PackageRelationEntry(i, arches=arches) for i in v if i)
+            self.extend(PackageRelationEntry(i, arches=arches, restrictions=restrictions)
+                        for i in v if i)
 
     def __str__(self) -> str:
         return ' | '.join(str(i) for i in self)
@@ -379,7 +379,7 @@ class PackageRelation(list[PackageRelationGroup]):
             self.extend(PackageRelationGroup(i, arches=arches) for i in v if i)
 
     def __str__(self) -> str:
-        return ', '.join(str(i) for i in self)
+        return ', '.join(sorted((str(i) for i in self), key=lambda s: s.replace('$', '~')))
 
     def _merge_eq(self, v: PackageRelationGroup) -> typing.Optional[PackageRelationGroup]:
         for i in self:
@@ -507,13 +507,18 @@ class PackageBuildprofile(list[PackageBuildprofileEntry]):
         return ret
 
     def update(self, v: Self, /) -> Self:
-        for i in v:
-            for j in self:
-                if not j.isdisjoint(i):
-                    j.update(i)
-                    break
-            else:
-                self.append(i)
+        if len(v) > 1:
+            raise ValueError
+        if not v:
+            self[:] = []
+        elif self:
+            for i in v:
+                for j in self:
+                    if not j.isdisjoint(i):
+                        j.update(i)
+                        break
+                else:
+                    self.append(i)
         return self
     __ior__ = update
 

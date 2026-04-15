@@ -17,6 +17,7 @@
 #include <linux/slab.h>
 #include <linux/irq.h>
 #include <linux/dmi.h>
+#include <linux/string_choices.h>
 
 #ifdef CONFIG_X86
 #define valid_IRQ(i) (((i) != 0) && ((i) != 2))
@@ -531,6 +532,12 @@ static const struct dmi_system_id irq1_level_low_skip_override[] = {
 			DMI_MATCH(DMI_BOARD_NAME, "16T90SP"),
 		},
 	},
+	{
+		/* JWIPC JVC9100 */
+		.matches = {
+			DMI_MATCH(DMI_BOARD_NAME, "JVC9100"),
+		},
+	},
 	{ }
 };
 
@@ -705,6 +712,8 @@ struct irq_override_cmp {
 
 static const struct irq_override_cmp override_table[] = {
 	{ irq1_level_low_skip_override, 1, ACPI_LEVEL_SENSITIVE, ACPI_ACTIVE_LOW, 0, false },
+	{ irq1_level_low_skip_override, 10, ACPI_LEVEL_SENSITIVE, ACPI_ACTIVE_LOW, 1, false },
+	{ irq1_level_low_skip_override, 11, ACPI_LEVEL_SENSITIVE, ACPI_ACTIVE_LOW, 1, false },
 	{ irq1_edge_low_force_override, 1, ACPI_EDGE_SENSITIVE, ACPI_ACTIVE_LOW, 1, true },
 };
 
@@ -780,7 +789,7 @@ static void acpi_dev_get_irqresource(struct resource *res, u32 gsi,
 			pr_warn("ACPI: IRQ %d override to %s%s, %s%s\n", gsi,
 				t ? "level" : "edge",
 				trig == triggering ? "" : "(!)",
-				p ? "low" : "high",
+				str_low_high(p),
 				pol == polarity ? "" : "(!)");
 			triggering = trig;
 			polarity = pol;

@@ -83,7 +83,7 @@ void amdgpu_driver_unload_kms(struct drm_device *dev)
 {
 	struct amdgpu_device *adev = drm_to_adev(dev);
 
-	if (adev == NULL)
+	if (adev == NULL || !adev->num_ip_blocks)
 		return;
 
 	amdgpu_unregister_gpu_instance(adev);
@@ -200,6 +200,9 @@ static enum amd_ip_block_type
 	case AMDGPU_HW_IP_VCN_JPEG:
 		type = (amdgpu_device_ip_get_ip_block(adev, AMD_IP_BLOCK_TYPE_JPEG)) ?
 				   AMD_IP_BLOCK_TYPE_JPEG : AMD_IP_BLOCK_TYPE_VCN;
+		break;
+	case AMDGPU_HW_IP_VPE:
+		type = AMD_IP_BLOCK_TYPE_VPE;
 		break;
 	default:
 		type = AMD_IP_BLOCK_TYPE_NUM;
@@ -721,6 +724,9 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		case AMD_IP_BLOCK_TYPE_UVD:
 			count = adev->uvd.num_uvd_inst;
 			break;
+		case AMD_IP_BLOCK_TYPE_VPE:
+			count = adev->vpe.num_instances;
+			break;
 		/* For all other IP block types not listed in the switch statement
 		 * the ip status is valid here and the instance count is one.
 		 */
@@ -939,6 +945,10 @@ out:
 			dev_info->ids_flags |= AMDGPU_IDS_FLAGS_TMZ;
 		if (adev->gfx.config.ta_cntl2_truncate_coord_mode)
 			dev_info->ids_flags |= AMDGPU_IDS_FLAGS_CONFORMANT_TRUNC_COORD;
+
+		/* Gang submit is not supported under SRIOV currently */
+		if (!amdgpu_sriov_vf(adev))
+			dev_info->ids_flags |= AMDGPU_IDS_FLAGS_GANG_SUBMIT;
 
 		if (amdgpu_passthrough(adev))
 			dev_info->ids_flags |= (AMDGPU_IDS_FLAGS_MODE_PT <<
@@ -1418,13 +1428,9 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 
 	amdgpu_debugfs_vm_init(file_priv);
 
-	r = amdgpu_vm_init(adev, &fpriv->vm, fpriv->xcp_id);
+	r = amdgpu_vm_init(adev, &fpriv->vm, fpriv->xcp_id, pasid);
 	if (r)
 		goto error_pasid;
-
-	r = amdgpu_vm_set_pasid(adev, &fpriv->vm, pasid);
-	if (r)
-		goto error_vm;
 
 	fpriv->prt_va = amdgpu_vm_bo_add(adev, &fpriv->vm, NULL);
 	if (!fpriv->prt_va) {
@@ -1465,15 +1471,12 @@ error_vm:
 	amdgpu_vm_fini(adev, &fpriv->vm);
 
 error_pasid:
-	if (pasid) {
+	if (pasid)
 		amdgpu_pasid_free(pasid);
-		amdgpu_vm_set_pasid(adev, &fpriv->vm, 0);
-	}
 
 	kfree(fpriv);
 
 out_suspend:
-	pm_runtime_mark_last_busy(dev->dev);
 pm_put:
 	pm_runtime_put_autosuspend(dev->dev);
 
@@ -1541,7 +1544,6 @@ void amdgpu_driver_postclose_kms(struct drm_device *dev,
 	kfree(fpriv);
 	file_priv->driver_priv = NULL;
 
-	pm_runtime_mark_last_busy(dev->dev);
 	pm_runtime_put_autosuspend(dev->dev);
 }
 

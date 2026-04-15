@@ -11,6 +11,11 @@ export DEB_RULES_REQUIRES_ROOT ?= no
 GENCONTROL_ARGS := -v@signedtemplate_binaryversion@
 BUILDDEB_ARGS := -Zxz $(if $(filter pkg.linux.quick,$(DEB_BUILD_PROFILES)),-z0)
 
+packages_enabled := $(shell dh_listpackages)
+define if_package
+$(if $(filter $(1),$(packages_enabled)),$(2))
+endef
+
 stamp = [ -d $(dir $@) ] || mkdir $(dir $@); touch $@
 
 define dh_binary_pre
@@ -29,7 +34,7 @@ define dh_binary_post
 	# resolve the situation policy conformant.
 	# https://www.debian.org/doc/debian-policy/ch-docs.html#copyright-information
 	$(if $(INSTALLDOCS_LINK_DOC),
-		mkdir -p debian/$(PACKAGE_NAME)/usr/share/doc && ln -sf $(INSTALLDOCS_LINK_DOC) debian/$(PACKAGE_NAME)/usr/share/doc/$(PACKAGE_NAME),
+		$(foreach p,$(packages_enabled),DH_OPTIONS= dh_link -p$(p) usr/share/doc/$(INSTALLDOCS_LINK_DOC) usr/share/doc/$(p);),
 		dh_installdocs)
 	dh_installchangelogs
 	dh_installexamples
@@ -56,47 +61,30 @@ endef
 build-indep:
 
 $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): REAL_VERSION = $(ABINAME)$(LOCALVERSION)
-$(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): IMAGE_PACKAGE_NAME = linux-image-$(REAL_VERSION)-unsigned
+$(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): IMAGE_PACKAGE_NAME = linux-binary-unsigned-$(REAL_VERSION)
 $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): SIGNATURE_DIR = debian/signatures/$(IMAGE_PACKAGE_NAME)
 $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR): INSTALL_DIR=$(BUILD_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR):
 	mkdir -p $(INSTALL_DIR)/boot
-	rsync -a $(patsubst %,/boot/%-$(REAL_VERSION),config System.map $(IMAGE_INSTALL_STEM)) \
+	rsync -a $(patsubst %,/boot/%-$(REAL_VERSION),$(IMAGE_INSTALL_STEM)) \
 		$(INSTALL_DIR)/boot/
 	sbattach --attach $(SIGNATURE_DIR)/boot/vmlinuz-$(REAL_VERSION).sig \
 		$(INSTALL_DIR)/boot/vmlinuz-$(REAL_VERSION)
-	mkdir -p $(INSTALL_DIR)/lib/modules/$(REAL_VERSION)
-	rsync -a $(addprefix /lib/modules/$(REAL_VERSION)/,kernel modules.builtin modules.builtin.modinfo modules.order) \
-		$(INSTALL_DIR)/lib/modules/$(REAL_VERSION)/
-# Copy any device tree files
-	if [ -d /usr/lib/linux-image-$(REAL_VERSION) ]; then \
-		mkdir -p $(INSTALL_DIR)/usr/lib/linux-image-$(REAL_VERSION); \
-		rsync -a /usr/lib/linux-image-$(REAL_VERSION)/ \
-			$(INSTALL_DIR)/usr/lib/linux-image-$(REAL_VERSION)/; \
-	fi
 	$(stamp)
 
-build_image:
+build_binary:
 
-binary_image: DH_OPTIONS = -p$(PACKAGE_NAME)
-binary_image: DH_STRIP_ARGS = --no-automatic-dbgsym
-binary_image: REAL_VERSION = $(ABINAME)$(LOCALVERSION)
-binary_image: IMAGE_PACKAGE_NAME = linux-image-$(REAL_VERSION)-unsigned
-binary_image: DIR2 = $(BUILD_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
-binary_image: PACKAGE_DIR = debian/$(PACKAGE_NAME)
-binary_image: $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
-binary_image:
+binary_binary: DH_INSTALL_ARGS = --sourcedir=$(BUILD_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+binary_binary: DH_STRIP_ARGS = --no-automatic-dbgsym
+binary_binary: $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+binary_binary:
 	$(dh_binary_pre)
-	dh_install --sourcedir=$(DIR2) boot
-	dh_install --sourcedir=$(DIR2) lib
-	if [ -d $(DIR2)/usr ]; then dh_install --sourcedir=$(DIR2) usr; fi
-# Copy bug scripts but change the info file to refer to the right package
-	mkdir -p $(PACKAGE_DIR)/usr/share/bug/$(PACKAGE_NAME)
-	rsync -a /usr/share/bug/$(IMAGE_PACKAGE_NAME)/ \
-		$(PACKAGE_DIR)/usr/share/bug/$(PACKAGE_NAME)/
-	sed -i -e 's/^PACKAGE_NAME=.*/PACKAGE_NAME=$(PACKAGE_NAME)/' \
-		-e 's/^PACKAGE_VERSION=.*/PACKAGE_VERSION=$(PACKAGE_VERSION)/' \
-		$(PACKAGE_DIR)/usr/share/bug/$(PACKAGE_NAME)/info
+	$(dh_binary_post)
+
+binary_image-di: DH_INSTALL_ARGS = --sourcedir=$(BUILD_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+binary_image-di: $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
+binary_image-di:
+	$(dh_binary_pre)
 	$(dh_binary_post)
 
 build_meta:
@@ -104,29 +92,5 @@ build_meta:
 binary_meta:
 	$(dh_binary_pre)
 	$(dh_binary_post)
-
-build_installer:
-
-binary_installer: REAL_VERSION = $(ABINAME)$(LOCALVERSION)
-binary_installer: export KW_DEFCONFIG_DIR=debian/installer
-binary_installer: export KW_CONFIG_DIR=debian/installer
-binary_installer: export SOURCEDIR = $(BUILD_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
-binary_installer: DH_OPTIONS_IMAGE = -p$(IMAGE_PACKAGE_NAME) --sourcedir=$(SOURCEDIR)
-binary_installer: $(STAMPS_DIR)/install_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
-binary_installer:
-	$(dh_binary_pre)
-	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install boot/$(IMAGE_INSTALL_STEM)-$(REAL_VERSION)
-	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install lib/modules/$(REAL_VERSION)/modules.builtin
-	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install lib/modules/$(REAL_VERSION)/modules.order
-ifneq ($(filter arm64 armel armhf mipsel mips64el mipsr6 mipsr6el mips64r6 mips64r6el riscv64,$(ARCH)),)
-	DH_OPTIONS="$(DH_OPTIONS_IMAGE)" dh_install usr/lib/linux-image-$(REAL_VERSION)
-endif
-	kernel-wedge copy-modules $(ABINAME) $(FLAVOUR) $(REAL_VERSION)
-	kernel-wedge find-dups $(REAL_VERSION)
-	kernel-wedge find-unpackaged $(REAL_VERSION) $(REAL_VERSION)
-	kernel-wedge check $$(dh_listpackages)
-	dh_fixperms
-	dh_gencontrol -- $(GENCONTROL_ARGS)
-	dh_builddeb -- $(BUILDDEB_ARGS)
 
 .PHONY: build_% binary_%

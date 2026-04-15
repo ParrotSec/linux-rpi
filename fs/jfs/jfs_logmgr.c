@@ -1199,7 +1199,6 @@ static int open_dummy_log(struct super_block *sb)
 		init_waitqueue_head(&dummy_log->syncwait);
 		dummy_log->no_integrity = 1;
 		/* Make up some stuff */
-		dummy_log->base = 0;
 		dummy_log->size = 1024;
 		rc = lmLogInit(dummy_log);
 		if (rc) {
@@ -2312,6 +2311,7 @@ int jfsIOWait(void *arg)
 {
 	struct lbuf *bp;
 
+	set_freezable();
 	do {
 		spin_lock_irq(&log_redrive_lock);
 		while ((bp = log_redrive_list)) {

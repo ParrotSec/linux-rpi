@@ -3,7 +3,7 @@
 #include <linux/bitops.h>
 #include <linux/elf.h>
 #include <linux/mm.h>
-
+#include <linux/kvm_types.h>
 #include <linux/io.h>
 #include <linux/sched.h>
 #include <linux/sched/clock.h>
@@ -546,6 +546,23 @@ static void early_detect_mem_encrypt(struct cpuinfo_x86 *c)
 	u64 msr;
 
 	/*
+	 * Mark using WBINVD is needed during kexec on processors that
+	 * support SME. This provides support for performing a successful
+	 * kexec when going from SME inactive to SME active (or vice-versa).
+	 *
+	 * The cache must be cleared so that if there are entries with the
+	 * same physical address, both with and without the encryption bit,
+	 * they don't race each other when flushed and potentially end up
+	 * with the wrong entry being committed to memory.
+	 *
+	 * Test the CPUID bit directly because with mem_encrypt=off the
+	 * BSP will clear the X86_FEATURE_SME bit and the APs will not
+	 * see it set after that.
+	 */
+	if (c->extended_cpuid_level >= 0x8000001f && (cpuid_eax(0x8000001f) & BIT(0)))
+		__this_cpu_write(cache_state_incoherent, true);
+
+	/*
 	 * BIOS support is required for SME and SEV.
 	 *   For SME: If BIOS has enabled SME then adjust x86_phys_bits by
 	 *	      the SME physical address space reduction value.
@@ -934,26 +951,14 @@ static void init_amd_zen1(struct cpuinfo_x86 *c)
 	}
 }
 
-static bool cpu_has_zenbleed_microcode(void)
-{
-	u32 good_rev = 0;
-
-	switch (boot_cpu_data.x86_model) {
-	case 0x30 ... 0x3f: good_rev = 0x0830107b; break;
-	case 0x60 ... 0x67: good_rev = 0x0860010c; break;
-	case 0x68 ... 0x6f: good_rev = 0x08608107; break;
-	case 0x70 ... 0x7f: good_rev = 0x08701033; break;
-	case 0xa0 ... 0xaf: good_rev = 0x08a00009; break;
-
-	default:
-		return false;
-	}
-
-	if (boot_cpu_data.microcode < good_rev)
-		return false;
-
-	return true;
-}
+static const struct x86_cpu_id amd_zenbleed_microcode[] = {
+	ZEN_MODEL_STEP_UCODE(0x17, 0x31, 0x0, 0x0830107b),
+	ZEN_MODEL_STEP_UCODE(0x17, 0x60, 0x1, 0x0860010c),
+	ZEN_MODEL_STEP_UCODE(0x17, 0x68, 0x1, 0x08608107),
+	ZEN_MODEL_STEP_UCODE(0x17, 0x71, 0x0, 0x08701033),
+	ZEN_MODEL_STEP_UCODE(0x17, 0xa0, 0x0, 0x08a00009),
+	{}
+};
 
 static void zen2_zenbleed_check(struct cpuinfo_x86 *c)
 {
@@ -963,7 +968,7 @@ static void zen2_zenbleed_check(struct cpuinfo_x86 *c)
 	if (!cpu_has(c, X86_FEATURE_AVX))
 		return;
 
-	if (!cpu_has_zenbleed_microcode()) {
+	if (!x86_match_min_microcode_rev(amd_zenbleed_microcode)) {
 		pr_notice_once("Zenbleed: please update your microcode for the most optimal fix\n");
 		msr_set_bit(MSR_AMD64_DE_CFG, MSR_AMD64_DE_CFG_ZEN2_FP_BACKUP_FIX_BIT);
 	} else {
@@ -1301,7 +1306,7 @@ unsigned long amd_get_dr_addr_mask(unsigned int dr)
 
 	return per_cpu(amd_dr_addr_mask[dr], smp_processor_id());
 }
-EXPORT_SYMBOL_GPL(amd_get_dr_addr_mask);
+EXPORT_SYMBOL_FOR_KVM(amd_get_dr_addr_mask);
 
 static void zenbleed_check_cpu(void *unused)
 {

@@ -112,7 +112,7 @@
 		regulator-max-microvolt = <3300000>;
 		regulator-min-microvolt = <3300000>;
 		regulator-name = "+V3.3_SD";
-		startup-delay-us = <2000>;
+		startup-delay-us = <20000>;
 	};
 
 	reg_sd1_vqmmc: regulator-sdhci1-vqmmc {
@@ -147,7 +147,7 @@
 		regulator-name = "+V_SODIMM";
 	};
 
-	reserved-memory {
+	reserved_memory: reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -159,6 +159,12 @@
 
 		secure_ddr: optee@9e800000 {
 			reg = <0x00 0x9e800000 0x00 0x01800000>; /* for OP-TEE */
+			no-map;
+		};
+
+		wkup_r5fss0_core0_dma_memory_region: memory@9c800000 {
+			compatible = "shared-dma-pool";
+			reg = <0x00 0x9c800000 0x00 0x100000>;
 			no-map;
 		};
 
@@ -807,7 +813,7 @@
 /* Verdin ETH_1 (On-module PHY) */
 &cpsw_port1 {
 	phy-handle = <&som_eth_phy>;
-	phy-mode = "rgmii-rxid";
+	phy-mode = "rgmii-id";
 	status = "disabled";
 };
 
@@ -828,24 +834,6 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_epwm2_a>, <&pinctrl_epwm2_b>;
 	status = "disabled";
-};
-
-&mailbox0_cluster0 {
-	status = "okay";
-
-	mbox_r5_0: mbox-r5-0 {
-		ti,mbox-rx = <0 0 0>;
-		ti,mbox-tx = <1 0 0>;
-	};
-};
-
-&mailbox0_cluster1 {
-	status = "okay";
-
-	mbox_mcu_r5_0: mbox-mcu-r5-0 {
-		ti,mbox-rx = <0 0 0>;
-		ti,mbox-tx = <1 0 0>;
-	};
 };
 
 &main0_alert {
@@ -1426,3 +1414,5 @@
 	uart-has-rtscts;
 	status = "disabled";
 };
+
+#include "k3-am62p-ti-ipc-firmware.dtsi"

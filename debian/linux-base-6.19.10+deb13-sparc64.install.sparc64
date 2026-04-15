@@ -1,0 +1,3 @@
+boot/config-*
+boot/System.map-*
+lib/modules/6.19.10+deb13-sparc64/modules.*  usr/lib/modules/6.19.10+deb13-sparc64

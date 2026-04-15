@@ -667,12 +667,8 @@ xfs_attr_shortform_bytesfit(
 
 	/*
 	 * For attr2 we can try to move the forkoff if there is space in the
-	 * literal area, but for the old format we are done if there is no
-	 * space in the fixed attribute fork.
+	 * literal area
 	 */
-	if (!xfs_has_attr2(mp))
-		return 0;
-
 	dsize = dp->i_df.if_bytes;
 
 	switch (dp->i_df.if_format) {
@@ -723,21 +719,15 @@ xfs_attr_shortform_bytesfit(
 }
 
 /*
- * Switch on the ATTR2 superblock bit (implies also FEATURES2) unless:
- * - noattr2 mount option is set,
- * - on-disk version bit says it is already set, or
- * - the attr2 mount option is not set to enable automatic upgrade from attr1.
+ * Switch on the ATTR2 superblock bit (implies also FEATURES2) unless
+ * on-disk version bit says it is already set
  */
 STATIC void
 xfs_sbversion_add_attr2(
 	struct xfs_mount	*mp,
 	struct xfs_trans	*tp)
 {
-	if (xfs_has_noattr2(mp))
-		return;
 	if (mp->m_sb.sb_features2 & XFS_SB_VERSION2_ATTR2BIT)
-		return;
-	if (!xfs_has_attr2(mp))
 		return;
 
 	spin_lock(&mp->m_sb_lock);
@@ -889,7 +879,7 @@ xfs_attr_sf_removename(
 	/*
 	 * Fix up the start offset of the attribute fork
 	 */
-	if (totsize == sizeof(struct xfs_attr_sf_hdr) && xfs_has_attr2(mp) &&
+	if (totsize == sizeof(struct xfs_attr_sf_hdr) &&
 	    (dp->i_df.if_format != XFS_DINODE_FMT_BTREE) &&
 	    !(args->op_flags & (XFS_DA_OP_ADDNAME | XFS_DA_OP_REPLACE)) &&
 	    !xfs_has_parent(mp)) {
@@ -900,7 +890,6 @@ xfs_attr_sf_removename(
 		ASSERT(dp->i_forkoff);
 		ASSERT(totsize > sizeof(struct xfs_attr_sf_hdr) ||
 				(args->op_flags & XFS_DA_OP_ADDNAME) ||
-				!xfs_has_attr2(mp) ||
 				dp->i_df.if_format == XFS_DINODE_FMT_BTREE ||
 				xfs_has_parent(mp));
 		xfs_trans_log_inode(args->trans, dp,
@@ -1040,8 +1029,7 @@ xfs_attr_shortform_allfit(
 		bytes += xfs_attr_sf_entsize_byname(name_loc->namelen,
 					be16_to_cpu(name_loc->valuelen));
 	}
-	if (xfs_has_attr2(dp->i_mount) &&
-	    (dp->i_df.if_format != XFS_DINODE_FMT_BTREE) &&
+	if ((dp->i_df.if_format != XFS_DINODE_FMT_BTREE) &&
 	    (bytes == sizeof(struct xfs_attr_sf_hdr)))
 		return -1;
 	return xfs_attr_shortform_bytesfit(dp, bytes);
@@ -1161,7 +1149,6 @@ xfs_attr3_leaf_to_shortform(
 		 * this case.
 		 */
 		if (!(args->op_flags & XFS_DA_OP_REPLACE)) {
-			ASSERT(xfs_has_attr2(dp->i_mount));
 			ASSERT(dp->i_df.if_format != XFS_DINODE_FMT_BTREE);
 			xfs_attr_fork_remove(dp, args->trans);
 		}
@@ -1225,7 +1212,7 @@ xfs_attr3_leaf_to_node(
 
 	trace_xfs_attr_leaf_to_node(args);
 
-	if (XFS_TEST_ERROR(false, mp, XFS_ERRTAG_ATTR_LEAF_TO_NODE)) {
+	if (XFS_TEST_ERROR(mp, XFS_ERRTAG_ATTR_LEAF_TO_NODE)) {
 		error = -EIO;
 		goto out;
 	}
@@ -1489,6 +1476,7 @@ xfs_attr3_leaf_add_work(
 	struct xfs_attr_leaf_name_local *name_loc;
 	struct xfs_attr_leaf_name_remote *name_rmt;
 	struct xfs_mount	*mp;
+	int			old_end, new_end;
 	int			tmp;
 	int			i;
 
@@ -1581,17 +1569,49 @@ xfs_attr3_leaf_add_work(
 	if (be16_to_cpu(entry->nameidx) < ichdr->firstused)
 		ichdr->firstused = be16_to_cpu(entry->nameidx);
 
-	ASSERT(ichdr->firstused >= ichdr->count * sizeof(xfs_attr_leaf_entry_t)
-					+ xfs_attr3_leaf_hdr_size(leaf));
-	tmp = (ichdr->count - 1) * sizeof(xfs_attr_leaf_entry_t)
-					+ xfs_attr3_leaf_hdr_size(leaf);
+	new_end = ichdr->count * sizeof(struct xfs_attr_leaf_entry) +
+					xfs_attr3_leaf_hdr_size(leaf);
+	old_end = new_end - sizeof(struct xfs_attr_leaf_entry);
+
+	ASSERT(ichdr->firstused >= new_end);
 
 	for (i = 0; i < XFS_ATTR_LEAF_MAPSIZE; i++) {
-		if (ichdr->freemap[i].base == tmp) {
-			ichdr->freemap[i].base += sizeof(xfs_attr_leaf_entry_t);
+		int		diff = 0;
+
+		if (ichdr->freemap[i].base == old_end) {
+			/*
+			 * This freemap entry starts at the old end of the
+			 * leaf entry array, so we need to adjust its base
+			 * upward to accomodate the larger array.
+			 */
+			diff = sizeof(struct xfs_attr_leaf_entry);
+		} else if (ichdr->freemap[i].size > 0 &&
+			   ichdr->freemap[i].base < new_end) {
+			/*
+			 * This freemap entry starts in the space claimed by
+			 * the new leaf entry.  Adjust its base upward to
+			 * reflect that.
+			 */
+			diff = new_end - ichdr->freemap[i].base;
+		}
+
+		if (diff) {
+			ichdr->freemap[i].base += diff;
 			ichdr->freemap[i].size -=
-				min_t(uint16_t, ichdr->freemap[i].size,
-						sizeof(xfs_attr_leaf_entry_t));
+				min_t(uint16_t, ichdr->freemap[i].size, diff);
+		}
+
+		/*
+		 * Don't leave zero-length freemaps with nonzero base lying
+		 * around, because we don't want the code in _remove that
+		 * matches on base address to get confused and create
+		 * overlapping freemaps.  If we end up with no freemap entries
+		 * then the next _add will compact the leaf block and
+		 * regenerate the freemaps.
+		 */
+		if (ichdr->freemap[i].size == 0 && ichdr->freemap[i].base > 0) {
+			ichdr->freemap[i].base = 0;
+			ichdr->holes = 1;
 		}
 	}
 	ichdr->usedbytes += xfs_attr_leaf_entsize(leaf, args->index);

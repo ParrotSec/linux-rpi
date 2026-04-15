@@ -1,0 +1,31 @@
+{
+  "packages": {
+    "linux-binary-unsigned-6.19.10+deb13-amd64": {
+      "trusted_certs": [],
+      "files": [
+        {
+          "sig_type": "efi",
+          "file": "boot/vmlinuz-6.19.10+deb13-amd64"
+        }
+      ]
+    },
+    "linux-binary-unsigned-6.19.10+deb13-cloud-amd64": {
+      "trusted_certs": [],
+      "files": [
+        {
+          "sig_type": "efi",
+          "file": "boot/vmlinuz-6.19.10+deb13-cloud-amd64"
+        }
+      ]
+    },
+    "linux-binary-unsigned-6.19.10+deb13-rt-amd64": {
+      "trusted_certs": [],
+      "files": [
+        {
+          "sig_type": "efi",
+          "file": "boot/vmlinuz-6.19.10+deb13-rt-amd64"
+        }
+      ]
+    }
+  }
+}

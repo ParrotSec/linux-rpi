@@ -280,7 +280,8 @@ tc_rule_stats_get()
 	local selector=${1:-.packets}; shift
 
 	tc -j -s filter show dev $dev $dir pref $pref \
-	    | jq ".[1].options.actions[].stats$selector"
+	    | jq ".[] | select(.options.actions) |
+		  .options.actions[].stats$selector"
 }
 
 tc_rule_handle_stats_get()
@@ -543,7 +544,7 @@ require_command()
 	fi
 }
 
-ip_link_add()
+adf_ip_link_add()
 {
 	local name=$1; shift
 
@@ -551,7 +552,7 @@ ip_link_add()
 		defer ip link del dev "$name"
 }
 
-ip_link_set_master()
+adf_ip_link_set_master()
 {
 	local member=$1; shift
 	local master=$1; shift
@@ -560,7 +561,7 @@ ip_link_set_master()
 		defer ip link set dev "$member" nomaster
 }
 
-ip_link_set_addr()
+adf_ip_link_set_addr()
 {
 	local name=$1; shift
 	local addr=$1; shift
@@ -576,7 +577,7 @@ ip_link_has_flag()
 	local flag=$1; shift
 
 	local state=$(ip -j link show "$name" |
-		      jq --arg flag "$flag" 'any(.[].flags.[]; . == $flag)')
+		      jq --arg flag "$flag" 'any(.[].flags[]; . == $flag)')
 	[[ $state == true ]]
 }
 
@@ -585,7 +586,7 @@ ip_link_is_up()
 	ip_link_has_flag "$1" UP
 }
 
-ip_link_set_up()
+adf_ip_link_set_up()
 {
 	local name=$1; shift
 
@@ -595,7 +596,7 @@ ip_link_set_up()
 	fi
 }
 
-ip_link_set_down()
+adf_ip_link_set_down()
 {
 	local name=$1; shift
 
@@ -605,7 +606,7 @@ ip_link_set_down()
 	fi
 }
 
-ip_addr_add()
+adf_ip_addr_add()
 {
 	local name=$1; shift
 
@@ -613,13 +614,13 @@ ip_addr_add()
 		defer ip addr del dev "$name" "$@"
 }
 
-ip_route_add()
+adf_ip_route_add()
 {
 	ip route add "$@" && \
 		defer ip route del "$@"
 }
 
-bridge_vlan_add()
+adf_bridge_vlan_add()
 {
 	bridge vlan add "$@" && \
 		defer bridge vlan del "$@"
@@ -644,4 +645,28 @@ wait_local_port_listen()
 		fi
 		sleep 0.1
 	done
+}
+
+cmd_jq()
+{
+	local cmd=$1
+	local jq_exp=$2
+	local jq_opts=$3
+	local ret
+	local output
+
+	output="$($cmd)"
+	# it the command fails, return error right away
+	ret=$?
+	if [[ $ret -ne 0 ]]; then
+		return $ret
+	fi
+	output=$(echo $output | jq -r $jq_opts "$jq_exp")
+	ret=$?
+	if [[ $ret -ne 0 ]]; then
+		return $ret
+	fi
+	echo $output
+	# return success only in case of non-empty output
+	[ ! -z "$output" ]
 }

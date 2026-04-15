@@ -20,6 +20,7 @@
 #include <um_malloc.h>
 #include <sys/ucontext.h>
 #include <timetravel.h>
+#include "internal.h"
 
 void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *, void *mc) = {
 	[SIGTRAP]	= relay_signal,
@@ -35,7 +36,6 @@ void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *, void *mc) = 
 static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
 {
 	struct uml_pt_regs r;
-	int save_errno = errno;
 
 	r.is_user = 0;
 	if (sig == SIGSEGV) {
@@ -49,8 +49,6 @@ static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
 		unblock_signals_trace();
 
 	(*sig_info[sig])(sig, si, &r, mc);
-
-	errno = save_errno;
 }
 
 /*
@@ -68,12 +66,12 @@ static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
 #define SIGCHLD_BIT 2
 #define SIGCHLD_MASK (1 << SIGCHLD_BIT)
 
-int signals_enabled;
+__thread int signals_enabled;
 #if IS_ENABLED(CONFIG_UML_TIME_TRAVEL_SUPPORT)
 static int signals_blocked, signals_blocked_pending;
 #endif
-static unsigned int signals_pending;
-static unsigned int signals_active = 0;
+static __thread unsigned int signals_pending;
+static __thread unsigned int signals_active;
 
 static void sig_handler(int sig, struct siginfo *si, mcontext_t *mc)
 {
@@ -159,6 +157,11 @@ void timer_set_signal_handler(void)
 	set_handler(SIGALRM);
 }
 
+int timer_alarm_pending(void)
+{
+	return !!(signals_pending & SIGALRM_MASK);
+}
+
 void set_sigstack(void *sig_stack, int size)
 {
 	stack_t stack = {
@@ -201,8 +204,11 @@ static void hard_handler(int sig, siginfo_t *si, void *p)
 {
 	ucontext_t *uc = p;
 	mcontext_t *mc = &uc->uc_mcontext;
+	int save_errno = errno;
 
 	(*handlers[sig])(sig, (struct siginfo *)si, mc);
+
+	errno = save_errno;
 }
 
 void set_handler(int sig)
@@ -253,9 +259,29 @@ int change_sig(int signal, int on)
 	return 0;
 }
 
+static inline void __block_signals(void)
+{
+	if (!signals_enabled)
+		return;
+
+	os_local_ipi_disable();
+	barrier();
+	signals_enabled = 0;
+}
+
+static inline void __unblock_signals(void)
+{
+	if (signals_enabled)
+		return;
+
+	signals_enabled = 1;
+	barrier();
+	os_local_ipi_enable();
+}
+
 void block_signals(void)
 {
-	signals_enabled = 0;
+	__block_signals();
 	/*
 	 * This must return with signals disabled, so this barrier
 	 * ensures that writes are flushed out before the return.
@@ -272,7 +298,8 @@ void unblock_signals(void)
 	if (signals_enabled == 1)
 		return;
 
-	signals_enabled = 1;
+	__unblock_signals();
+
 #if IS_ENABLED(CONFIG_UML_TIME_TRAVEL_SUPPORT)
 	deliver_time_travel_irqs();
 #endif
@@ -306,7 +333,7 @@ void unblock_signals(void)
 		 * tracing that happens inside the handlers we call for the
 		 * pending signals will mess up the tracing state.
 		 */
-		signals_enabled = 0;
+		__block_signals();
 		um_trace_signals_off();
 
 		/*
@@ -338,8 +365,13 @@ void unblock_signals(void)
 
 		/* Re-enable signals and trace that we're doing so. */
 		um_trace_signals_on();
-		signals_enabled = 1;
+		__unblock_signals();
 	}
+}
+
+int um_get_signals(void)
+{
+	return signals_enabled;
 }
 
 int um_set_signals(int enable)

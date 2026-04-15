@@ -21,6 +21,7 @@
 #define RPM_GET_PUT		0x04	/* Increment/decrement the
 					    usage_count */
 #define RPM_AUTO		0x08	/* Use autosuspend_delay */
+#define RPM_TRANSPARENT	0x10	/* Succeed if runtime PM is disabled */
 
 /*
  * Use this for defining a set of PM operations to be used in all situations
@@ -75,7 +76,7 @@ extern int pm_runtime_get_if_active(struct device *dev);
 extern int pm_runtime_get_if_in_use(struct device *dev);
 extern int pm_schedule_suspend(struct device *dev, unsigned int delay);
 extern int __pm_runtime_set_status(struct device *dev, unsigned int status);
-extern int pm_runtime_barrier(struct device *dev);
+extern void pm_runtime_barrier(struct device *dev);
 extern bool pm_runtime_block_if_disabled(struct device *dev);
 extern void pm_runtime_unblock(struct device *dev);
 extern void pm_runtime_enable(struct device *dev);
@@ -283,7 +284,7 @@ static inline int pm_runtime_get_if_active(struct device *dev)
 }
 static inline int __pm_runtime_set_status(struct device *dev,
 					    unsigned int status) { return 0; }
-static inline int pm_runtime_barrier(struct device *dev) { return 0; }
+static inline void pm_runtime_barrier(struct device *dev) {}
 static inline bool pm_runtime_block_if_disabled(struct device *dev) { return true; }
 static inline void pm_runtime_unblock(struct device *dev) {}
 static inline void pm_runtime_enable(struct device *dev) {}
@@ -512,6 +513,19 @@ static inline int pm_runtime_get_sync(struct device *dev)
 	return __pm_runtime_resume(dev, RPM_GET_PUT);
 }
 
+static inline int pm_runtime_get_active(struct device *dev, int rpmflags)
+{
+	int ret;
+
+	ret = __pm_runtime_resume(dev, RPM_GET_PUT | rpmflags);
+	if (ret < 0) {
+		pm_runtime_put_noidle(dev);
+		return ret;
+	}
+
+	return 0;
+}
+
 /**
  * pm_runtime_resume_and_get - Bump up usage counter of a device and resume it.
  * @dev: Target device.
@@ -522,15 +536,7 @@ static inline int pm_runtime_get_sync(struct device *dev)
  */
 static inline int pm_runtime_resume_and_get(struct device *dev)
 {
-	int ret;
-
-	ret = __pm_runtime_resume(dev, RPM_GET_PUT);
-	if (ret < 0) {
-		pm_runtime_put_noidle(dev);
-		return ret;
-	}
-
-	return 0;
+	return pm_runtime_get_active(dev, 0);
 }
 
 /**
@@ -556,8 +562,6 @@ static inline int pm_runtime_put(struct device *dev)
 {
 	return __pm_runtime_idle(dev, RPM_GET_PUT | RPM_ASYNC);
 }
-
-DEFINE_FREE(pm_runtime_put, struct device *, if (_T) pm_runtime_put(_T))
 
 /**
  * __pm_runtime_put_autosuspend - Drop device usage counter and queue autosuspend if 0.
@@ -609,6 +613,53 @@ static inline int pm_runtime_put_autosuspend(struct device *dev)
 	pm_runtime_mark_last_busy(dev);
 	return __pm_runtime_put_autosuspend(dev);
 }
+
+DEFINE_GUARD(pm_runtime_noresume, struct device *,
+	     pm_runtime_get_noresume(_T), pm_runtime_put_noidle(_T));
+
+DEFINE_GUARD(pm_runtime_active, struct device *,
+	     pm_runtime_get_sync(_T), pm_runtime_put(_T));
+DEFINE_GUARD(pm_runtime_active_auto, struct device *,
+	     pm_runtime_get_sync(_T), pm_runtime_put_autosuspend(_T));
+/*
+ * Use the following guards with ACQUIRE()/ACQUIRE_ERR().
+ *
+ * The difference between the "_try" and "_try_enabled" variants is that the
+ * former do not produce an error when runtime PM is disabled for the given
+ * device.
+ */
+DEFINE_GUARD_COND(pm_runtime_active, _try,
+		  pm_runtime_get_active(_T, RPM_TRANSPARENT), _RET == 0)
+DEFINE_GUARD_COND(pm_runtime_active, _try_enabled,
+		  pm_runtime_resume_and_get(_T), _RET == 0)
+DEFINE_GUARD_COND(pm_runtime_active_auto, _try,
+		  pm_runtime_get_active(_T, RPM_TRANSPARENT), _RET == 0)
+DEFINE_GUARD_COND(pm_runtime_active_auto, _try_enabled,
+		  pm_runtime_resume_and_get(_T), _RET == 0)
+
+/* ACQUIRE() wrapper macros for the guards defined above. */
+
+#define PM_RUNTIME_ACQUIRE(_dev, _var)			\
+	ACQUIRE(pm_runtime_active_try, _var)(_dev)
+
+#define PM_RUNTIME_ACQUIRE_AUTOSUSPEND(_dev, _var)	\
+	ACQUIRE(pm_runtime_active_auto_try, _var)(_dev)
+
+#define PM_RUNTIME_ACQUIRE_IF_ENABLED(_dev, _var)	\
+	ACQUIRE(pm_runtime_active_try_enabled, _var)(_dev)
+
+#define PM_RUNTIME_ACQUIRE_IF_ENABLED_AUTOSUSPEND(_dev, _var)	\
+	ACQUIRE(pm_runtime_active_auto_try_enabled, _var)(_dev)
+
+/*
+ * ACQUIRE_ERR() wrapper macro for guard pm_runtime_active.
+ *
+ * Always check PM_RUNTIME_ACQUIRE_ERR() after using one of the
+ * PM_RUNTIME_ACQUIRE*() macros defined above (yes, it can be used with
+ * any of them) and if it is nonzero, avoid accessing the given device.
+ */
+#define PM_RUNTIME_ACQUIRE_ERR(_var_ptr)	\
+	ACQUIRE_ERR(pm_runtime_active, _var_ptr)
 
 /**
  * pm_runtime_put_sync - Drop device usage counter and run "idle check" if 0.

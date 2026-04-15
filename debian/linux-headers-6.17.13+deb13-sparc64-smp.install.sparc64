@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+deb13-sparc64-smp
-scripts/module.lds                       usr/src/linux-headers-6.17.13+deb13-sparc64-smp/arch/sparc
-arch/sparc/include             usr/src/linux-headers-6.17.13+deb13-sparc64-smp/arch/sparc

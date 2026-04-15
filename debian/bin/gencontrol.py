@@ -23,7 +23,7 @@ from debian_linux.config_v2 import (
 from debian_linux.dataclasses_deb822 import read_deb822, write_deb822
 from debian_linux.debian import \
     PackageBuildprofile, \
-    PackageRelationEntry, PackageRelationGroup, \
+    PackageRelation, PackageRelationEntry, PackageRelationGroup, \
     VersionLinux, BinaryPackage
 from debian_linux.gencontrol import Gencontrol as Base, PackagesBundle, \
     MakeFlags
@@ -140,20 +140,33 @@ class Gencontrol(Base):
                 self.bundle.add('sourcebin.meta', (), makeflags, vars)
 
         if config.packages.libc_dev:
-            libcdev_kernelarches = set()
-            libcdev_multiarches = set()
+            libcdev_kernel = set()
+            libcdev_spec = set()
+            libcdev_spec_cross = set()
             for kernelarch in self.config.kernelarchs:
-                libcdev_kernelarches.add(kernelarch.name)
+                libcdev_kernel.add(kernelarch.name)
                 for debianarch in kernelarch.debianarchs:
-                    libcdev_multiarches.add(
+                    libcdev_spec_cross.add(
                         f'{debianarch.defs_debianarch.multiarch}:{kernelarch.name}'
                     )
+                    if not debianarch.packages.libc_dev_cross_only:
+                        libcdev_spec.add(
+                            f'{debianarch.defs_debianarch.multiarch}:{kernelarch.name}'
+                        )
 
             libcdev_makeflags = makeflags.copy()
-            libcdev_makeflags['ALL_LIBCDEV_KERNELARCHES'] = ' '.join(sorted(libcdev_kernelarches))
-            libcdev_makeflags['ALL_LIBCDEV_MULTIARCHES'] = ' '.join(sorted(libcdev_multiarches))
+            libcdev_makeflags['ALL_LIBCDEV_KERNEL'] = ' '.join(sorted(libcdev_kernel))
+            libcdev_makeflags['ALL_LIBCDEV_SPEC'] = ' '.join(sorted(libcdev_spec))
+            libcdev_makeflags['ALL_LIBCDEV_SPEC_CROSS'] = ' '.join(sorted(libcdev_spec_cross))
 
             self.bundle.add('libc-dev', (), libcdev_makeflags, vars)
+
+            for kernelarch in self.config.kernelarchs:
+                for debianarch in kernelarch.debianarchs:
+                    self.bundle.add('libc-dev-cross', (), libcdev_makeflags, vars | {
+                        'libcdev_debian': debianarch.name,
+                        'libcdev_multiarch': debianarch.defs_debianarch.multiarch,
+                    })
 
     def do_indep_featureset_setup(
         self,
@@ -262,7 +275,7 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
 
         if t := config.build.cflags:
             makeflags['KCFLAGS'] = t
-        makeflags['COMPILER'] = config.build.compiler
+        makeflags['C_COMPILER'] = config.build.c_compiler
         if t := config.build.compiler_gnutype:
             makeflags['KERNEL_GNU_TYPE'] = t
         if t := config.build.compiler_gnutype_compat:
@@ -289,20 +302,29 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
 
         do_meta = config.packages.meta
 
-        relation_compiler = PackageRelationEntry(cast(str, config.build.compiler))
-        relation_compiler_host = PackageRelationEntry(
-            relation_compiler,
-            name=f'{relation_compiler.name}-for-host',
+        relation_c_compiler = PackageRelationEntry(cast(str, config.build.c_compiler))
+        relation_c_compiler_host = PackageRelationEntry(
+            relation_c_compiler,
+            name=f'{relation_c_compiler.name}-for-host',
         )
 
         # Generate compiler build-depends:
         self.bundle.source.build_depends_arch.merge([
             PackageRelationEntry(
-                relation_compiler_host,
+                relation_c_compiler_host,
                 arches={arch},
                 restrictions='<!pkg.linux.nokernel>',
             )
         ])
+        if config.build.enable_rust:
+            for group in config.build.rust_build_depends:
+                self.bundle.source.build_depends_arch.merge(
+                    PackageRelationGroup(
+                        group,
+                        arches={arch},
+                        restrictions='<!pkg.linux.nokernel !pkg.linux.norust>',
+                    )
+                )
 
         # Generate compiler build-depends for kernel:
         # gcc-N-hppa64-linux-gnu [hppa] <!pkg.linux.nokernel>
@@ -310,8 +332,8 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
             if gnutype != config.defs_debianarch.gnutype:
                 self.bundle.source.build_depends_arch.merge([
                     PackageRelationEntry(
-                        relation_compiler,
-                        name=f'{relation_compiler.name}-{gnutype.replace("_", "-")}',
+                        relation_c_compiler,
+                        name=f'{relation_c_compiler.name}-{gnutype.replace("_", "-")}',
                         arches={arch},
                         restrictions='<!pkg.linux.nokernel>',
                     )
@@ -330,7 +352,16 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                     )
                 ])
 
+        if config.build.enable_dtb:
+            makeflags['ENABLE_DTB'] = True
+
         packages_own = []
+
+        build_installer = (
+            config.name_featureset == 'none'
+            and not self.disable_installer
+            and config.packages.installer
+        )
 
         if not self.disable_signed:
             build_signed = config.build.enable_signed
@@ -344,19 +375,26 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
 
         vars.setdefault('desc', '')
 
+        packages_own.extend(self.bundle.add('base', ruleid, makeflags, vars, arch=arch))
+        packages_own.extend(self.bundle.add('modules', ruleid, makeflags, vars, arch=arch))
+
         if build_signed:
-            packages_image_unsigned = (
-                self.bundle.add('image-unsigned', ruleid, makeflags, vars, arch=arch)
+            packages_binary_unsigned = (
+                self.bundle.add('binary-unsigned', ruleid, makeflags, vars, arch=arch)
             )
-            packages_image = packages_image_unsigned[:]
-            packages_image.extend(
-                bundle_signed.add('signed.image', ruleid, makeflags, vars, arch=arch)
+            packages_binary = packages_binary_unsigned[:]
+            packages_binary.extend(
+                bundle_signed.add('signed.binary', ruleid, makeflags, vars, arch=arch)
             )
 
         else:
-            packages_image = packages_image_unsigned = (
-                bundle_signed.add('image', ruleid, makeflags, vars, arch=arch)
+            packages_binary = packages_binary_unsigned = (
+                bundle_signed.add('binary', ruleid, makeflags, vars, arch=arch)
             )
+
+        packages_image = (
+            bundle_signed.add('image', ruleid, makeflags, vars, arch=arch)
+        )
 
         for field in ('Depends', 'Provides', 'Suggests', 'Recommends',
                       'Conflicts', 'Breaks'):
@@ -386,24 +424,20 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                     desc.append(config.description.long[part])
                     desc.append_short(config.description.short[part])
 
-        packages_headers[0].depends.merge([relation_compiler_host])
+        packages_headers[0].depends.merge([relation_c_compiler_host])
+        packages_own.extend(packages_binary)
         packages_own.extend(packages_image)
         packages_own.extend(packages_headers)
 
-        # The image meta-packages will depend on signed linux-image
-        # packages where applicable, so should be built from the
-        # signed source packages The header meta-packages will also be
-        # built along with the signed packages, to create a dependency
-        # relationship that ensures src:linux and src:linux-signed-*
-        # transition to testing together.
         if do_meta:
+            packages_own.extend(bundle_signed.add('base.meta', ruleid, makeflags, vars, arch=arch))
+
             packages_meta = (
                 bundle_signed.add('image.meta', ruleid, makeflags, vars, arch=arch)
             )
             assert len(packages_meta) == 1
             packages_meta += (
-                bundle_signed.add(build_signed and 'signed.headers.meta' or 'headers.meta',
-                                  ruleid, makeflags, vars, arch=arch)
+                bundle_signed.add('headers.meta', ruleid, makeflags, vars, arch=arch)
             )
             assert len(packages_meta) == 2
 
@@ -416,15 +450,12 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
 
             packages_own.extend(packages_meta)
 
-        if config.build.enable_vdso:
-            makeflags['VDSO'] = True
-
         packages_own.extend(
             self.bundle.add('image-dbg', ruleid, makeflags, vars, arch=arch)
         )
         if do_meta:
             packages_own.extend(
-                self.bundle.add('image-dbg.meta', ruleid, makeflags, vars, arch=arch)
+                bundle_signed.add('image-dbg.meta', ruleid, makeflags, vars, arch=arch)
             )
 
         if (
@@ -436,6 +467,12 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                 self.bundle.add('image-extra-dev', ruleid, makeflags, vars, arch=arch)
             )
 
+        if build_installer:
+            packages_base_di = self.bundle.add('base-di', ruleid, makeflags, vars, arch=arch) \
+                    + bundle_signed.add('binary-di', ruleid, makeflags, vars, arch=arch)
+            packages_own.extend(packages_base_di)
+            depends_base_di = PackageRelation(i.name for i in packages_base_di)
+
         # In a quick build, only build the test flavour.
         if config.defs_flavour.is_test:
             for package in packages_own:
@@ -445,10 +482,10 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                 package.build_profiles[0].neg.add('pkg.linux.quick')
 
         tests_control_image = list(
-            self.templates.get_tests_control('image.tests-control', vars))
+            self.templates.get_tests_control('binary.tests-control', vars))
         for c in tests_control_image:
             c.depends.extend(
-                [i.name for i in packages_image_unsigned]
+                [i.name for i in packages_binary_unsigned]
             )
 
         tests_control_headers = list(
@@ -456,7 +493,7 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
         for c in tests_control_headers:
             c.depends.extend(
                 [i.name for i in packages_headers] +
-                [i.name for i in packages_image_unsigned]
+                [i.name for i in packages_binary_unsigned]
             )
 
         self.tests_control.extend(tests_control_image)
@@ -479,10 +516,11 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                                       ["$(MAKE) -f debian/rules.real %s %s" %
                                        (merged_config, makeflags)])
 
+        # The test flavour is known to not work at all with kernel-wedge.  Also
+        # we misshandle pkg.linux.quick for it.
         if (
-            config.name_featureset == 'none'
-            and not self.disable_installer
-            and config.packages.installer
+            build_installer
+            and not config.defs_flavour.is_test
         ):
             with tempfile.TemporaryDirectory(prefix='linux-gencontrol') as config_dir:
                 base_path = pathlib.Path('debian/installer').absolute()
@@ -512,6 +550,9 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
             udeb_packages = [
                 dataclasses.replace(
                     package_base,
+                    # kernel-wedge does not support versioned extra packages,
+                    # so inject the base dependency here.
+                    depends=PackageRelation(depends_base_di + package_base.depends),
                     # kernel-wedge currently chokes on Build-Profiles so add it now
                     build_profiles=PackageBuildprofile.parse(
                         '<!noudeb !pkg.linux.nokernel !pkg.linux.quick>',
@@ -521,61 +562,34 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
                 for package_base in udeb_packages_base
             ]
 
-            makeflags_local = makeflags.copy()
-            makeflags_local['IMAGE_PACKAGE_NAME'] = udeb_packages[0].name
-
-            bundle_signed.add_packages(
+            self.bundle.add_packages(
                 udeb_packages,
                 (config.name_debianarch, config.name_featureset, config.name_flavour),
-                makeflags_local, arch=arch,
+                makeflags, arch=arch,
             )
-
-            if build_signed:
-                # XXX This is a hack to exclude the udebs from
-                # the package list while still being able to
-                # convince debhelper and kernel-wedge to go
-                # part way to building them.
-                udeb_packages = [
-                    dataclasses.replace(
-                        package_base,
-                        # kernel-wedge currently chokes on Build-Profiles so add it now
-                        build_profiles=PackageBuildprofile.parse(
-                            '<pkg.linux.udeb-unsigned-test-build !noudeb'
-                            ' !pkg.linux.nokernel !pkg.linux.quick>',
-                        ),
-                        meta_rules_target='installer-test',
-                    )
-                    for package_base in udeb_packages_base
-                ]
-
-                self.bundle.add_packages(
-                    udeb_packages,
-                    (config.name_debianarch, config.name_featureset, config.name_flavour),
-                    makeflags_local, arch=arch, check_packages=False,
-                )
 
     def process_changelog(self) -> None:
         version = self.version = self.changelog[0].version
 
         if self.debianrelease.abi_version_full:
-            self.abiname = version.linux_upstream_full \
-                + self.debianrelease.abi_suffix
+            self.abiname = version.linux_version_full + self.debianrelease.abi_suffix
             # All Debian versions must have a distinct ABI version.
             # So if this is not the first Debian version with its
             # upstream version and Debian release, distinguish it by
-            # adding a serial number suffix.
+            # adding a serial number suffix.  This needs to be sorted
+            # higher than the flavour suffix by both 'sort -V' and
+            # 'linux-version sort'.
             n = sum(1
                     for entry in self.changelog
-                    if (entry.version.linux_upstream_full == version.linux_upstream_full
+                    if (entry.version.linux_version_full == version.linux_version_full
                         and self.debianrelease.name_regex.fullmatch(entry.distribution)))
             if n > 1:
-                self.abiname += f'+{n-1}'
+                self.abiname += f'.{n-1}'
         else:
-            self.abiname = version.linux_version_update \
-                + self.debianrelease.abi_suffix
+            self.abiname = version.linux_version + self.debianrelease.abi_suffix
 
         self.vars = {
-            'upstreamversion': self.version.linux_upstream_full,
+            'upstreamversion': self.version.linux_version_full,
             'version': self.version.linux_version,
             'version_complete': self.version.complete,
             'source_basename': re.sub(r'-[\d.]+$', '',

@@ -23,6 +23,7 @@
 #include <linux/firmware.h>
 #include <linux/gfp.h>
 #include <linux/interrupt.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
@@ -117,21 +118,6 @@ static int pvr_device_clk_init(struct pvr_device *pvr_dev)
 	pvr_dev->core_clk = core_clk;
 	pvr_dev->sys_clk = sys_clk;
 	pvr_dev->mem_clk = mem_clk;
-
-	return 0;
-}
-
-static int pvr_device_reset_init(struct pvr_device *pvr_dev)
-{
-	struct drm_device *drm_dev = from_pvr_device(pvr_dev);
-	struct reset_control *reset;
-
-	reset = devm_reset_control_get_optional_exclusive(drm_dev->dev, NULL);
-	if (IS_ERR(reset))
-		return dev_err_probe(drm_dev->dev, PTR_ERR(reset),
-				     "failed to get gpu reset line\n");
-
-	pvr_dev->reset = reset;
 
 	return 0;
 }
@@ -238,29 +224,12 @@ static irqreturn_t pvr_device_irq_thread_handler(int irq, void *data)
 	}
 
 	if (pvr_dev->has_safety_events) {
-		int err;
-
-		/*
-		 * Ensure the GPU is powered on since some safety events (such
-		 * as ECC faults) can happen outside of job submissions, which
-		 * are otherwise the only time a power reference is held.
-		 */
-		err = pvr_power_get(pvr_dev);
-		if (err) {
-			drm_err_ratelimited(drm_dev,
-					    "%s: could not take power reference (%d)\n",
-					    __func__, err);
-			return ret;
-		}
-
 		while (pvr_device_safety_irq_pending(pvr_dev)) {
 			pvr_device_safety_irq_clear(pvr_dev);
 			pvr_device_handle_safety_events(pvr_dev);
 
 			ret = IRQ_HANDLED;
 		}
-
-		pvr_power_put(pvr_dev);
 	}
 
 	return ret;
@@ -618,6 +587,9 @@ pvr_device_init(struct pvr_device *pvr_dev)
 	struct device *dev = drm_dev->dev;
 	int err;
 
+	/* Get the platform-specific data based on the compatible string. */
+	pvr_dev->device_data = of_device_get_match_data(dev);
+
 	/*
 	 * Setup device parameters. We do this first in case other steps
 	 * depend on them.
@@ -631,8 +603,7 @@ pvr_device_init(struct pvr_device *pvr_dev)
 	if (err)
 		return err;
 
-	/* Get the reset line for the GPU */
-	err = pvr_device_reset_init(pvr_dev);
+	err = pvr_dev->device_data->pwr_ops->init(pvr_dev);
 	if (err)
 		return err;
 

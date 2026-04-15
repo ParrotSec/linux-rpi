@@ -1,0 +1,3 @@
+.config .kernel* Module.symvers include  usr/src/linux-headers-6.19.10+deb13-parisc
+scripts/module.lds                       usr/src/linux-headers-6.19.10+deb13-parisc/arch/parisc
+arch/parisc/include             usr/src/linux-headers-6.19.10+deb13-parisc/arch/parisc

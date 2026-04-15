@@ -11,6 +11,14 @@ installer = true
 name = 'none'
 
 [build]
-enable_vdso = true
+enable_dtb = true
+enable_rust = true
 kernel_file = 'arch/riscv/boot/Image'
 kernel_stem = 'vmlinux'
+
+[relations.image]
+breaks = [
+  'u-boot-efi-dtb (<< 5~)',
+  'reform-tools (<< 1.83~)',
+  'flash-kernel (<< 3.110~)',
+]

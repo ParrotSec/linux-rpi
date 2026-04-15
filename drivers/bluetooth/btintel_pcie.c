@@ -19,6 +19,7 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
+#include <net/bluetooth/hci_drv.h>
 
 #include "btintel.h"
 #include "btintel_pcie.h"
@@ -36,8 +37,13 @@
 
 /* Intel Bluetooth PCIe device id table */
 static const struct pci_device_id btintel_pcie_table[] = {
+	/* BlazarI, Wildcat Lake */
 	{ BTINTEL_PCI_DEVICE(0x4D76, PCI_ANY_ID) },
+	/* BlazarI, Lunar Lake */
 	{ BTINTEL_PCI_DEVICE(0xA876, PCI_ANY_ID) },
+	/* Scorpious, Panther Lake-H484 */
+	{ BTINTEL_PCI_DEVICE(0xE376, PCI_ANY_ID) },
+	 /* Scorpious, Panther Lake-H404 */
 	{ BTINTEL_PCI_DEVICE(0xE476, PCI_ANY_ID) },
 	{ 0 }
 };
@@ -820,6 +826,11 @@ static inline bool btintel_pcie_in_d0(struct btintel_pcie_data *data)
 	return !(data->boot_stage_cache & BTINTEL_PCIE_CSR_BOOT_STAGE_D3_STATE_READY);
 }
 
+static inline bool btintel_pcie_in_device_halt(struct btintel_pcie_data *data)
+{
+	return data->boot_stage_cache & BTINTEL_PCIE_CSR_BOOT_STAGE_DEVICE_HALTED;
+}
+
 static void btintel_pcie_wr_sleep_cntrl(struct btintel_pcie_data *data,
 					u32 dxstate)
 {
@@ -1420,11 +1431,6 @@ static void btintel_pcie_msix_rx_handle(struct btintel_pcie_data *data)
 	}
 }
 
-static irqreturn_t btintel_pcie_msix_isr(int irq, void *data)
-{
-	return IRQ_WAKE_THREAD;
-}
-
 static inline bool btintel_pcie_is_rxq_empty(struct btintel_pcie_data *data)
 {
 	return data->ia.cr_hia[BTINTEL_PCIE_RXQ_NUM] == data->ia.cr_tia[BTINTEL_PCIE_RXQ_NUM];
@@ -1526,9 +1532,9 @@ static int btintel_pcie_setup_irq(struct btintel_pcie_data *data)
 
 		err = devm_request_threaded_irq(&data->pdev->dev,
 						msix_entry->vector,
-						btintel_pcie_msix_isr,
+						NULL,
 						btintel_pcie_irq_msix_handler,
-						IRQF_SHARED,
+						IRQF_ONESHOT | IRQF_SHARED,
 						KBUILD_MODNAME,
 						msix_entry);
 		if (err) {
@@ -2169,6 +2175,7 @@ btintel_pcie_get_recovery(struct pci_dev *pdev, struct device *dev)
 {
 	struct btintel_pcie_dev_recovery *tmp, *data = NULL;
 	const char *name = pci_name(pdev);
+	const size_t name_len = strlen(name) + 1;
 	struct hci_dev *hdev = to_hci_dev(dev);
 
 	spin_lock(&btintel_pcie_recovery_lock);
@@ -2185,11 +2192,11 @@ btintel_pcie_get_recovery(struct pci_dev *pdev, struct device *dev)
 		return data;
 	}
 
-	data = kzalloc(struct_size(data, name, strlen(name) + 1), GFP_ATOMIC);
+	data = kzalloc(struct_size(data, name, name_len), GFP_ATOMIC);
 	if (!data)
 		return NULL;
 
-	strscpy_pad(data->name, name, strlen(name) + 1);
+	strscpy(data->name, name, name_len);
 	spin_lock(&btintel_pcie_recovery_lock);
 	list_add_tail(&data->list, &btintel_pcie_recovery_list);
 	spin_unlock(&btintel_pcie_recovery_lock);
@@ -2349,6 +2356,63 @@ static bool btintel_pcie_wakeup(struct hci_dev *hdev)
 	return device_may_wakeup(&data->pdev->dev);
 }
 
+static const struct {
+	u16 opcode;
+	const char *desc;
+} btintel_pcie_hci_drv_supported_commands[] = {
+	/* Common commands */
+	{ HCI_DRV_OP_READ_INFO, "Read Info" },
+};
+
+static int btintel_pcie_hci_drv_read_info(struct hci_dev *hdev, void *data,
+					  u16 data_len)
+{
+	struct hci_drv_rp_read_info *rp;
+	size_t rp_size;
+	int err, i;
+	u16 opcode, num_supported_commands =
+		ARRAY_SIZE(btintel_pcie_hci_drv_supported_commands);
+
+	rp_size = sizeof(*rp) + num_supported_commands * 2;
+
+	rp = kmalloc(rp_size, GFP_KERNEL);
+	if (!rp)
+		return -ENOMEM;
+
+	strscpy_pad(rp->driver_name, KBUILD_MODNAME);
+
+	rp->num_supported_commands = cpu_to_le16(num_supported_commands);
+	for (i = 0; i < num_supported_commands; i++) {
+		opcode = btintel_pcie_hci_drv_supported_commands[i].opcode;
+		bt_dev_dbg(hdev,
+			    "Supported HCI Drv command (0x%02x|0x%04x): %s",
+			    hci_opcode_ogf(opcode),
+			    hci_opcode_ocf(opcode),
+			    btintel_pcie_hci_drv_supported_commands[i].desc);
+		rp->supported_commands[i] = cpu_to_le16(opcode);
+	}
+
+	err = hci_drv_cmd_complete(hdev, HCI_DRV_OP_READ_INFO,
+				   HCI_DRV_STATUS_SUCCESS,
+				   rp, rp_size);
+
+	kfree(rp);
+	return err;
+}
+
+static const struct hci_drv_handler btintel_pcie_hci_drv_common_handlers[] = {
+	{ btintel_pcie_hci_drv_read_info,       HCI_DRV_READ_INFO_SIZE },
+};
+
+static const struct hci_drv_handler btintel_pcie_hci_drv_specific_handlers[] = {};
+
+static struct hci_drv btintel_pcie_hci_drv = {
+	.common_handler_count   = ARRAY_SIZE(btintel_pcie_hci_drv_common_handlers),
+	.common_handlers        = btintel_pcie_hci_drv_common_handlers,
+	.specific_handler_count = ARRAY_SIZE(btintel_pcie_hci_drv_specific_handlers),
+	.specific_handlers      = btintel_pcie_hci_drv_specific_handlers,
+};
+
 static int btintel_pcie_setup_hdev(struct btintel_pcie_data *data)
 {
 	int err;
@@ -2375,6 +2439,7 @@ static int btintel_pcie_setup_hdev(struct btintel_pcie_data *data)
 	hdev->set_bdaddr = btintel_set_bdaddr;
 	hdev->reset = btintel_pcie_reset;
 	hdev->wakeup = btintel_pcie_wakeup;
+	hdev->hci_drv = &btintel_pcie_hci_drv;
 
 	err = hci_register_dev(hdev);
 	if (err < 0) {
@@ -2513,11 +2578,165 @@ static void btintel_pcie_coredump(struct device *dev)
 }
 #endif
 
+static int btintel_pcie_set_dxstate(struct btintel_pcie_data *data, u32 dxstate)
+{
+	int retry = 0, status;
+	u32 dx_intr_timeout_ms = 200;
+
+	do {
+		data->gp0_received = false;
+
+		btintel_pcie_wr_sleep_cntrl(data, dxstate);
+
+		status = wait_event_timeout(data->gp0_wait_q, data->gp0_received,
+			msecs_to_jiffies(dx_intr_timeout_ms));
+
+		if (status)
+			return 0;
+
+		bt_dev_warn(data->hdev,
+			   "Timeout (%u ms) on alive interrupt for D%d entry, retry count %d",
+			   dx_intr_timeout_ms, dxstate, retry);
+
+		/* clear gp0 cause */
+		btintel_pcie_clr_reg_bits(data,
+					  BTINTEL_PCIE_CSR_MSIX_HW_INT_CAUSES,
+					  BTINTEL_PCIE_MSIX_HW_INT_CAUSES_GP0);
+
+		/* A hardware bug may cause the alive interrupt to be missed.
+		 * Check if the controller reached the expected state and retry
+		 * the operation only if it hasn't.
+		 */
+		if (dxstate == BTINTEL_PCIE_STATE_D0) {
+			if (btintel_pcie_in_d0(data))
+				return 0;
+		} else {
+			if (btintel_pcie_in_d3(data))
+				return 0;
+		}
+
+	} while (++retry < BTINTEL_PCIE_DX_TRANSITION_MAX_RETRIES);
+
+	return -EBUSY;
+}
+
+static int btintel_pcie_suspend_late(struct device *dev, pm_message_t mesg)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct btintel_pcie_data *data;
+	ktime_t start;
+	u32 dxstate;
+	int err;
+
+	data = pci_get_drvdata(pdev);
+
+	dxstate = (mesg.event == PM_EVENT_SUSPEND ?
+		   BTINTEL_PCIE_STATE_D3_HOT : BTINTEL_PCIE_STATE_D3_COLD);
+
+	data->pm_sx_event = mesg.event;
+
+	start = ktime_get();
+
+	/* Refer: 6.4.11.7 -> Platform power management */
+	err = btintel_pcie_set_dxstate(data, dxstate);
+
+	if (err)
+		return err;
+
+	bt_dev_dbg(data->hdev,
+		   "device entered into d3 state from d0 in %lld us",
+		   ktime_to_us(ktime_get() - start));
+	return err;
+}
+
+static int btintel_pcie_suspend(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_SUSPEND);
+}
+
+static int btintel_pcie_hibernate(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_HIBERNATE);
+}
+
+static int btintel_pcie_freeze(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_FREEZE);
+}
+
+static int btintel_pcie_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct btintel_pcie_data *data;
+	ktime_t start;
+	int err;
+
+	data = pci_get_drvdata(pdev);
+	data->gp0_received = false;
+
+	start = ktime_get();
+
+	/* When the system enters S4 (hibernate) mode, bluetooth device loses
+	 * power, which results in the erasure of its loaded firmware.
+	 * Consequently, function level reset (flr) is required on system
+	 * resume to bring the controller back into an operational state by
+	 * initiating a new firmware download.
+	 */
+
+	if (data->pm_sx_event == PM_EVENT_FREEZE ||
+	    data->pm_sx_event == PM_EVENT_HIBERNATE) {
+		set_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags);
+		btintel_pcie_reset(data->hdev);
+		return 0;
+	}
+
+	/* Refer: 6.4.11.7 -> Platform power management */
+	err = btintel_pcie_set_dxstate(data, BTINTEL_PCIE_STATE_D0);
+
+	if (err == 0) {
+		bt_dev_dbg(data->hdev,
+			   "device entered into d0 state from d3 in %lld us",
+			   ktime_to_us(ktime_get() - start));
+		return err;
+	}
+
+	/* Trigger function level reset if the controller is in error
+	 * state during resume() to bring back the controller to
+	 * operational mode
+	 */
+
+	data->boot_stage_cache = btintel_pcie_rd_reg32(data,
+			BTINTEL_PCIE_CSR_BOOT_STAGE_REG);
+	if (btintel_pcie_in_error(data) ||
+			btintel_pcie_in_device_halt(data)) {
+		bt_dev_err(data->hdev, "Controller in error state for D0 entry");
+		if (!test_and_set_bit(BTINTEL_PCIE_COREDUMP_INPROGRESS,
+				      &data->flags)) {
+			data->dmp_hdr.trigger_reason =
+				BTINTEL_PCIE_TRIGGER_REASON_FW_ASSERT;
+			queue_work(data->workqueue, &data->rx_work);
+		}
+		set_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags);
+		btintel_pcie_reset(data->hdev);
+	}
+	return err;
+}
+
+static const struct dev_pm_ops btintel_pcie_pm_ops = {
+	.suspend = btintel_pcie_suspend,
+	.resume = btintel_pcie_resume,
+	.freeze = btintel_pcie_freeze,
+	.thaw = btintel_pcie_resume,
+	.poweroff = btintel_pcie_hibernate,
+	.restore = btintel_pcie_resume,
+};
+
 static struct pci_driver btintel_pcie_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = btintel_pcie_table,
 	.probe = btintel_pcie_probe,
 	.remove = btintel_pcie_remove,
+	.driver.pm = pm_sleep_ptr(&btintel_pcie_pm_ops),
 #ifdef CONFIG_DEV_COREDUMP
 	.driver.coredump = btintel_pcie_coredump
 #endif

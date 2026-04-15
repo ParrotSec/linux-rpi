@@ -36,13 +36,23 @@ name = 'test'
 config = ['config.test', 'arm64/config.test']
 [flavour.defs]
 is_test = true
+[flavour.packages]
+installer = true
 
 [[featureset]]
 name = 'none'
 
 [build]
 compiler_gnutype_compat = 'arm-linux-gnueabihf'
+enable_dtb = true
+enable_rust = true
 enable_signed = false
-enable_vdso = true
 kernel_file = 'arch/arm64/boot/Image'
 kernel_stem = 'vmlinuz'
+
+[relations.image]
+breaks = [
+  'u-boot-efi-dtb (<< 5~)',
+  'reform-tools (<< 1.83~)',
+  'flash-kernel (<< 3.110~)',
+]

@@ -133,9 +133,8 @@ enum {
 	Opt_enospc_debug,
 #ifdef CONFIG_BTRFS_DEBUG
 	Opt_fragment, Opt_fragment_data, Opt_fragment_metadata, Opt_fragment_all,
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	Opt_ref_verify,
+	Opt_ref_tracker,
 #endif
 	Opt_err,
 };
@@ -257,8 +256,7 @@ static const struct fs_parameter_spec btrfs_fs_parameters[] = {
 	fsparam_flag_no("enospc_debug", Opt_enospc_debug),
 #ifdef CONFIG_BTRFS_DEBUG
 	fsparam_enum("fragment", Opt_fragment, btrfs_parameter_fragment),
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
+	fsparam_flag("ref_tracker", Opt_ref_tracker),
 	fsparam_flag("ref_verify", Opt_ref_verify),
 #endif
 	{}
@@ -646,10 +644,11 @@ static int btrfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 			return -EINVAL;
 		}
 		break;
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	case Opt_ref_verify:
 		btrfs_set_opt(ctx->mount_opt, REF_VERIFY);
+		break;
+	case Opt_ref_tracker:
+		btrfs_set_opt(ctx->mount_opt, REF_TRACKER);
 		break;
 #endif
 	default:
@@ -737,14 +736,12 @@ bool btrfs_check_options(const struct btrfs_fs_info *info,
  */
 void btrfs_set_free_space_cache_settings(struct btrfs_fs_info *fs_info)
 {
-	if (fs_info->sectorsize < PAGE_SIZE) {
+	if (fs_info->sectorsize != PAGE_SIZE && btrfs_test_opt(fs_info, SPACE_CACHE)) {
+		btrfs_info(fs_info,
+			   "forcing free space tree for sector size %u with page size %lu",
+			   fs_info->sectorsize, PAGE_SIZE);
 		btrfs_clear_opt(fs_info->mount_opt, SPACE_CACHE);
-		if (!btrfs_test_opt(fs_info, FREE_SPACE_TREE)) {
-			btrfs_info(fs_info,
-				   "forcing free space tree for sector size %u with page size %lu",
-				   fs_info->sectorsize, PAGE_SIZE);
-			btrfs_set_opt(fs_info->mount_opt, FREE_SPACE_TREE);
-		}
+		btrfs_set_opt(fs_info->mount_opt, FREE_SPACE_TREE);
 	}
 
 	/*
@@ -808,17 +805,15 @@ char *btrfs_get_subvol_name_from_objectid(struct btrfs_fs_info *fs_info,
 	struct btrfs_root_ref *root_ref;
 	struct btrfs_inode_ref *inode_ref;
 	struct btrfs_key key;
-	struct btrfs_path *path = NULL;
+	BTRFS_PATH_AUTO_FREE(path);
 	char *name = NULL, *ptr;
 	u64 dirid;
 	int len;
 	int ret;
 
 	path = btrfs_alloc_path();
-	if (!path) {
-		ret = -ENOMEM;
-		goto err;
-	}
+	if (!path)
+		return ERR_PTR(-ENOMEM);
 
 	name = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!name) {
@@ -906,7 +901,6 @@ char *btrfs_get_subvol_name_from_objectid(struct btrfs_fs_info *fs_info,
 		fs_root = NULL;
 	}
 
-	btrfs_free_path(path);
 	if (ptr == name + PATH_MAX - 1) {
 		name[0] = '/';
 		name[1] = '\0';
@@ -917,7 +911,6 @@ char *btrfs_get_subvol_name_from_objectid(struct btrfs_fs_info *fs_info,
 
 err:
 	btrfs_put_root(fs_root);
-	btrfs_free_path(path);
 	kfree(name);
 	return ERR_PTR(ret);
 }
@@ -926,7 +919,7 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 {
 	struct btrfs_root *root = fs_info->tree_root;
 	struct btrfs_dir_item *di;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_key location;
 	struct fscrypt_str name = FSTR_INIT("default", 7);
 	u64 dir_id;
@@ -943,7 +936,6 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 	dir_id = btrfs_super_root_dir(fs_info->super_copy);
 	di = btrfs_lookup_dir_item(NULL, root, path, dir_id, &name, 0);
 	if (IS_ERR(di)) {
-		btrfs_free_path(path);
 		return PTR_ERR(di);
 	}
 	if (!di) {
@@ -952,13 +944,11 @@ static int get_default_subvol_objectid(struct btrfs_fs_info *fs_info, u64 *objec
 		 * it's always been there, but don't freak out, just try and
 		 * mount the top-level subvolume.
 		 */
-		btrfs_free_path(path);
 		*objectid = BTRFS_FS_TREE_OBJECTID;
 		return 0;
 	}
 
 	btrfs_dir_item_key_to_cpu(path->nodes[0], di, &location);
-	btrfs_free_path(path);
 	*objectid = location.objectid;
 	return 0;
 }
@@ -1156,6 +1146,8 @@ static int btrfs_show_options(struct seq_file *seq, struct dentry *dentry)
 #endif
 	if (btrfs_test_opt(info, REF_VERIFY))
 		seq_puts(seq, ",ref_verify");
+	if (btrfs_test_opt(info, REF_TRACKER))
+		seq_puts(seq, ",ref_tracker");
 	seq_printf(seq, ",subvolid=%llu", btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
 	subvol_name = btrfs_get_subvol_name_from_objectid(info,
 			btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
@@ -1282,7 +1274,7 @@ static inline void btrfs_remount_cleanup(struct btrfs_fs_info *fs_info,
 	const bool cache_opt = btrfs_test_opt(fs_info, SPACE_CACHE);
 
 	/*
-	 * We need to cleanup all defragable inodes if the autodefragment is
+	 * We need to cleanup all defraggable inodes if the autodefragment is
 	 * close or the filesystem is read only.
 	 */
 	if (btrfs_raw_test_opt(old_opts, AUTO_DEFRAG) &&
@@ -1616,7 +1608,7 @@ static inline void btrfs_descending_sort_devices(
 static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 					      u64 *free_bytes)
 {
-	struct btrfs_device_info *devices_info;
+	struct btrfs_device_info AUTO_KFREE(devices_info);
 	struct btrfs_fs_devices *fs_devices = fs_info->fs_devices;
 	struct btrfs_device *device;
 	u64 type;
@@ -1714,7 +1706,6 @@ static inline int btrfs_calc_avail_data_space(struct btrfs_fs_info *fs_info,
 		nr_devices--;
 	}
 
-	kfree(devices_info);
 	*free_bytes = avail_space;
 	return 0;
 }
@@ -2279,10 +2270,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		device = btrfs_scan_one_device(vol->name, false);
 		if (IS_ERR_OR_NULL(device)) {
 			mutex_unlock(&uuid_mutex);
-			if (IS_ERR(device))
-				ret = PTR_ERR(device);
-			else
-				ret = 0;
+			ret = PTR_ERR_OR_ZERO(device);
 			break;
 		}
 		ret = !(device->fs_devices->num_devices ==
@@ -2335,14 +2323,14 @@ static int check_dev_super(struct btrfs_device *dev)
 
 	/* Verify the checksum. */
 	csum_type = btrfs_super_csum_type(sb);
-	if (csum_type != btrfs_super_csum_type(fs_info->super_copy)) {
+	if (unlikely(csum_type != btrfs_super_csum_type(fs_info->super_copy))) {
 		btrfs_err(fs_info, "csum type changed, has %u expect %u",
 			  csum_type, btrfs_super_csum_type(fs_info->super_copy));
 		ret = -EUCLEAN;
 		goto out;
 	}
 
-	if (btrfs_check_super_csum(fs_info, sb)) {
+	if (unlikely(btrfs_check_super_csum(fs_info, sb))) {
 		btrfs_err(fs_info, "csum for on-disk super block no longer matches");
 		ret = -EUCLEAN;
 		goto out;
@@ -2354,7 +2342,7 @@ static int check_dev_super(struct btrfs_device *dev)
 		goto out;
 
 	last_trans = btrfs_get_last_trans_committed(fs_info);
-	if (btrfs_super_generation(sb) != last_trans) {
+	if (unlikely(btrfs_super_generation(sb) != last_trans)) {
 		btrfs_err(fs_info, "transid mismatch, has %llu expect %llu",
 			  btrfs_super_generation(sb), last_trans);
 		ret = -EUCLEAN;
@@ -2435,6 +2423,66 @@ static long btrfs_free_cached_objects(struct super_block *sb, struct shrink_cont
 	return 0;
 }
 
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+static int btrfs_remove_bdev(struct super_block *sb, struct block_device *bdev)
+{
+	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
+	struct btrfs_device *device;
+	struct btrfs_dev_lookup_args lookup_args = { .devt = bdev->bd_dev };
+	bool can_rw;
+
+	mutex_lock(&fs_info->fs_devices->device_list_mutex);
+	device = btrfs_find_device(fs_info->fs_devices, &lookup_args);
+	if (!device) {
+		mutex_unlock(&fs_info->fs_devices->device_list_mutex);
+		/* Device not found, should not affect the running fs, just give a warning. */
+		btrfs_warn(fs_info, "unable to find btrfs device for block device '%pg'", bdev);
+		return 0;
+	}
+	/*
+	 * The to-be-removed device is already missing?
+	 *
+	 * That's weird but no special handling needed and can exit right now.
+	 */
+	if (unlikely(test_and_set_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state))) {
+		mutex_unlock(&fs_info->fs_devices->device_list_mutex);
+		btrfs_warn(fs_info, "btrfs device id %llu is already missing", device->devid);
+		return 0;
+	}
+
+	device->fs_devices->missing_devices++;
+	if (test_and_clear_bit(BTRFS_DEV_STATE_WRITEABLE, &device->dev_state)) {
+		list_del_init(&device->dev_alloc_list);
+		WARN_ON(device->fs_devices->rw_devices < 1);
+		device->fs_devices->rw_devices--;
+	}
+	can_rw = btrfs_check_rw_degradable(fs_info, device);
+	mutex_unlock(&fs_info->fs_devices->device_list_mutex);
+	/*
+	 * Now device is considered missing, btrfs_device_name() won't give a
+	 * meaningful result anymore, so only output the devid.
+	 */
+	if (unlikely(!can_rw)) {
+		btrfs_crit(fs_info,
+		"btrfs device id %llu has gone missing, can not maintain read-write",
+			   device->devid);
+		return -EIO;
+	}
+	btrfs_warn(fs_info,
+		   "btrfs device id %llu has gone missing, continue as degraded",
+		   device->devid);
+	btrfs_set_opt(fs_info->mount_opt, DEGRADED);
+	return 0;
+}
+
+static void btrfs_shutdown(struct super_block *sb)
+{
+	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
+
+	btrfs_force_shutdown(fs_info);
+}
+#endif
+
 static const struct super_operations btrfs_super_ops = {
 	.drop_inode	= btrfs_drop_inode,
 	.evict_inode	= btrfs_evict_inode,
@@ -2450,6 +2498,10 @@ static const struct super_operations btrfs_super_ops = {
 	.unfreeze_fs	= btrfs_unfreeze,
 	.nr_cached_objects = btrfs_nr_cached_objects,
 	.free_cached_objects = btrfs_free_cached_objects,
+#ifdef CONFIG_BTRFS_EXPERIMENTAL
+	.remove_bdev	= btrfs_remove_bdev,
+	.shutdown	= btrfs_shutdown,
+#endif
 };
 
 static const struct file_operations btrfs_ctl_fops = {
@@ -2490,9 +2542,6 @@ static int __init btrfs_print_mod_info(void)
 #endif
 #ifdef CONFIG_BTRFS_ASSERT
 			", assert=on"
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
-			", ref-verify=on"
 #endif
 #ifdef CONFIG_BLK_DEV_ZONED
 			", zoned=yes"

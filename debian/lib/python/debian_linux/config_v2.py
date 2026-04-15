@@ -42,13 +42,15 @@ _dacite_config = dacite.Config(
 @dataclasses.dataclass
 class ConfigBuild:
     cflags: Optional[str] = None
-    compiler: Optional[str] = None
+    c_compiler: Optional[str] = None
     compiler_gnutype: Optional[str] = None
     compiler_gnutype_compat: Optional[str] = None
+    rust_build_depends: list[PackageRelationGroup] = dataclasses.field(default_factory=list)
+    enable_rust: Optional[bool] = None
     config: list[Path] = dataclasses.field(default_factory=list)
     config_default: list[Path] = dataclasses.field(default_factory=list, repr=False)
+    enable_dtb: Optional[bool] = None
     enable_signed: Optional[bool] = None
-    enable_vdso: Optional[bool] = None
     kernel_file: Optional[str] = None
     kernel_stem: Optional[str] = None
 
@@ -67,6 +69,8 @@ class ConfigPackages:
     docs: Optional[bool] = dataclasses.field(default=None, metadata={'default': True})
     installer: Optional[bool] = dataclasses.field(default=None, metadata={'default': False})
     libc_dev: Optional[bool] = dataclasses.field(default=None, metadata={'default': True})
+    libc_dev_cross_only: Optional[bool] = dataclasses.field(
+        default=None, metadata={'default': False})
     meta: Optional[bool] = dataclasses.field(default=None, metadata={'default': True})
     source: Optional[bool] = dataclasses.field(default=None, metadata={'default': True})
     tools_unversioned: Optional[bool] = dataclasses.field(default=None, metadata={'default': True})

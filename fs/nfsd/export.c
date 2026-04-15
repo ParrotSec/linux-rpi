@@ -36,19 +36,30 @@
  * second map contains a reference to the entry in the first map.
  */
 
+static struct workqueue_struct *nfsd_export_wq;
+
 #define	EXPKEY_HASHBITS		8
 #define	EXPKEY_HASHMAX		(1 << EXPKEY_HASHBITS)
 #define	EXPKEY_HASHMASK		(EXPKEY_HASHMAX -1)
 
-static void expkey_put(struct kref *ref)
+static void expkey_release(struct work_struct *work)
 {
-	struct svc_expkey *key = container_of(ref, struct svc_expkey, h.ref);
+	struct svc_expkey *key = container_of(to_rcu_work(work),
+					      struct svc_expkey, ek_rwork);
 
 	if (test_bit(CACHE_VALID, &key->h.flags) &&
 	    !test_bit(CACHE_NEGATIVE, &key->h.flags))
 		path_put(&key->ek_path);
 	auth_domain_put(key->ek_client);
-	kfree_rcu(key, ek_rcu);
+	kfree(key);
+}
+
+static void expkey_put(struct kref *ref)
+{
+	struct svc_expkey *key = container_of(ref, struct svc_expkey, h.ref);
+
+	INIT_RCU_WORK(&key->ek_rwork, expkey_release);
+	queue_rcu_work(nfsd_export_wq, &key->ek_rwork);
 }
 
 static int expkey_upcall(struct cache_detail *cd, struct cache_head *h)
@@ -353,11 +364,13 @@ static void export_stats_destroy(struct export_stats *stats)
 					    EXP_STATS_COUNTERS_NUM);
 }
 
-static void svc_export_release(struct rcu_head *rcu_head)
+static void svc_export_release(struct work_struct *work)
 {
-	struct svc_export *exp = container_of(rcu_head, struct svc_export,
-			ex_rcu);
+	struct svc_export *exp = container_of(to_rcu_work(work),
+					      struct svc_export, ex_rwork);
 
+	path_put(&exp->ex_path);
+	auth_domain_put(exp->ex_client);
 	nfsd4_fslocs_free(&exp->ex_fslocs);
 	export_stats_destroy(exp->ex_stats);
 	kfree(exp->ex_stats);
@@ -369,9 +382,8 @@ static void svc_export_put(struct kref *ref)
 {
 	struct svc_export *exp = container_of(ref, struct svc_export, h.ref);
 
-	path_put(&exp->ex_path);
-	auth_domain_put(exp->ex_client);
-	call_rcu(&exp->ex_rcu, svc_export_release);
+	INIT_RCU_WORK(&exp->ex_rwork, svc_export_release);
+	queue_rcu_work(nfsd_export_wq, &exp->ex_rwork);
 }
 
 static int svc_export_upcall(struct cache_detail *cd, struct cache_head *h)
@@ -402,7 +414,7 @@ static struct svc_export *svc_export_update(struct svc_export *new,
 					    struct svc_export *old);
 static struct svc_export *svc_export_lookup(struct svc_export *);
 
-static int check_export(struct path *path, int *flags, unsigned char *uuid)
+static int check_export(const struct path *path, int *flags, unsigned char *uuid)
 {
 	struct inode *inode = d_inode(path->dentry);
 
@@ -427,7 +439,8 @@ static int check_export(struct path *path, int *flags, unsigned char *uuid)
 	 *       either a device number (so FS_REQUIRES_DEV needed)
 	 *       or an FSID number (so NFSEXP_FSID or ->uuid is needed).
 	 * 2:  We must be able to find an inode from a filehandle.
-	 *       This means that s_export_op must be set.
+	 *       This means that s_export_op must be set and comply with
+	 *       the requirements for remote filesystem export.
 	 * 3: We must not currently be on an idmapped mount.
 	 */
 	if (!(inode->i_sb->s_type->fs_flags & FS_REQUIRES_DEV) &&
@@ -437,8 +450,9 @@ static int check_export(struct path *path, int *flags, unsigned char *uuid)
 		return -EINVAL;
 	}
 
-	if (!exportfs_can_decode_fh(inode->i_sb->s_export_op)) {
-		dprintk("exp_export: export of invalid fs type.\n");
+	if (!exportfs_may_export(inode->i_sb->s_export_op)) {
+		dprintk("exp_export: export of invalid fs type (%s).\n",
+			inode->i_sb->s_type->name);
 		return -EINVAL;
 	}
 
@@ -1024,7 +1038,7 @@ exp_rootfh(struct net *net, struct auth_domain *clp, char *name,
 {
 	struct svc_export	*exp;
 	struct path		path;
-	struct inode		*inode;
+	struct inode		*inode __maybe_unused;
 	struct svc_fh		fh;
 	int			err;
 	struct nfsd_net		*nn = net_generic(net, nfsd_net_id);
@@ -1213,7 +1227,7 @@ __be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp,
  * use exp_get_by_name() or exp_find().
  */
 struct svc_export *
-rqst_exp_get_by_name(struct svc_rqst *rqstp, struct path *path)
+rqst_exp_get_by_name(struct svc_rqst *rqstp, const struct path *path)
 {
 	struct svc_export *gssexp, *exp = ERR_PTR(-ENOENT);
 	struct nfsd_net *nn = net_generic(SVC_NET(rqstp), nfsd_net_id);
@@ -1478,6 +1492,36 @@ const struct seq_operations nfs_exports_op = {
 	.show	= e_show,
 };
 
+/**
+ * nfsd_export_wq_init - allocate the export release workqueue
+ *
+ * Called once at module load. The workqueue runs deferred svc_export and
+ * svc_expkey release work scheduled by queue_rcu_work() in the cache put
+ * callbacks.
+ *
+ * Return values:
+ *   %0: workqueue allocated
+ *   %-ENOMEM: allocation failed
+ */
+int nfsd_export_wq_init(void)
+{
+	nfsd_export_wq = alloc_workqueue("nfsd_export", WQ_UNBOUND, 0);
+	if (!nfsd_export_wq)
+		return -ENOMEM;
+	return 0;
+}
+
+/**
+ * nfsd_export_wq_shutdown - drain and free the export release workqueue
+ *
+ * Called once at module unload. Per-namespace teardown in
+ * nfsd_export_shutdown() has already drained all deferred work.
+ */
+void nfsd_export_wq_shutdown(void)
+{
+	destroy_workqueue(nfsd_export_wq);
+}
+
 /*
  * Initialize the exports module.
  */
@@ -1539,6 +1583,9 @@ nfsd_export_shutdown(struct net *net)
 
 	cache_unregister_net(nn->svc_expkey_cache, net);
 	cache_unregister_net(nn->svc_export_cache, net);
+	/* Drain deferred export and expkey release work. */
+	rcu_barrier();
+	flush_workqueue(nfsd_export_wq);
 	cache_destroy_net(nn->svc_expkey_cache, net);
 	cache_destroy_net(nn->svc_export_cache, net);
 	svcauth_unix_purge(net);

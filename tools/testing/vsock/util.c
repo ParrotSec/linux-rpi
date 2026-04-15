@@ -511,6 +511,18 @@ void run_tests(const struct test_case *test_cases,
 
 		printf("ok\n");
 	}
+
+	printf("All tests have been executed. Waiting other peer...");
+	fflush(stdout);
+
+	/*
+	 * Final full barrier, to ensure that all tests have been run and
+	 * that even the last one has been successful on both sides.
+	 */
+	control_writeln("COMPLETED");
+	control_expectln("COMPLETED");
+
+	printf("ok\n");
 }
 
 void list_tests(const struct test_case *test_cases)
@@ -756,7 +768,6 @@ void setsockopt_ull_check(int fd, int level, int optname,
 fail:
 	fprintf(stderr, "%s  val %llu\n", errmsg, val);
 	exit(EXIT_FAILURE);
-;
 }
 
 /* Set "int" socket option and check that it's indeed set */

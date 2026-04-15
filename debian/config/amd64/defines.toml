@@ -31,13 +31,15 @@ name = 'test'
 config = ['config.test', 'amd64/config.test']
 [flavour.defs]
 is_test = true
+[flavour.packages]
+installer = true
 
 [[featureset]]
 name = 'none'
 
 [build]
+enable_rust = true
 enable_signed = false
-enable_vdso = true
 kernel_file = 'arch/x86/boot/bzImage'
 kernel_stem = 'vmlinuz'
 

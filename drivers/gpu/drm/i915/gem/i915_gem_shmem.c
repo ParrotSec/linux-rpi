@@ -151,8 +151,12 @@ int shmem_sg_alloc_table(struct drm_i915_private *i915, struct sg_table *st,
 			}
 		} while (1);
 
-		nr_pages = min_t(unsigned long,
-				folio_nr_pages(folio), page_count - i);
+		nr_pages = min_array(((unsigned long[]) {
+					folio_nr_pages(folio),
+					page_count - i,
+					max_segment / PAGE_SIZE,
+				      }), 3);
+
 		if (!i ||
 		    sg->length >= max_segment ||
 		    folio_pfn(folio) != next_pfn) {
@@ -162,7 +166,9 @@ int shmem_sg_alloc_table(struct drm_i915_private *i915, struct sg_table *st,
 			st->nents++;
 			sg_set_folio(sg, folio, nr_pages * PAGE_SIZE, 0);
 		} else {
-			/* XXX: could overflow? */
+			nr_pages = min_t(unsigned long, nr_pages,
+					 (max_segment - sg->length) / PAGE_SIZE);
+
 			sg->length += nr_pages * PAGE_SIZE;
 		}
 		next_pfn = folio_pfn(folio) + nr_pages;
@@ -441,11 +447,20 @@ shmem_pwrite(struct drm_i915_gem_object *obj,
 	written = file->f_op->write_iter(&kiocb, &iter);
 	BUG_ON(written == -EIOCBQUEUED);
 
-	if (written != size)
-		return -EIO;
-
+	/*
+	 * First, check if write_iter returned a negative error.
+	 * If the write failed, return the real error code immediately.
+	 * This prevents it from being overwritten by the short write check below.
+	 */
 	if (written < 0)
 		return written;
+	/*
+	 * Check for a short write (written bytes != requested size).
+	 * Even if some data was written, return -EIO to indicate that the
+	 * write was not fully completed.
+	 */
+	if (written != size)
+		return -EIO;
 
 	return 0;
 }

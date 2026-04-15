@@ -26,6 +26,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_debugfs.h>
+#include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 
 #include "i915_reg.h"
@@ -39,9 +40,11 @@
 #include "intel_display_regs.h"
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
+#include "intel_display_utils.h"
 #include "intel_dmc.h"
 #include "intel_dp.h"
 #include "intel_dp_aux.h"
+#include "intel_dsb.h"
 #include "intel_frontbuffer.h"
 #include "intel_hdmi.h"
 #include "intel_psr.h"
@@ -49,6 +52,7 @@
 #include "intel_snps_phy.h"
 #include "intel_step.h"
 #include "intel_vblank.h"
+#include "intel_vdsc.h"
 #include "intel_vrr.h"
 #include "skl_universal_plane.h"
 
@@ -233,16 +237,12 @@ bool intel_psr_needs_aux_io_power(struct intel_encoder *encoder,
 
 static bool psr_global_enabled(struct intel_dp *intel_dp)
 {
-	struct intel_display *display = to_intel_display(intel_dp);
 	struct intel_connector *connector = intel_dp->attached_connector;
 
 	switch (intel_dp->psr.debug & I915_PSR_DEBUG_MODE_MASK) {
 	case I915_PSR_DEBUG_DEFAULT:
-		if (display->params.enable_psr == -1)
-			return intel_dp_is_edp(intel_dp) ?
-				connector->panel.vbt.psr.enable :
-				true;
-		return display->params.enable_psr;
+		return intel_dp_is_edp(intel_dp) ?
+			connector->panel.vbt.psr.enable : true;
 	case I915_PSR_DEBUG_DISABLE:
 		return false;
 	default:
@@ -250,39 +250,23 @@ static bool psr_global_enabled(struct intel_dp *intel_dp)
 	}
 }
 
-static bool psr2_global_enabled(struct intel_dp *intel_dp)
+static bool sel_update_global_enabled(struct intel_dp *intel_dp)
 {
-	struct intel_display *display = to_intel_display(intel_dp);
-
 	switch (intel_dp->psr.debug & I915_PSR_DEBUG_MODE_MASK) {
 	case I915_PSR_DEBUG_DISABLE:
 	case I915_PSR_DEBUG_FORCE_PSR1:
 		return false;
 	default:
-		if (display->params.enable_psr == 1)
-			return false;
 		return true;
 	}
-}
-
-static bool psr2_su_region_et_global_enabled(struct intel_dp *intel_dp)
-{
-	struct intel_display *display = to_intel_display(intel_dp);
-
-	if (display->params.enable_psr != -1)
-		return false;
-
-	return true;
 }
 
 static bool panel_replay_global_enabled(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
-	if ((display->params.enable_psr != -1) ||
-	    (intel_dp->psr.debug & I915_PSR_DEBUG_PANEL_REPLAY_DISABLE))
-		return false;
-	return true;
+	return !(intel_dp->psr.debug & I915_PSR_DEBUG_PANEL_REPLAY_DISABLE) &&
+		display->params.enable_panel_replay;
 }
 
 static u32 psr_irq_psr_error_bit_get(struct intel_dp *intel_dp)
@@ -514,12 +498,14 @@ static u8 intel_dp_get_su_capability(struct intel_dp *intel_dp)
 {
 	u8 su_capability = 0;
 
-	if (intel_dp->psr.sink_panel_replay_su_support)
-		drm_dp_dpcd_readb(&intel_dp->aux,
-				  DP_PANEL_REPLAY_CAP_CAPABILITY,
-				  &su_capability);
-	else
+	if (intel_dp->psr.sink_panel_replay_su_support) {
+		if (drm_dp_dpcd_read_byte(&intel_dp->aux,
+					  DP_PANEL_REPLAY_CAP_CAPABILITY,
+					  &su_capability) < 0)
+			return 0;
+	} else {
 		su_capability = intel_dp->psr_dpcd[1];
+	}
 
 	return su_capability;
 }
@@ -597,6 +583,44 @@ exit:
 	intel_dp->psr.su_y_granularity = y;
 }
 
+static enum intel_panel_replay_dsc_support
+compute_pr_dsc_support(struct intel_dp *intel_dp)
+{
+	u8 pr_dsc_mode;
+	u8 val;
+
+	val = intel_dp->pr_dpcd[INTEL_PR_DPCD_INDEX(DP_PANEL_REPLAY_CAP_CAPABILITY)];
+	pr_dsc_mode = REG_FIELD_GET8(DP_PANEL_REPLAY_DSC_DECODE_CAPABILITY_IN_PR_MASK, val);
+
+	switch (pr_dsc_mode) {
+	case DP_DSC_DECODE_CAPABILITY_IN_PR_FULL_FRAME_ONLY:
+		return INTEL_DP_PANEL_REPLAY_DSC_FULL_FRAME_ONLY;
+	case DP_DSC_DECODE_CAPABILITY_IN_PR_SUPPORTED:
+		return INTEL_DP_PANEL_REPLAY_DSC_SELECTIVE_UPDATE;
+	default:
+		MISSING_CASE(pr_dsc_mode);
+		fallthrough;
+	case DP_DSC_DECODE_CAPABILITY_IN_PR_NOT_SUPPORTED:
+	case DP_DSC_DECODE_CAPABILITY_IN_PR_RESERVED:
+		return INTEL_DP_PANEL_REPLAY_DSC_NOT_SUPPORTED;
+	}
+}
+
+static const char *panel_replay_dsc_support_str(enum intel_panel_replay_dsc_support dsc_support)
+{
+	switch (dsc_support) {
+	case INTEL_DP_PANEL_REPLAY_DSC_NOT_SUPPORTED:
+		return "not supported";
+	case INTEL_DP_PANEL_REPLAY_DSC_FULL_FRAME_ONLY:
+		return "full frame only";
+	case INTEL_DP_PANEL_REPLAY_DSC_SELECTIVE_UPDATE:
+		return "selective update";
+	default:
+		MISSING_CASE(dsc_support);
+		return "n/a";
+	};
+}
+
 static void _panel_replay_init_dpcd(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
@@ -636,10 +660,13 @@ static void _panel_replay_init_dpcd(struct intel_dp *intel_dp)
 	    DP_PANEL_REPLAY_SU_SUPPORT)
 		intel_dp->psr.sink_panel_replay_su_support = true;
 
+	intel_dp->psr.sink_panel_replay_dsc_support = compute_pr_dsc_support(intel_dp);
+
 	drm_dbg_kms(display->drm,
-		    "Panel replay %sis supported by panel\n",
+		    "Panel replay %sis supported by panel (in DSC mode: %s)\n",
 		    intel_dp->psr.sink_panel_replay_su_support ?
-		    "selective_update " : "");
+		    "selective_update " : "",
+		    panel_replay_dsc_support_str(intel_dp->psr.sink_panel_replay_dsc_support));
 }
 
 static void _psr_init_dpcd(struct intel_dp *intel_dp)
@@ -756,8 +783,7 @@ static bool psr2_su_region_et_valid(struct intel_dp *intel_dp, bool panel_replay
 	return panel_replay ?
 		intel_dp->pr_dpcd[INTEL_PR_DPCD_INDEX(DP_PANEL_REPLAY_CAP_SUPPORT)] &
 		DP_PANEL_REPLAY_EARLY_TRANSPORT_SUPPORT :
-		intel_dp->psr_dpcd[0] == DP_PSR2_WITH_Y_COORD_ET_SUPPORTED &&
-		psr2_su_region_et_global_enabled(intel_dp);
+		intel_dp->psr_dpcd[0] == DP_PSR2_WITH_Y_COORD_ET_SUPPORTED;
 }
 
 static void _panel_replay_enable_sink(struct intel_dp *intel_dp,
@@ -831,7 +857,12 @@ static void intel_psr_enable_sink(struct intel_dp *intel_dp,
 
 void intel_psr_panel_replay_enable_sink(struct intel_dp *intel_dp)
 {
-	if (CAN_PANEL_REPLAY(intel_dp))
+	/*
+	 * NOTE: We might want to trigger mode set when
+	 * disabling/enabling Panel Replay via debugfs interface to
+	 * ensure this bit is cleared/set accordingly.
+	 */
+	if (CAN_PANEL_REPLAY(intel_dp) && panel_replay_global_enabled(intel_dp))
 		drm_dp_dpcd_writeb(&intel_dp->aux, PANEL_REPLAY_CONFIG,
 				   DP_PANEL_REPLAY_ENABLE);
 }
@@ -951,7 +982,7 @@ static void hsw_activate_psr1(struct intel_dp *intel_dp)
 	/* Wa_16025596647 */
 	if ((DISPLAY_VER(display) == 20 ||
 	     IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0)) &&
-	    is_dc5_dc6_blocked(intel_dp))
+	    is_dc5_dc6_blocked(intel_dp) && intel_dp->psr.pkg_c_latency_used)
 		intel_dmc_start_pkgc_exit_at_start_of_undelayed_vblank(display,
 								       intel_dp->psr.pipe,
 								       true);
@@ -979,15 +1010,16 @@ static u32 intel_psr2_get_tp_time(struct intel_dp *intel_dp)
 	return val;
 }
 
-static int psr2_block_count_lines(struct intel_dp *intel_dp)
+static int
+psr2_block_count_lines(u8 io_wake_lines, u8 fast_wake_lines)
 {
-	return intel_dp->alpm_parameters.io_wake_lines < 9 &&
-		intel_dp->alpm_parameters.fast_wake_lines < 9 ? 8 : 12;
+	return io_wake_lines < 9 && fast_wake_lines < 9 ? 8 : 12;
 }
 
 static int psr2_block_count(struct intel_dp *intel_dp)
 {
-	return psr2_block_count_lines(intel_dp) / 4;
+	return psr2_block_count_lines(intel_dp->psr.io_wake_lines,
+				      intel_dp->psr.fast_wake_lines) / 4;
 }
 
 static u8 frames_before_su_entry(struct intel_dp *intel_dp)
@@ -1041,7 +1073,7 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 	/* Wa_16025596647 */
 	if ((DISPLAY_VER(display) == 20 ||
 	     IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0)) &&
-	    is_dc5_dc6_blocked(intel_dp))
+	    is_dc5_dc6_blocked(intel_dp) && intel_dp->psr.pkg_c_latency_used)
 		idle_frames = 0;
 	else
 		idle_frames = psr_compute_idle_frames(intel_dp);
@@ -1082,20 +1114,20 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 		 */
 		int tmp;
 
-		tmp = map[intel_dp->alpm_parameters.io_wake_lines -
+		tmp = map[intel_dp->psr.io_wake_lines -
 			  TGL_EDP_PSR2_IO_BUFFER_WAKE_MIN_LINES];
 		val |= TGL_EDP_PSR2_IO_BUFFER_WAKE(tmp + TGL_EDP_PSR2_IO_BUFFER_WAKE_MIN_LINES);
 
-		tmp = map[intel_dp->alpm_parameters.fast_wake_lines - TGL_EDP_PSR2_FAST_WAKE_MIN_LINES];
+		tmp = map[intel_dp->psr.fast_wake_lines - TGL_EDP_PSR2_FAST_WAKE_MIN_LINES];
 		val |= TGL_EDP_PSR2_FAST_WAKE(tmp + TGL_EDP_PSR2_FAST_WAKE_MIN_LINES);
 	} else if (DISPLAY_VER(display) >= 20) {
-		val |= LNL_EDP_PSR2_IO_BUFFER_WAKE(intel_dp->alpm_parameters.io_wake_lines);
+		val |= LNL_EDP_PSR2_IO_BUFFER_WAKE(intel_dp->psr.io_wake_lines);
 	} else if (DISPLAY_VER(display) >= 12) {
-		val |= TGL_EDP_PSR2_IO_BUFFER_WAKE(intel_dp->alpm_parameters.io_wake_lines);
-		val |= TGL_EDP_PSR2_FAST_WAKE(intel_dp->alpm_parameters.fast_wake_lines);
+		val |= TGL_EDP_PSR2_IO_BUFFER_WAKE(intel_dp->psr.io_wake_lines);
+		val |= TGL_EDP_PSR2_FAST_WAKE(intel_dp->psr.fast_wake_lines);
 	} else if (DISPLAY_VER(display) >= 9) {
-		val |= EDP_PSR2_IO_BUFFER_WAKE(intel_dp->alpm_parameters.io_wake_lines);
-		val |= EDP_PSR2_FAST_WAKE(intel_dp->alpm_parameters.fast_wake_lines);
+		val |= EDP_PSR2_IO_BUFFER_WAKE(intel_dp->psr.io_wake_lines);
+		val |= EDP_PSR2_FAST_WAKE(intel_dp->psr.fast_wake_lines);
 	}
 
 	if (intel_dp->psr.req_psr2_sdp_prior_scanline)
@@ -1377,22 +1409,54 @@ static int intel_psr_entry_setup_frames(struct intel_dp *intel_dp,
 	return entry_setup_frames;
 }
 
-static bool wake_lines_fit_into_vblank(struct intel_dp *intel_dp,
-				       const struct intel_crtc_state *crtc_state,
-				       bool aux_less)
+static
+int _intel_psr_min_set_context_latency(const struct intel_crtc_state *crtc_state,
+				       bool needs_panel_replay,
+				       bool needs_sel_update)
 {
-	struct intel_display *display = to_intel_display(intel_dp);
-	int vblank = crtc_state->hw.adjusted_mode.crtc_vblank_end -
-		crtc_state->hw.adjusted_mode.crtc_vblank_start;
-	int wake_lines;
+	struct intel_display *display = to_intel_display(crtc_state);
 
-	if (aux_less)
-		wake_lines = intel_dp->alpm_parameters.aux_less_wake_lines;
+	if (!crtc_state->has_psr)
+		return 0;
+
+	/* Wa_14015401596 */
+	if (intel_vrr_possible(crtc_state) && IS_DISPLAY_VER(display, 13, 14))
+		return 1;
+
+	/* Rest is for SRD_STATUS needed on LunarLake and onwards */
+	if (DISPLAY_VER(display) < 20)
+		return 0;
+
+	/*
+	 * Comment on SRD_STATUS register in Bspec for LunarLake and onwards:
+	 *
+	 * To deterministically capture the transition of the state machine
+	 * going from SRDOFFACK to IDLE, the delayed V. Blank should be at least
+	 * one line after the non-delayed V. Blank.
+	 *
+	 * Legacy TG: TRANS_SET_CONTEXT_LATENCY > 0
+	 * VRR TG: TRANS_VRR_CTL[ VRR Guardband ] < (TRANS_VRR_VMAX[ VRR Vmax ]
+	 * - TRANS_VTOTAL[ Vertical Active ])
+	 *
+	 * SRD_STATUS is used only by PSR1 on PantherLake.
+	 * SRD_STATUS is used by PSR1 and Panel Replay DP on LunarLake.
+	 */
+
+	if (DISPLAY_VER(display) >= 30 && (needs_panel_replay ||
+					   needs_sel_update))
+		return 0;
+	else if (DISPLAY_VER(display) < 30 && (needs_sel_update ||
+					       intel_crtc_has_type(crtc_state,
+								   INTEL_OUTPUT_EDP)))
+		return 0;
 	else
-		wake_lines = DISPLAY_VER(display) < 20 ?
-			psr2_block_count_lines(intel_dp) :
-			intel_dp->alpm_parameters.io_wake_lines;
+		return 1;
+}
 
+static bool _wake_lines_fit_into_vblank(const struct intel_crtc_state *crtc_state,
+					int vblank,
+					int wake_lines)
+{
 	if (crtc_state->req_psr2_sdp_prior_scanline)
 		vblank -= 1;
 
@@ -1403,9 +1467,46 @@ static bool wake_lines_fit_into_vblank(struct intel_dp *intel_dp,
 	return true;
 }
 
+static bool wake_lines_fit_into_vblank(struct intel_dp *intel_dp,
+				       const struct intel_crtc_state *crtc_state,
+				       bool aux_less,
+				       bool needs_panel_replay,
+				       bool needs_sel_update)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+	int vblank = crtc_state->hw.adjusted_mode.crtc_vblank_end -
+		crtc_state->hw.adjusted_mode.crtc_vblank_start;
+	int wake_lines;
+	int scl = _intel_psr_min_set_context_latency(crtc_state,
+						     needs_panel_replay,
+						     needs_sel_update);
+	vblank -= scl;
+
+	if (aux_less)
+		wake_lines = crtc_state->alpm_state.aux_less_wake_lines;
+	else
+		wake_lines = DISPLAY_VER(display) < 20 ?
+			psr2_block_count_lines(crtc_state->alpm_state.io_wake_lines,
+					       crtc_state->alpm_state.fast_wake_lines) :
+			crtc_state->alpm_state.io_wake_lines;
+
+	/*
+	 * Guardband has not been computed yet, so we conservatively check if the
+	 * full vblank duration is sufficient to accommodate wake line requirements
+	 * for PSR features like Panel Replay and Selective Update.
+	 *
+	 * Once the actual guardband is available, a more accurate validation is
+	 * performed in intel_psr_compute_config_late(), and PSR features are
+	 * disabled if wake lines exceed the available guardband.
+	 */
+	return _wake_lines_fit_into_vblank(crtc_state, vblank, wake_lines);
+}
+
 static bool alpm_config_valid(struct intel_dp *intel_dp,
-			      const struct intel_crtc_state *crtc_state,
-			      bool aux_less)
+			      struct intel_crtc_state *crtc_state,
+			      bool aux_less,
+			      bool needs_panel_replay,
+			      bool needs_sel_update)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
@@ -1415,7 +1516,8 @@ static bool alpm_config_valid(struct intel_dp *intel_dp,
 		return false;
 	}
 
-	if (!wake_lines_fit_into_vblank(intel_dp, crtc_state, aux_less)) {
+	if (!wake_lines_fit_into_vblank(intel_dp, crtc_state, aux_less,
+					needs_panel_replay, needs_sel_update)) {
 		drm_dbg_kms(display->drm,
 			    "PSR2/Panel Replay not enabled, too short vblank time\n");
 		return false;
@@ -1432,7 +1534,7 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 	int crtc_vdisplay = crtc_state->hw.adjusted_mode.crtc_vdisplay;
 	int psr_max_h = 0, psr_max_v = 0, max_bpp = 0;
 
-	if (!intel_dp->psr.sink_psr2_support)
+	if (!intel_dp->psr.sink_psr2_support || display->params.enable_psr == 1)
 		return false;
 
 	/* JSL and EHL only supports eDP 1.3 */
@@ -1507,7 +1609,7 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 		return false;
 	}
 
-	if (!alpm_config_valid(intel_dp, crtc_state, false))
+	if (!alpm_config_valid(intel_dp, crtc_state, false, false, true))
 		return false;
 
 	if (!crtc_state->enable_psr2_sel_fetch &&
@@ -1537,7 +1639,7 @@ static bool intel_sel_update_config_valid(struct intel_dp *intel_dp,
 		goto unsupported;
 	}
 
-	if (!psr2_global_enabled(intel_dp)) {
+	if (!sel_update_global_enabled(intel_dp)) {
 		drm_dbg_kms(display->drm,
 			    "Selective update disabled by flag\n");
 		goto unsupported;
@@ -1552,9 +1654,21 @@ static bool intel_sel_update_config_valid(struct intel_dp *intel_dp,
 		goto unsupported;
 	}
 
-	if (crtc_state->has_panel_replay && (DISPLAY_VER(display) < 14 ||
-					     !intel_dp->psr.sink_panel_replay_su_support))
-		goto unsupported;
+	if (crtc_state->has_panel_replay) {
+		if (DISPLAY_VER(display) < 14)
+			goto unsupported;
+
+		if (!intel_dp->psr.sink_panel_replay_su_support)
+			goto unsupported;
+
+		if (intel_dsc_enabled_on_link(crtc_state) &&
+		    intel_dp->psr.sink_panel_replay_dsc_support !=
+		    INTEL_DP_PANEL_REPLAY_DSC_SELECTIVE_UPDATE) {
+			drm_dbg_kms(display->drm,
+				    "Selective update with Panel Replay not enabled because it's not supported with DSC\n");
+			goto unsupported;
+		}
+	}
 
 	if (crtc_state->crc_enabled) {
 		drm_dbg_kms(display->drm,
@@ -1585,7 +1699,7 @@ static bool _psr_compute_config(struct intel_dp *intel_dp,
 	const struct drm_display_mode *adjusted_mode = &crtc_state->hw.adjusted_mode;
 	int entry_setup_frames;
 
-	if (!CAN_PSR(intel_dp))
+	if (!CAN_PSR(intel_dp) || !display->params.enable_psr)
 		return false;
 
 	/*
@@ -1597,8 +1711,9 @@ static bool _psr_compute_config(struct intel_dp *intel_dp,
 	entry_setup_frames = intel_psr_entry_setup_frames(intel_dp, adjusted_mode);
 
 	if (entry_setup_frames >= 0) {
-		intel_dp->psr.entry_setup_frames = entry_setup_frames;
+		crtc_state->entry_setup_frames = entry_setup_frames;
 	} else {
+		crtc_state->no_psr_reason = "PSR setup timing not met";
 		drm_dbg_kms(display->drm,
 			    "PSR condition failed: PSR setup timing not met\n");
 		return false;
@@ -1609,7 +1724,7 @@ static bool _psr_compute_config(struct intel_dp *intel_dp,
 
 static bool
 _panel_replay_compute_config(struct intel_dp *intel_dp,
-			     const struct intel_crtc_state *crtc_state,
+			     struct intel_crtc_state *crtc_state,
 			     const struct drm_connector_state *conn_state)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
@@ -1628,6 +1743,14 @@ _panel_replay_compute_config(struct intel_dp *intel_dp,
 	if (crtc_state->crc_enabled) {
 		drm_dbg_kms(display->drm,
 			    "Panel Replay not enabled because it would inhibit pipe CRC calculation\n");
+		return false;
+	}
+
+	if (intel_dsc_enabled_on_link(crtc_state) &&
+	    intel_dp->psr.sink_panel_replay_dsc_support ==
+	    INTEL_DP_PANEL_REPLAY_DSC_NOT_SUPPORTED) {
+		drm_dbg_kms(display->drm,
+			    "Panel Replay not enabled because it's not supported with DSC\n");
 		return false;
 	}
 
@@ -1658,7 +1781,7 @@ _panel_replay_compute_config(struct intel_dp *intel_dp,
 		return false;
 	}
 
-	if (!alpm_config_valid(intel_dp, crtc_state, true))
+	if (!alpm_config_valid(intel_dp, crtc_state, true, true, false))
 		return false;
 
 	return true;
@@ -1669,8 +1792,36 @@ static bool intel_psr_needs_wa_18037818876(struct intel_dp *intel_dp,
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
-	return (DISPLAY_VER(display) == 20 && intel_dp->psr.entry_setup_frames > 0 &&
+	return (DISPLAY_VER(display) == 20 && crtc_state->entry_setup_frames > 0 &&
 		!crtc_state->has_sel_update);
+}
+
+static
+void intel_psr_set_non_psr_pipes(struct intel_dp *intel_dp,
+				 struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+	struct intel_atomic_state *state = to_intel_atomic_state(crtc_state->uapi.state);
+	struct intel_crtc *crtc;
+	u8 active_pipes = 0;
+
+	/* Wa_16025596647 */
+	if (DISPLAY_VER(display) != 20 &&
+	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+		return;
+
+	/* Not needed by Panel Replay  */
+	if (crtc_state->has_panel_replay)
+		return;
+
+	/* We ignore possible secondary PSR/Panel Replay capable eDP */
+	for_each_intel_crtc(display->drm, crtc)
+		active_pipes |= crtc->active ? BIT(crtc->pipe) : 0;
+
+	active_pipes = intel_calc_active_pipes(state, active_pipes);
+
+	crtc_state->active_non_psr_pipes = active_pipes &
+		~BIT(to_intel_crtc(crtc_state->uapi.crtc)->pipe);
 }
 
 void intel_psr_compute_config(struct intel_dp *intel_dp,
@@ -1679,9 +1830,6 @@ void intel_psr_compute_config(struct intel_dp *intel_dp,
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	const struct drm_display_mode *adjusted_mode = &crtc_state->hw.adjusted_mode;
-	struct intel_atomic_state *state = to_intel_atomic_state(crtc_state->uapi.state);
-	struct intel_crtc *crtc;
-	u8 active_pipes = 0;
 
 	if (!psr_global_enabled(intel_dp)) {
 		drm_dbg_kms(display->drm, "PSR disabled by flag\n");
@@ -1711,6 +1859,8 @@ void intel_psr_compute_config(struct intel_dp *intel_dp,
 		return;
 	}
 
+	/* Only used for state verification. */
+	crtc_state->panel_replay_dsc_support = intel_dp->psr.sink_panel_replay_dsc_support;
 	crtc_state->has_panel_replay = _panel_replay_compute_config(intel_dp,
 								    crtc_state,
 								    conn_state);
@@ -1722,31 +1872,6 @@ void intel_psr_compute_config(struct intel_dp *intel_dp,
 		return;
 
 	crtc_state->has_sel_update = intel_sel_update_config_valid(intel_dp, crtc_state);
-
-	/* Wa_18037818876 */
-	if (intel_psr_needs_wa_18037818876(intel_dp, crtc_state)) {
-		crtc_state->has_psr = false;
-		drm_dbg_kms(display->drm,
-			    "PSR disabled to workaround PSR FSM hang issue\n");
-	}
-
-	/* Rest is for Wa_16025596647 */
-	if (DISPLAY_VER(display) != 20 &&
-	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
-		return;
-
-	/* Not needed by Panel Replay  */
-	if (crtc_state->has_panel_replay)
-		return;
-
-	/* We ignore possible secondary PSR/Panel Replay capable eDP */
-	for_each_intel_crtc(display->drm, crtc)
-		active_pipes |= crtc->active ? BIT(crtc->pipe) : 0;
-
-	active_pipes = intel_calc_active_pipes(state, active_pipes);
-
-	crtc_state->active_non_psr_pipes = active_pipes &
-		~BIT(to_intel_crtc(crtc_state->uapi.crtc)->pipe);
 }
 
 void intel_psr_get_config(struct intel_encoder *encoder,
@@ -1817,6 +1942,8 @@ static void intel_psr_activate(struct intel_dp *intel_dp)
 
 	drm_WARN_ON(display->drm, intel_dp->psr.active);
 
+	drm_WARN_ON(display->drm, !intel_dp->psr.enabled);
+
 	lockdep_assert_held(&intel_dp->psr.lock);
 
 	/* psr1, psr2 and panel-replay are mutually exclusive.*/
@@ -1828,6 +1955,7 @@ static void intel_psr_activate(struct intel_dp *intel_dp)
 		hsw_activate_psr1(intel_dp);
 
 	intel_dp->psr.active = true;
+	intel_dp->psr.no_psr_reason = NULL;
 }
 
 /*
@@ -2036,6 +2164,10 @@ static void intel_psr_enable_locked(struct intel_dp *intel_dp,
 	intel_dp->psr.req_psr2_sdp_prior_scanline =
 		crtc_state->req_psr2_sdp_prior_scanline;
 	intel_dp->psr.active_non_psr_pipes = crtc_state->active_non_psr_pipes;
+	intel_dp->psr.pkg_c_latency_used = crtc_state->pkg_c_latency_used;
+	intel_dp->psr.io_wake_lines = crtc_state->alpm_state.io_wake_lines;
+	intel_dp->psr.fast_wake_lines = crtc_state->alpm_state.fast_wake_lines;
+	intel_dp->psr.entry_setup_frames = crtc_state->entry_setup_frames;
 
 	if (!psr_interrupt_error_check(intel_dp))
 		return;
@@ -2112,8 +2244,9 @@ static void intel_psr_exit(struct intel_dp *intel_dp)
 
 		drm_WARN_ON(display->drm, !(val & EDP_PSR2_ENABLE));
 	} else {
-		if (DISPLAY_VER(display) == 20 ||
-		    IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+		if ((DISPLAY_VER(display) == 20 ||
+		     IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0)) &&
+			intel_dp->psr.pkg_c_latency_used)
 			intel_dmc_start_pkgc_exit_at_start_of_undelayed_vblank(display,
 								       intel_dp->psr.pipe,
 								       false);
@@ -2144,8 +2277,8 @@ static void intel_psr_wait_exit_locked(struct intel_dp *intel_dp)
 	}
 
 	/* Wait till PSR is idle */
-	if (intel_de_wait_for_clear(display, psr_status,
-				    psr_status_mask, 2000))
+	if (intel_de_wait_for_clear_ms(display, psr_status,
+				       psr_status_mask, 2000))
 		drm_err(display->drm, "Timed out waiting PSR idle state\n");
 }
 
@@ -2216,6 +2349,7 @@ static void intel_psr_disable_locked(struct intel_dp *intel_dp)
 	intel_dp->psr.su_region_et_enabled = false;
 	intel_dp->psr.psr2_sel_fetch_cff_enabled = false;
 	intel_dp->psr.active_non_psr_pipes = 0;
+	intel_dp->psr.pkg_c_latency_used = 0;
 }
 
 /**
@@ -2372,50 +2506,17 @@ void intel_psr_trigger_frame_change_event(struct intel_dsb *dsb,
 }
 
 /**
- * intel_psr_min_vblank_delay - Minimum vblank delay needed by PSR
+ * intel_psr_min_set_context_latency - Minimum 'set context latency' lines needed by PSR
  * @crtc_state: the crtc state
  *
- * Return minimum vblank delay needed by PSR.
+ * Return minimum SCL lines/delay needed by PSR.
  */
-int intel_psr_min_vblank_delay(const struct intel_crtc_state *crtc_state)
+int intel_psr_min_set_context_latency(const struct intel_crtc_state *crtc_state)
 {
-	struct intel_display *display = to_intel_display(crtc_state);
 
-	if (!crtc_state->has_psr)
-		return 0;
-
-	/* Wa_14015401596 */
-	if (intel_vrr_possible(crtc_state) && IS_DISPLAY_VER(display, 13, 14))
-		return 1;
-
-	/* Rest is for SRD_STATUS needed on LunarLake and onwards */
-	if (DISPLAY_VER(display) < 20)
-		return 0;
-
-	/*
-	 * Comment on SRD_STATUS register in Bspec for LunarLake and onwards:
-	 *
-	 * To deterministically capture the transition of the state machine
-	 * going from SRDOFFACK to IDLE, the delayed V. Blank should be at least
-	 * one line after the non-delayed V. Blank.
-	 *
-	 * Legacy TG: TRANS_SET_CONTEXT_LATENCY > 0
-	 * VRR TG: TRANS_VRR_CTL[ VRR Guardband ] < (TRANS_VRR_VMAX[ VRR Vmax ]
-	 * - TRANS_VTOTAL[ Vertical Active ])
-	 *
-	 * SRD_STATUS is used only by PSR1 on PantherLake.
-	 * SRD_STATUS is used by PSR1 and Panel Replay DP on LunarLake.
-	 */
-
-	if (DISPLAY_VER(display) >= 30 && (crtc_state->has_panel_replay ||
-					   crtc_state->has_sel_update))
-		return 0;
-	else if (DISPLAY_VER(display) < 30 && (crtc_state->has_sel_update ||
-					       intel_crtc_has_type(crtc_state,
-								   INTEL_OUTPUT_EDP)))
-		return 0;
-	else
-		return 1;
+	return _intel_psr_min_set_context_latency(crtc_state,
+						  crtc_state->has_panel_replay,
+						  crtc_state->has_sel_update);
 }
 
 static u32 man_trk_ctl_enable_bit_get(struct intel_display *display)
@@ -2497,6 +2598,12 @@ void intel_psr2_program_trans_man_trk_ctl(struct intel_dsb *dsb,
 
 	intel_de_write_dsb(display, dsb, PIPE_SRCSZ_ERLY_TPT(crtc->pipe),
 			   crtc_state->pipe_srcsz_early_tpt);
+
+	if (!crtc_state->dsc.compression_enable)
+		return;
+
+	intel_dsc_su_et_parameters_configure(dsb, encoder, crtc_state,
+					     drm_rect_height(&crtc_state->psr2_su_area));
 }
 
 static void psr2_man_trk_ctl_calc(struct intel_crtc_state *crtc_state,
@@ -2567,11 +2674,12 @@ static void clip_area_update(struct drm_rect *overlap_damage_area,
 		overlap_damage_area->y2 = damage_area->y2;
 }
 
-static void intel_psr2_sel_fetch_pipe_alignment(struct intel_crtc_state *crtc_state)
+static bool intel_psr2_sel_fetch_pipe_alignment(struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(crtc_state);
 	const struct drm_dsc_config *vdsc_cfg = &crtc_state->dsc.config;
 	u16 y_alignment;
+	bool su_area_changed = false;
 
 	/* ADLP aligns the SU region to vdsc slice height in case dsc is enabled */
 	if (crtc_state->dsc.compression_enable &&
@@ -2580,10 +2688,18 @@ static void intel_psr2_sel_fetch_pipe_alignment(struct intel_crtc_state *crtc_st
 	else
 		y_alignment = crtc_state->su_y_granularity;
 
-	crtc_state->psr2_su_area.y1 -= crtc_state->psr2_su_area.y1 % y_alignment;
-	if (crtc_state->psr2_su_area.y2 % y_alignment)
+	if (crtc_state->psr2_su_area.y1 % y_alignment) {
+		crtc_state->psr2_su_area.y1 -= crtc_state->psr2_su_area.y1 % y_alignment;
+		su_area_changed = true;
+	}
+
+	if (crtc_state->psr2_su_area.y2 % y_alignment) {
 		crtc_state->psr2_su_area.y2 = ((crtc_state->psr2_su_area.y2 /
 						y_alignment) + 1) * y_alignment;
+		su_area_changed = true;
+	}
+
+	return su_area_changed;
 }
 
 /*
@@ -2716,7 +2832,7 @@ int intel_psr2_sel_fetch_update(struct intel_atomic_state *state,
 	struct intel_crtc_state *crtc_state = intel_atomic_get_new_crtc_state(state, crtc);
 	struct intel_plane_state *new_plane_state, *old_plane_state;
 	struct intel_plane *plane;
-	bool full_update = false, cursor_in_su_area = false;
+	bool full_update = false, su_area_changed;
 	int i, ret;
 
 	if (!crtc_state->enable_psr2_sel_fetch)
@@ -2823,15 +2939,32 @@ int intel_psr2_sel_fetch_update(struct intel_atomic_state *state,
 	if (ret)
 		return ret;
 
-	/*
-	 * Adjust su area to cover cursor fully as necessary (early
-	 * transport). This needs to be done after
-	 * drm_atomic_add_affected_planes to ensure visible cursor is added into
-	 * affected planes even when cursor is not updated by itself.
-	 */
-	intel_psr2_sel_fetch_et_alignment(state, crtc, &cursor_in_su_area);
+	do {
+		bool cursor_in_su_area;
 
-	intel_psr2_sel_fetch_pipe_alignment(crtc_state);
+		/*
+		 * Adjust su area to cover cursor fully as necessary
+		 * (early transport). This needs to be done after
+		 * drm_atomic_add_affected_planes to ensure visible
+		 * cursor is added into affected planes even when
+		 * cursor is not updated by itself.
+		 */
+		intel_psr2_sel_fetch_et_alignment(state, crtc, &cursor_in_su_area);
+
+		su_area_changed = intel_psr2_sel_fetch_pipe_alignment(crtc_state);
+
+		/*
+		 * If the cursor was outside the SU area before
+		 * alignment, the alignment step (which only expands
+		 * SU) may pull the cursor partially inside, so we
+		 * must run ET alignment again to fully cover it. But
+		 * if the cursor was already fully inside before
+		 * alignment, expanding the SU area won't change that,
+		 * so no further work is needed.
+		 */
+		if (cursor_in_su_area)
+			break;
+	} while (su_area_changed);
 
 	/*
 	 * Now that we have the pipe damaged area check if it intersect with
@@ -2891,6 +3024,10 @@ int intel_psr2_sel_fetch_update(struct intel_atomic_state *state,
 	}
 
 skip_sel_fetch_set_loop:
+	if (full_update)
+		clip_area_update(&crtc_state->psr2_su_area, &crtc_state->pipe_src,
+				 &crtc_state->pipe_src);
+
 	psr2_man_trk_ctl_calc(crtc_state, full_update);
 	crtc_state->pipe_srcsz_early_tpt =
 		psr2_pipe_srcsz_early_tpt_calc(crtc_state, full_update);
@@ -2937,6 +3074,9 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 
 		mutex_lock(&psr->lock);
 
+		if (!new_crtc_state->has_psr)
+			psr->no_psr_reason = new_crtc_state->no_psr_reason;
+
 		if (psr->enabled) {
 			/*
 			 * Reasons to disable:
@@ -2947,6 +3087,8 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 			 * - Display WA #1136: skl, bxt
 			 */
 			if (intel_crtc_needs_modeset(new_crtc_state) ||
+			    new_crtc_state->update_m_n ||
+			    new_crtc_state->update_lrr ||
 			    !new_crtc_state->has_psr ||
 			    !new_crtc_state->active_planes ||
 			    new_crtc_state->has_sel_update != psr->sel_update_enabled ||
@@ -2963,6 +3105,20 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 	}
 }
 
+static void
+verify_panel_replay_dsc_state(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+
+	if (!crtc_state->has_panel_replay)
+		return;
+
+	drm_WARN_ON(display->drm,
+		    intel_dsc_enabled_on_link(crtc_state) &&
+		    crtc_state->panel_replay_dsc_support ==
+		    INTEL_DP_PANEL_REPLAY_DSC_NOT_SUPPORTED);
+}
+
 void intel_psr_post_plane_update(struct intel_atomic_state *state,
 				 struct intel_crtc *crtc)
 {
@@ -2973,6 +3129,8 @@ void intel_psr_post_plane_update(struct intel_atomic_state *state,
 
 	if (!crtc_state->has_psr)
 		return;
+
+	verify_panel_replay_dsc_state(crtc_state);
 
 	for_each_intel_encoder_mask_with_psr(state->base.dev, encoder,
 					     crtc_state->uapi.encoder_mask) {
@@ -2985,12 +3143,19 @@ void intel_psr_post_plane_update(struct intel_atomic_state *state,
 		drm_WARN_ON(display->drm,
 			    psr->enabled && !crtc_state->active_planes);
 
-		keep_disabled |= psr->sink_not_reliable;
-		keep_disabled |= !crtc_state->active_planes;
+		if (psr->sink_not_reliable)
+			keep_disabled = true;
+
+		if (!crtc_state->active_planes) {
+			psr->no_psr_reason = "All planes inactive";
+			keep_disabled = true;
+		}
 
 		/* Display WA #1136: skl, bxt */
-		keep_disabled |= DISPLAY_VER(display) < 11 &&
-			crtc_state->wm_level_disabled;
+		if (DISPLAY_VER(display) < 11 && crtc_state->wm_level_disabled) {
+			psr->no_psr_reason = "Workaround #1136 for skl, bxt";
+			keep_disabled = true;
+		}
 
 		if (!psr->enabled && !keep_disabled)
 			intel_psr_enable_locked(intel_dp, crtc_state);
@@ -3012,35 +3177,57 @@ void intel_psr_post_plane_update(struct intel_atomic_state *state,
 	}
 }
 
-static int _psr2_ready_for_pipe_update_locked(struct intel_dp *intel_dp)
+/*
+ * From bspec: Panel Self Refresh (BDW+)
+ * Max. time for PSR to idle = Inverse of the refresh rate + 6 ms of
+ * exit training time + 1.5 ms of aux channel handshake. 50 ms is
+ * defensive enough to cover everything.
+ */
+#define PSR_IDLE_TIMEOUT_MS 50
+
+static int
+_psr2_ready_for_pipe_update_locked(const struct intel_crtc_state *new_crtc_state,
+				   struct intel_dsb *dsb)
 {
-	struct intel_display *display = to_intel_display(intel_dp);
-	enum transcoder cpu_transcoder = intel_dp->psr.transcoder;
+	struct intel_display *display = to_intel_display(new_crtc_state);
+	enum transcoder cpu_transcoder = new_crtc_state->cpu_transcoder;
 
 	/*
 	 * Any state lower than EDP_PSR2_STATUS_STATE_DEEP_SLEEP is enough.
 	 * As all higher states has bit 4 of PSR2 state set we can just wait for
 	 * EDP_PSR2_STATUS_STATE_DEEP_SLEEP to be cleared.
 	 */
-	return intel_de_wait_for_clear(display,
+	if (dsb) {
+		intel_dsb_poll(dsb, EDP_PSR2_STATUS(display, cpu_transcoder),
+			       EDP_PSR2_STATUS_STATE_DEEP_SLEEP, 0, 200,
+			       PSR_IDLE_TIMEOUT_MS * 1000 / 200);
+		return true;
+	}
+
+	return intel_de_wait_for_clear_ms(display,
 				       EDP_PSR2_STATUS(display, cpu_transcoder),
-				       EDP_PSR2_STATUS_STATE_DEEP_SLEEP, 50);
+				       EDP_PSR2_STATUS_STATE_DEEP_SLEEP,
+				       PSR_IDLE_TIMEOUT_MS);
 }
 
-static int _psr1_ready_for_pipe_update_locked(struct intel_dp *intel_dp)
+static int
+_psr1_ready_for_pipe_update_locked(const struct intel_crtc_state *new_crtc_state,
+				   struct intel_dsb *dsb)
 {
-	struct intel_display *display = to_intel_display(intel_dp);
-	enum transcoder cpu_transcoder = intel_dp->psr.transcoder;
+	struct intel_display *display = to_intel_display(new_crtc_state);
+	enum transcoder cpu_transcoder = new_crtc_state->cpu_transcoder;
 
-	/*
-	 * From bspec: Panel Self Refresh (BDW+)
-	 * Max. time for PSR to idle = Inverse of the refresh rate + 6 ms of
-	 * exit training time + 1.5 ms of aux channel handshake. 50 ms is
-	 * defensive enough to cover everything.
-	 */
-	return intel_de_wait_for_clear(display,
+	if (dsb) {
+		intel_dsb_poll(dsb, psr_status_reg(display, cpu_transcoder),
+			       EDP_PSR_STATUS_STATE_MASK, 0, 200,
+			       PSR_IDLE_TIMEOUT_MS * 1000 / 200);
+		return true;
+	}
+
+	return intel_de_wait_for_clear_ms(display,
 				       psr_status_reg(display, cpu_transcoder),
-				       EDP_PSR_STATUS_STATE_MASK, 50);
+				       EDP_PSR_STATUS_STATE_MASK,
+				       PSR_IDLE_TIMEOUT_MS);
 }
 
 /**
@@ -3069,14 +3256,28 @@ void intel_psr_wait_for_idle_locked(const struct intel_crtc_state *new_crtc_stat
 			continue;
 
 		if (intel_dp->psr.sel_update_enabled)
-			ret = _psr2_ready_for_pipe_update_locked(intel_dp);
+			ret = _psr2_ready_for_pipe_update_locked(new_crtc_state,
+								 NULL);
 		else
-			ret = _psr1_ready_for_pipe_update_locked(intel_dp);
+			ret = _psr1_ready_for_pipe_update_locked(new_crtc_state,
+								 NULL);
 
 		if (ret)
 			drm_err(display->drm,
 				"PSR wait timed out, atomic update may fail\n");
 	}
+}
+
+void intel_psr_wait_for_idle_dsb(struct intel_dsb *dsb,
+				 const struct intel_crtc_state *new_crtc_state)
+{
+	if (!new_crtc_state->has_psr || new_crtc_state->has_panel_replay)
+		return;
+
+	if (new_crtc_state->has_sel_update)
+		_psr2_ready_for_pipe_update_locked(new_crtc_state, dsb);
+	else
+		_psr1_ready_for_pipe_update_locked(new_crtc_state, dsb);
 }
 
 static bool __psr_wait_for_idle_locked(struct intel_dp *intel_dp)
@@ -3101,14 +3302,14 @@ static bool __psr_wait_for_idle_locked(struct intel_dp *intel_dp)
 
 	mutex_unlock(&intel_dp->psr.lock);
 
-	err = intel_de_wait_for_clear(display, reg, mask, 50);
+	err = intel_de_wait_for_clear_ms(display, reg, mask, 50);
 	if (err)
 		drm_err(display->drm,
 			"Timed out waiting for PSR Idle for re-enable\n");
 
 	/* After the unlocked wait, verify that PSR is still wanted! */
 	mutex_lock(&intel_dp->psr.lock);
-	return err == 0 && intel_dp->psr.enabled;
+	return err == 0 && intel_dp->psr.enabled && !intel_dp->psr.pause_counter;
 }
 
 static int intel_psr_fastset_force(struct intel_display *display)
@@ -3237,8 +3438,13 @@ static void intel_psr_work(struct work_struct *work)
 	if (!intel_dp->psr.enabled)
 		goto unlock;
 
-	if (READ_ONCE(intel_dp->psr.irq_aux_error))
+	if (READ_ONCE(intel_dp->psr.irq_aux_error)) {
 		intel_psr_handle_irq(intel_dp);
+		goto unlock;
+	}
+
+	if (intel_dp->psr.pause_counter)
+		goto unlock;
 
 	/*
 	 * We have to make sure PSR is ready for re-enable
@@ -3373,6 +3579,7 @@ static void _psr_flush_handle(struct intel_dp *intel_dp)
 	struct intel_display *display = to_intel_display(intel_dp);
 
 	if (DISPLAY_VER(display) < 20 && intel_dp->psr.psr2_sel_fetch_enabled) {
+		/* Selective fetch prior LNL */
 		if (intel_dp->psr.psr2_sel_fetch_cff_enabled) {
 			/* can we turn CFF off? */
 			if (intel_dp->psr.busy_frontbuffer_bits == 0)
@@ -3391,12 +3598,19 @@ static void _psr_flush_handle(struct intel_dp *intel_dp)
 		intel_psr_configure_full_frame_update(intel_dp);
 
 		intel_psr_force_update(intel_dp);
+	} else if (!intel_dp->psr.psr2_sel_fetch_enabled) {
+		/*
+		 * PSR1 on all platforms
+		 * PSR2 HW tracking
+		 * Panel Replay Full frame update
+		 */
+		intel_psr_force_update(intel_dp);
 	} else {
+		/* Selective update LNL onwards */
 		intel_psr_exit(intel_dp);
 	}
 
-	if ((!intel_dp->psr.psr2_sel_fetch_enabled || DISPLAY_VER(display) >= 20) &&
-	    !intel_dp->psr.busy_frontbuffer_bits)
+	if (!intel_dp->psr.active && !intel_dp->psr.busy_frontbuffer_bits)
 		queue_work(display->wq.unordered, &intel_dp->psr.work);
 }
 
@@ -3732,7 +3946,7 @@ static void intel_psr_apply_underrun_on_idle_wa_locked(struct intel_dp *intel_dp
 	struct intel_display *display = to_intel_display(intel_dp);
 	bool dc5_dc6_blocked;
 
-	if (!intel_dp->psr.active)
+	if (!intel_dp->psr.active || !intel_dp->psr.pkg_c_latency_used)
 		return;
 
 	dc5_dc6_blocked = is_dc5_dc6_blocked(intel_dp);
@@ -3757,7 +3971,8 @@ static void psr_dc5_dc6_wa_work(struct work_struct *work)
 
 		mutex_lock(&intel_dp->psr.lock);
 
-		if (intel_dp->psr.enabled && !intel_dp->psr.panel_replay_enabled)
+		if (intel_dp->psr.enabled && !intel_dp->psr.panel_replay_enabled &&
+		    !intel_dp->psr.pkg_c_latency_used)
 			intel_psr_apply_underrun_on_idle_wa_locked(intel_dp);
 
 		mutex_unlock(&intel_dp->psr.lock);
@@ -3835,7 +4050,8 @@ void intel_psr_notify_pipe_change(struct intel_atomic_state *state,
 			goto unlock;
 
 		if ((enable && intel_dp->psr.active_non_psr_pipes) ||
-		    (!enable && !intel_dp->psr.active_non_psr_pipes)) {
+		    (!enable && !intel_dp->psr.active_non_psr_pipes) ||
+		    !intel_dp->psr.pkg_c_latency_used) {
 			intel_dp->psr.active_non_psr_pipes = active_non_psr_pipes;
 			goto unlock;
 		}
@@ -3870,7 +4086,7 @@ void intel_psr_notify_vblank_enable_disable(struct intel_display *display,
 			break;
 		}
 
-		if (intel_dp->psr.enabled)
+		if (intel_dp->psr.enabled && intel_dp->psr.pkg_c_latency_used)
 			intel_psr_apply_underrun_on_idle_wa_locked(intel_dp);
 
 		mutex_unlock(&intel_dp->psr.lock);
@@ -3952,6 +4168,8 @@ static void intel_psr_sink_capability(struct intel_dp *intel_dp,
 	seq_printf(m, ", Panel Replay = %s", str_yes_no(psr->sink_panel_replay_support));
 	seq_printf(m, ", Panel Replay Selective Update = %s",
 		   str_yes_no(psr->sink_panel_replay_su_support));
+	seq_printf(m, ", Panel Replay DSC support = %s",
+		   panel_replay_dsc_support_str(psr->sink_panel_replay_dsc_support));
 	if (intel_dp->pr_dpcd[INTEL_PR_DPCD_INDEX(DP_PANEL_REPLAY_CAP_SUPPORT)] &
 	    DP_PANEL_REPLAY_EARLY_TRANSPORT_SUPPORT)
 		seq_printf(m, " (Early Transport)");
@@ -3986,6 +4204,8 @@ static void intel_psr_print_mode(struct intel_dp *intel_dp,
 		region_et = "";
 
 	seq_printf(m, "PSR mode: %s%s%s\n", mode, status, region_et);
+	if (psr->no_psr_reason)
+		seq_printf(m, "  %s\n", psr->no_psr_reason);
 }
 
 static int intel_psr_status(struct seq_file *m, struct intel_dp *intel_dp)
@@ -4166,12 +4386,12 @@ DEFINE_SIMPLE_ATTRIBUTE(i915_edp_psr_debug_fops,
 
 void intel_psr_debugfs_register(struct intel_display *display)
 {
-	struct drm_minor *minor = display->drm->primary;
+	struct dentry *debugfs_root = display->drm->debugfs_root;
 
-	debugfs_create_file("i915_edp_psr_debug", 0644, minor->debugfs_root,
+	debugfs_create_file("i915_edp_psr_debug", 0644, debugfs_root,
 			    display, &i915_edp_psr_debug_fops);
 
-	debugfs_create_file("i915_edp_psr_status", 0444, minor->debugfs_root,
+	debugfs_create_file("i915_edp_psr_status", 0444, debugfs_root,
 			    display, &i915_edp_psr_status_fops);
 }
 
@@ -4282,4 +4502,85 @@ bool intel_psr_needs_alpm_aux_less(struct intel_dp *intel_dp,
 				   const struct intel_crtc_state *crtc_state)
 {
 	return intel_dp_is_edp(intel_dp) && crtc_state->has_panel_replay;
+}
+
+void intel_psr_compute_config_late(struct intel_dp *intel_dp,
+				   struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(intel_dp);
+	int vblank = intel_crtc_vblank_length(crtc_state);
+	int wake_lines;
+
+	if (intel_psr_needs_alpm_aux_less(intel_dp, crtc_state))
+		wake_lines = crtc_state->alpm_state.aux_less_wake_lines;
+	else if (intel_psr_needs_alpm(intel_dp, crtc_state))
+		wake_lines = DISPLAY_VER(display) < 20 ?
+			     psr2_block_count_lines(crtc_state->alpm_state.io_wake_lines,
+						    crtc_state->alpm_state.fast_wake_lines) :
+			     crtc_state->alpm_state.io_wake_lines;
+	else
+		wake_lines = 0;
+
+	/*
+	 * Disable the PSR features if wake lines exceed the available vblank.
+	 * Though SCL is computed based on these PSR features, it is not reset
+	 * even if the PSR features are disabled to avoid changing vblank start
+	 * at this stage.
+	 */
+	if (wake_lines && !_wake_lines_fit_into_vblank(crtc_state, vblank, wake_lines)) {
+		drm_dbg_kms(display->drm,
+			    "Adjusting PSR/PR mode: vblank too short for wake lines = %d\n",
+			    wake_lines);
+
+		if (crtc_state->has_panel_replay) {
+			crtc_state->has_panel_replay = false;
+			/*
+			 * #TODO : Add fall back to PSR/PSR2
+			 * Since panel replay cannot be supported, we can fall back to PSR/PSR2.
+			 * This will require calling compute_config for psr and psr2 with check for
+			 * actual guardband instead of vblank_length.
+			 */
+			crtc_state->has_psr = false;
+		}
+
+		crtc_state->has_sel_update = false;
+		crtc_state->enable_psr2_su_region_et = false;
+		crtc_state->enable_psr2_sel_fetch = false;
+	}
+
+	/* Wa_18037818876 */
+	if (intel_psr_needs_wa_18037818876(intel_dp, crtc_state)) {
+		crtc_state->has_psr = false;
+		drm_dbg_kms(display->drm,
+			    "PSR disabled to workaround PSR FSM hang issue\n");
+	}
+
+	intel_psr_set_non_psr_pipes(intel_dp, crtc_state);
+}
+
+int intel_psr_min_guardband(struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+	int psr_min_guardband;
+	int wake_lines;
+
+	if (!intel_crtc_has_type(crtc_state, INTEL_OUTPUT_EDP))
+		return 0;
+
+	if (crtc_state->has_panel_replay)
+		wake_lines = crtc_state->alpm_state.aux_less_wake_lines;
+	else if (crtc_state->has_sel_update)
+		wake_lines = DISPLAY_VER(display) < 20 ?
+			     psr2_block_count_lines(crtc_state->alpm_state.io_wake_lines,
+						    crtc_state->alpm_state.fast_wake_lines) :
+			     crtc_state->alpm_state.io_wake_lines;
+	else
+		return 0;
+
+	psr_min_guardband = wake_lines + crtc_state->set_context_latency;
+
+	if (crtc_state->req_psr2_sdp_prior_scanline)
+		psr_min_guardband++;
+
+	return psr_min_guardband;
 }

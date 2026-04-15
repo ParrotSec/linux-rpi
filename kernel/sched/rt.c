@@ -1490,7 +1490,7 @@ static void requeue_task_rt(struct rq *rq, struct task_struct *p, int head)
 
 static void yield_task_rt(struct rq *rq)
 {
-	requeue_task_rt(rq, rq->curr, 0);
+	requeue_task_rt(rq, rq->donor, 0);
 }
 
 static int find_lowest_rq(struct task_struct *task);
@@ -1695,7 +1695,7 @@ static struct task_struct *_pick_next_task_rt(struct rq *rq)
 	return rt_task_of(rt_se);
 }
 
-static struct task_struct *pick_task_rt(struct rq *rq)
+static struct task_struct *pick_task_rt(struct rq *rq, struct rq_flags *rf)
 {
 	struct task_struct *p;
 
@@ -2100,6 +2100,7 @@ static void push_rt_tasks(struct rq *rq)
  */
 static int rto_next_cpu(struct root_domain *rd)
 {
+	int this_cpu = smp_processor_id();
 	int next;
 	int cpu;
 
@@ -2122,6 +2123,10 @@ static int rto_next_cpu(struct root_domain *rd)
 		cpu = cpumask_next(rd->rto_cpu, rd->rto_mask);
 
 		rd->rto_cpu = cpu;
+
+		/* Do not send IPI to self */
+		if (cpu == this_cpu)
+			continue;
 
 		if (cpu < nr_cpu_ids)
 			return cpu;
@@ -2437,9 +2442,12 @@ static void switched_to_rt(struct rq *rq, struct task_struct *p)
  * us to initiate a push or pull.
  */
 static void
-prio_changed_rt(struct rq *rq, struct task_struct *p, int oldprio)
+prio_changed_rt(struct rq *rq, struct task_struct *p, u64 oldprio)
 {
 	if (!task_on_rq_queued(p))
+		return;
+
+	if (p->prio == oldprio)
 		return;
 
 	if (task_current_donor(rq, p)) {
@@ -2566,6 +2574,8 @@ static int task_is_throttled_rt(struct task_struct *p, int cpu)
 
 DEFINE_SCHED_CLASS(rt) = {
 
+	.queue_mask		= 4,
+
 	.enqueue_task		= enqueue_task_rt,
 	.dequeue_task		= dequeue_task_rt,
 	.yield_task		= yield_task_rt,
@@ -2589,8 +2599,8 @@ DEFINE_SCHED_CLASS(rt) = {
 
 	.get_rr_interval	= get_rr_interval_rt,
 
-	.prio_changed		= prio_changed_rt,
 	.switched_to		= switched_to_rt,
+	.prio_changed		= prio_changed_rt,
 
 	.update_curr		= update_curr_rt,
 

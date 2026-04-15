@@ -1,4 +1,0 @@
-usr/lib/linux-kbuild-6.17.13+deb13/scripts                          usr/src/linux-headers-6.17.13+deb13-4kc-malta/scripts
-usr/lib/linux-kbuild-6.17.13+deb13/tools                            usr/src/linux-headers-6.17.13+deb13-4kc-malta/tools
-usr/src/linux-headers-6.17.13+deb13-4kc-malta                                               usr/lib/modules/6.17.13+deb13-4kc-malta/build
-usr/src/linux-headers-6.17.13+deb13-common  usr/lib/modules/6.17.13+deb13-4kc-malta/source

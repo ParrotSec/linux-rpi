@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+deb13-4kc-malta
-scripts/module.lds                       usr/src/linux-headers-6.17.13+deb13-4kc-malta/arch/mips
-arch/mips/include             usr/src/linux-headers-6.17.13+deb13-4kc-malta/arch/mips

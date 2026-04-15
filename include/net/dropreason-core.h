@@ -67,6 +67,7 @@
 	FN(TC_EGRESS)			\
 	FN(SECURITY_HOOK)		\
 	FN(QDISC_DROP)			\
+	FN(QDISC_BURST_DROP)		\
 	FN(QDISC_OVERLIMIT)		\
 	FN(QDISC_CONGESTED)		\
 	FN(CAKE_FLOOD)			\
@@ -127,6 +128,8 @@
 	FN(CANXL_RX_INVALID_FRAME)	\
 	FN(PFMEMALLOC)	\
 	FN(DUALPI2_STEP_DROP)		\
+	FN(PSP_INPUT)			\
+	FN(PSP_OUTPUT)			\
 	FNe(MAX)
 
 /**
@@ -373,6 +376,11 @@ enum skb_drop_reason {
 	 */
 	SKB_DROP_REASON_QDISC_DROP,
 	/**
+	 * @SKB_DROP_REASON_QDISC_BURST_DROP: dropped when net.core.qdisc_max_burst
+	 * limit is hit.
+	 */
+	SKB_DROP_REASON_QDISC_BURST_DROP,
+	/**
 	 * @SKB_DROP_REASON_QDISC_OVERLIMIT: dropped by qdisc when a qdisc
 	 * instance exceeds its total buffer size limit.
 	 */
@@ -610,6 +618,10 @@ enum skb_drop_reason {
 	 * threshold of DualPI2 qdisc.
 	 */
 	SKB_DROP_REASON_DUALPI2_STEP_DROP,
+	/** @SKB_DROP_REASON_PSP_INPUT: PSP input checks failed */
+	SKB_DROP_REASON_PSP_INPUT,
+	/** @SKB_DROP_REASON_PSP_OUTPUT: PSP output checks failed */
+	SKB_DROP_REASON_PSP_OUTPUT,
 	/**
 	 * @SKB_DROP_REASON_MAX: the maximum of core drop reasons, which
 	 * shouldn't be used as a real 'reason' - only for tracing code gen

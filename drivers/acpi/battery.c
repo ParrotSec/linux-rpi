@@ -91,7 +91,6 @@ enum {
 };
 
 struct acpi_battery {
-	struct mutex lock;
 	struct mutex update_lock;
 	struct power_supply *bat;
 	struct power_supply_desc bat_desc;
@@ -212,7 +211,14 @@ static int acpi_battery_get_property(struct power_supply *psy,
 		if (battery->state & ACPI_BATTERY_STATE_DISCHARGING)
 			val->intval = acpi_battery_handle_discharging(battery);
 		else if (battery->state & ACPI_BATTERY_STATE_CHARGING)
-			val->intval = POWER_SUPPLY_STATUS_CHARGING;
+			/* Validate the status by checking the current. */
+			if (battery->rate_now != ACPI_BATTERY_VALUE_UNKNOWN &&
+			    battery->rate_now == 0) {
+				/* On charge but no current (0W/0mA). */
+				val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
+			} else {
+				val->intval = POWER_SUPPLY_STATUS_CHARGING;
+			}
 		else if (battery->state & ACPI_BATTERY_STATE_CHARGE_LIMITING)
 			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		else if (acpi_battery_is_charged(battery))
@@ -535,11 +541,9 @@ static int acpi_battery_get_info(struct acpi_battery *battery)
 		struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
 		acpi_status status = AE_ERROR;
 
-		mutex_lock(&battery->lock);
 		status = acpi_evaluate_object(battery->device->handle,
 					      use_bix ? "_BIX":"_BIF",
 					      NULL, &buffer);
-		mutex_unlock(&battery->lock);
 
 		if (ACPI_FAILURE(status)) {
 			acpi_handle_info(battery->device->handle,
@@ -576,11 +580,8 @@ static int acpi_battery_get_state(struct acpi_battery *battery)
 			msecs_to_jiffies(cache_time)))
 		return 0;
 
-	mutex_lock(&battery->lock);
 	status = acpi_evaluate_object(battery->device->handle, "_BST",
 				      NULL, &buffer);
-	mutex_unlock(&battery->lock);
-
 	if (ACPI_FAILURE(status)) {
 		acpi_handle_info(battery->device->handle,
 				 "_BST evaluation failed: %s",
@@ -628,11 +629,8 @@ static int acpi_battery_set_alarm(struct acpi_battery *battery)
 	    !test_bit(ACPI_BATTERY_ALARM_PRESENT, &battery->flags))
 		return -ENODEV;
 
-	mutex_lock(&battery->lock);
 	status = acpi_execute_simple_method(battery->device->handle, "_BTP",
 					    battery->alarm);
-	mutex_unlock(&battery->lock);
-
 	if (ACPI_FAILURE(status))
 		return -ENODEV;
 
@@ -1235,9 +1233,6 @@ static int acpi_battery_add(struct acpi_device *device)
 	strscpy(acpi_device_name(device), ACPI_BATTERY_DEVICE_NAME);
 	strscpy(acpi_device_class(device), ACPI_BATTERY_CLASS);
 	device->driver_data = battery;
-	result = devm_mutex_init(&device->dev, &battery->lock);
-	if (result)
-		return result;
 
 	result = devm_mutex_init(&device->dev, &battery->update_lock);
 	if (result)

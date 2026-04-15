@@ -1,0 +1,258 @@
+Source: linux-signed-amd64
+Section: kernel
+Priority: optional
+Maintainer: Debian Kernel Team <debian-kernel@lists.debian.org>
+Uploaders: Bastian Blank <waldi@debian.org>, maximilian attems <maks@debian.org>, Ben Hutchings <benh@debian.org>, Salvatore Bonaccorso <carnil@debian.org>
+Standards-Version: 4.2.0
+Build-Depends: debhelper-compat (= 13), python3:any, sbsigntool [amd64 arm64]
+Build-Depends-Arch: kernel-wedge (>= 2.105~) [amd64] <!pkg.linux.nokernel> <pkg.linux.quick !noudeb !pkg.linux.nokernel>, kmod [amd64] <!pkg.linux.nokernel> <pkg.linux.quick !noudeb !pkg.linux.nokernel>, linux-binary-unsigned-6.19.10+deb13-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-binary-unsigned-6.19.10+deb13-cloud-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-binary-unsigned-6.19.10+deb13-rt-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-binary-unsigned-6.19.10+deb13-test (= @signedtemplate_binaryversion@) [amd64] <pkg.linux.quick !pkg.linux.nokernel>, linux-modules-6.19.10+deb13-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-modules-6.19.10+deb13-cloud-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-modules-6.19.10+deb13-rt-amd64 (= @signedtemplate_binaryversion@) [amd64] <!pkg.linux.nokernel !pkg.linux.quick>, linux-modules-6.19.10+deb13-test (= @signedtemplate_binaryversion@) [amd64] <pkg.linux.quick !pkg.linux.nokernel>, rsync [amd64] <!pkg.linux.nokernel>
+Rules-Requires-Root: no
+Homepage: https://www.kernel.org/
+Vcs-Browser: https://salsa.debian.org/kernel-team/linux
+Vcs-Git: https://salsa.debian.org/kernel-team/linux.git
+
+Package: linux-base-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Depends: linux-base-6.19.10+deb13-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for 64-bit PCs (dummy package)
+ This package contains files common to all Linux kernel packages.
+
+Package: linux-base-cloud-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Depends: linux-base-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for x86-64 cloud (dummy package)
+ This package contains files common to all Linux kernel packages.
+
+Package: linux-base-rt-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Depends: linux-base-6.19.10+deb13-rt-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for 64-bit PCs (dummy package)
+ This package contains files common to all Linux kernel packages.
+
+Package: linux-base-test
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel !pkg.linux.nometa>
+Depends: linux-base-6.19.10+deb13-test (= ${binary:Version}), ${misc:Depends}
+Description: Linux for  (dummy package)
+ This package contains files common to all Linux kernel packages.
+
+Package: linux-binary-6.19.10+deb13-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Built-Using: linux (= 6.19.10-1~bpo13+1)
+Depends: linux-base-6.19.10+deb13-amd64 (= @signedtemplate_binaryversion@), ${misc:Depends}
+Description: Binary for Linux 6.19.10 (signed)
+ The Linux kernel 6.19.10 and modules for use on PCs with AMD64, Intel 64
+ or VIA Nano processors.
+
+Package: linux-binary-6.19.10+deb13-cloud-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Built-Using: linux (= 6.19.10-1~bpo13+1)
+Depends: linux-base-6.19.10+deb13-cloud-amd64 (= @signedtemplate_binaryversion@), ${misc:Depends}
+Description: Binary for Linux 6.19.10 (signed)
+ The Linux kernel 6.19.10 and modules for use on cloud platforms including
+ Amazon EC2, Microsoft Azure, and Google Compute Engine.
+
+Package: linux-binary-6.19.10+deb13-rt-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Built-Using: linux (= 6.19.10-1~bpo13+1)
+Depends: linux-base-6.19.10+deb13-rt-amd64 (= @signedtemplate_binaryversion@), ${misc:Depends}
+Description: Binary for Linux 6.19.10 (signed)
+ The Linux kernel 6.19.10 and modules for use on PCs with AMD64, Intel 64
+ or VIA Nano processors.
+
+Package: linux-binary-6.19.10+deb13-test
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel>
+Built-Using: linux (= 6.19.10-1~bpo13+1)
+Depends: linux-base-6.19.10+deb13-test (= @signedtemplate_binaryversion@), ${misc:Depends}
+Description: Binary for Linux 6.19.10 (signed)
+ The Linux kernel 6.19.10 and modules for use on .
+
+Package: linux-headers-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-headers-generic
+Depends: linux-base-amd64 (= ${binary:Version}), linux-headers-6.19.10+deb13-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Header files for Linux amd64 configuration (meta-package)
+ This package depends on the architecture-specific header files for the
+ latest Linux kernel amd64 configuration.
+
+Package: linux-headers-cloud-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Depends: linux-base-cloud-amd64 (= ${binary:Version}), linux-headers-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Header files for Linux cloud-amd64 configuration (meta-package)
+ This package depends on the architecture-specific header files for the
+ latest Linux kernel cloud-amd64 configuration.
+
+Package: linux-headers-rt-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Depends: linux-base-rt-amd64 (= ${binary:Version}), linux-headers-6.19.10+deb13-rt-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Header files for Linux rt-amd64 configuration (meta-package)
+ This package depends on the architecture-specific header files for the
+ latest Linux kernel rt-amd64 configuration.
+
+Package: linux-headers-test
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel !pkg.linux.nometa>
+Depends: linux-base-test (= ${binary:Version}), linux-headers-6.19.10+deb13-test (= ${binary:Version}), ${misc:Depends}
+Description: Header files for Linux test configuration (meta-package)
+ This package depends on the architecture-specific header files for the
+ latest Linux kernel test configuration.
+
+Package: linux-image-6.19.10+deb13-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Pre-Depends: linux-base (>= 4.12~)
+Depends: dracut [amd64] | initramfs-tools (>= 0.120+deb8u2) [amd64] | linux-initramfs-tool [amd64], kmod, linux-base-6.19.10+deb13-amd64 (= ${binary:Version}), linux-binary-6.19.10+deb13-amd64 (= ${binary:Version}), linux-modules-6.19.10+deb13-amd64 (= ${binary:Version}), ${misc:Depends}
+Recommends: apparmor [amd64]
+Suggests: debian-kernel-handbook, firmware-linux-free, grub-pc [amd64] | grub-efi-amd64 [amd64] | extlinux [amd64], linux-doc-6.19
+Breaks: fwupdate (<< 12-7) [amd64], initramfs-tools (<< 0.120+deb8u2) [amd64], wireless-regdb (<< 2019.06.03-1~) [amd64]
+Description: Linux 6.19.10 for 64-bit PCs
+ The Linux kernel 6.19.10 and modules for use on PCs with AMD64, Intel 64
+ or VIA Nano processors.
+
+Package: linux-image-6.19.10+deb13-cloud-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Pre-Depends: linux-base (>= 4.12~)
+Depends: dracut [amd64] | initramfs-tools (>= 0.120+deb8u2) [amd64] | linux-initramfs-tool [amd64], kmod, linux-base-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), linux-binary-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), linux-modules-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), ${misc:Depends}
+Recommends: apparmor [amd64]
+Suggests: debian-kernel-handbook, firmware-linux-free, grub-pc [amd64] | grub-efi-amd64 [amd64] | extlinux [amd64], linux-doc-6.19
+Breaks: fwupdate (<< 12-7) [amd64], initramfs-tools (<< 0.120+deb8u2) [amd64], wireless-regdb (<< 2019.06.03-1~) [amd64]
+Description: Linux 6.19.10 for x86-64 cloud
+ The Linux kernel 6.19.10 and modules for use on cloud platforms including
+ Amazon EC2, Microsoft Azure, and Google Compute Engine.
+
+Package: linux-image-6.19.10+deb13-rt-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.quick>
+Pre-Depends: linux-base (>= 4.12~)
+Depends: dracut [amd64] | initramfs-tools (>= 0.120+deb8u2) [amd64] | linux-initramfs-tool [amd64], kmod, linux-base-6.19.10+deb13-rt-amd64 (= ${binary:Version}), linux-binary-6.19.10+deb13-rt-amd64 (= ${binary:Version}), linux-modules-6.19.10+deb13-rt-amd64 (= ${binary:Version}), ${misc:Depends}
+Recommends: apparmor [amd64]
+Suggests: debian-kernel-handbook, firmware-linux-free, grub-pc [amd64] | grub-efi-amd64 [amd64] | extlinux [amd64], linux-doc-6.19
+Breaks: fwupdate (<< 12-7) [amd64], initramfs-tools (<< 0.120+deb8u2) [amd64], wireless-regdb (<< 2019.06.03-1~) [amd64]
+Description: Linux 6.19.10 for 64-bit PCs, PREEMPT_RT
+ The Linux kernel 6.19.10 and modules for use on PCs with AMD64, Intel 64
+ or VIA Nano processors.
+ .
+ This kernel is configured with PREEMPT_RT real time support.
+
+Package: linux-image-6.19.10+deb13-test
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel>
+Pre-Depends: linux-base (>= 4.12~)
+Depends: dracut [amd64] | initramfs-tools (>= 0.120+deb8u2) [amd64] | linux-initramfs-tool [amd64], kmod, linux-base-6.19.10+deb13-test (= ${binary:Version}), linux-binary-6.19.10+deb13-test (= ${binary:Version}), linux-modules-6.19.10+deb13-test (= ${binary:Version}), ${misc:Depends}
+Recommends: apparmor [amd64]
+Suggests: debian-kernel-handbook, firmware-linux-free, grub-pc [amd64] | grub-efi-amd64 [amd64] | extlinux [amd64], linux-doc-6.19
+Breaks: fwupdate (<< 12-7) [amd64], initramfs-tools (<< 0.120+deb8u2) [amd64], wireless-regdb (<< 2019.06.03-1~) [amd64]
+Description: Linux 6.19.10 for
+ The Linux kernel 6.19.10 and modules for use on .
+
+Package: linux-image-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-image-generic, linux-latest-modules-6.19.10+deb13-amd64, virtualbox-guest-modules [amd64], wireguard-modules (= 1.0.0)
+Depends: linux-base-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for 64-bit PCs (meta-package)
+ This package depends on the latest Linux kernel and modules for use on PCs
+ with AMD64, Intel 64 or VIA Nano processors.
+
+Package: linux-image-amd64-dbg
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nokerneldbg !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-image-dbg
+Depends: linux-base-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-amd64-dbg (= ${binary:Version}), ${misc:Depends}
+Description: Debugging symbols for Linux amd64 configuration (meta-package)
+ This package depends on the detached debugging symbols for the latest
+ Linux kernel amd64 configuration.
+
+Package: linux-image-cloud-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-modules-6.19.10+deb13-cloud-amd64, virtualbox-guest-modules [amd64], wireguard-modules (= 1.0.0)
+Depends: linux-base-cloud-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-cloud-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for x86-64 cloud (meta-package)
+ This package depends on the latest Linux kernel and modules for use on
+ cloud platforms including Amazon EC2, Microsoft Azure, and Google Compute
+ Engine.
+
+Package: linux-image-cloud-amd64-dbg
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nokerneldbg !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-image-dbg
+Depends: linux-base-cloud-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-cloud-amd64-dbg (= ${binary:Version}), ${misc:Depends}
+Description: Debugging symbols for Linux cloud-amd64 configuration (meta-package)
+ This package depends on the detached debugging symbols for the latest
+ Linux kernel cloud-amd64 configuration.
+
+Package: linux-image-rt-amd64
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-modules-6.19.10+deb13-rt-amd64, virtualbox-guest-modules [amd64], wireguard-modules (= 1.0.0)
+Depends: linux-base-rt-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-rt-amd64 (= ${binary:Version}), ${misc:Depends}
+Description: Linux for 64-bit PCs (meta-package)
+ This package depends on the latest Linux kernel and modules for use on PCs
+ with AMD64, Intel 64 or VIA Nano processors.
+
+Package: linux-image-rt-amd64-dbg
+Architecture: amd64
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nokerneldbg !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-image-dbg
+Depends: linux-base-rt-amd64 (= ${binary:Version}), linux-image-6.19.10+deb13-rt-amd64-dbg (= ${binary:Version}), ${misc:Depends}
+Description: Debugging symbols for Linux rt-amd64 configuration (meta-package)
+ This package depends on the detached debugging symbols for the latest
+ Linux kernel rt-amd64 configuration.
+
+Package: linux-image-test
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel !pkg.linux.nometa>
+Provides: linux-latest-modules-6.19.10+deb13-test, virtualbox-guest-modules [amd64], wireguard-modules (= 1.0.0)
+Depends: linux-base-test (= ${binary:Version}), linux-image-6.19.10+deb13-test (= ${binary:Version}), ${misc:Depends}
+Description: Linux for  (meta-package)
+ This package depends on the latest Linux kernel and modules for use on .
+
+Package: linux-image-test-dbg
+Architecture: amd64
+Build-Profiles: <pkg.linux.quick !pkg.linux.nokernel !pkg.linux.nokerneldbg !pkg.linux.nometa !pkg.linux.quick>
+Provides: linux-latest-image-dbg
+Depends: linux-base-test (= ${binary:Version}), linux-image-6.19.10+deb13-test-dbg (= ${binary:Version}), ${misc:Depends}
+Description: Debugging symbols for Linux test configuration (meta-package)
+ This package depends on the detached debugging symbols for the latest
+ Linux kernel test configuration.
+
+Package: linux-binary-6.19.10+deb13-amd64-di
+Architecture: amd64
+Section: debian-installer
+Priority: standard
+Package-Type: udeb
+Build-Profiles: <!noudeb !pkg.linux.nokernel !pkg.linux.quick>
+Provides: kernel-image, kernel-image-6.19.10+deb13-amd64-di
+Depends: linux-base-6.19.10+deb13-amd64-di
+Kernel-Version: 6.19.10+deb13-amd64
+Description: Linux kernel image for the Debian installer
+ This package contains the kernel image and core modules for the Debian
+ installer boot images.  It does _not_ provide a usable kernel for your
+ full Debian system.
+
+Package: linux-binary-6.19.10+deb13-test-di
+Architecture: amd64
+Section: debian-installer
+Priority: standard
+Package-Type: udeb
+Build-Profiles: <pkg.linux.quick !noudeb !pkg.linux.nokernel>
+Provides: kernel-image, kernel-image-6.19.10+deb13-test-di
+Depends: linux-base-6.19.10+deb13-test-di
+Kernel-Version: 6.19.10+deb13-test
+Description: Linux kernel image for the Debian installer
+ This package contains the kernel image and core modules for the Debian
+ installer boot images.  It does _not_ provide a usable kernel for your
+ full Debian system.
+

@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+2-octeon
-scripts/module.lds                       usr/src/linux-headers-6.17.13+2-octeon/arch/mips
-arch/mips/include             usr/src/linux-headers-6.17.13+2-octeon/arch/mips

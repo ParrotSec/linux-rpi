@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.17.13+2-armmp-lpae
-scripts/module.lds                       usr/src/linux-headers-6.17.13+2-armmp-lpae/arch/arm
-arch/arm/include             usr/src/linux-headers-6.17.13+2-armmp-lpae/arch/arm

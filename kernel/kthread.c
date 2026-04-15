@@ -85,24 +85,6 @@ static inline struct kthread *to_kthread(struct task_struct *k)
 	return k->worker_private;
 }
 
-/*
- * Variant of to_kthread() that doesn't assume @p is a kthread.
- *
- * When "(p->flags & PF_KTHREAD)" is set the task is a kthread and will
- * always remain a kthread.  For kthreads p->worker_private always
- * points to a struct kthread.  For tasks that are not kthreads
- * p->worker_private is used to point to other things.
- *
- * Return NULL for any task that is not a kthread.
- */
-static inline struct kthread *__to_kthread(struct task_struct *p)
-{
-	void *kthread = p->worker_private;
-	if (kthread && !(p->flags & PF_KTHREAD))
-		kthread = NULL;
-	return kthread;
-}
-
 void get_kthread_comm(char *buf, size_t buf_size, struct task_struct *tsk)
 {
 	struct kthread *kthread = to_kthread(tsk);
@@ -193,7 +175,7 @@ EXPORT_SYMBOL_GPL(kthread_should_park);
 
 bool kthread_should_stop_or_park(void)
 {
-	struct kthread *kthread = __to_kthread(current);
+	struct kthread *kthread = tsk_is_kthread(current);
 
 	if (!kthread)
 		return false;
@@ -234,7 +216,7 @@ EXPORT_SYMBOL_GPL(kthread_freezable_should_stop);
  */
 void *kthread_func(struct task_struct *task)
 {
-	struct kthread *kthread = __to_kthread(task);
+	struct kthread *kthread = tsk_is_kthread(task);
 	if (kthread)
 		return kthread->threadfn;
 	return NULL;
@@ -266,7 +248,7 @@ EXPORT_SYMBOL_GPL(kthread_data);
  */
 void *kthread_probe_data(struct task_struct *task)
 {
-	struct kthread *kthread = __to_kthread(task);
+	struct kthread *kthread = tsk_is_kthread(task);
 	void *data = NULL;
 
 	if (kthread)
@@ -309,19 +291,8 @@ void kthread_parkme(void)
 }
 EXPORT_SYMBOL_GPL(kthread_parkme);
 
-/**
- * kthread_exit - Cause the current kthread return @result to kthread_stop().
- * @result: The integer value to return to kthread_stop().
- *
- * While kthread_exit can be called directly, it exists so that
- * functions which do some additional work in non-modular code such as
- * module_put_and_kthread_exit can be implemented.
- *
- * Does not return.
- */
-void __noreturn kthread_exit(long result)
+void kthread_do_exit(struct kthread *kthread, long result)
 {
-	struct kthread *kthread = to_kthread(current);
 	kthread->result = result;
 	if (!list_empty(&kthread->hotplug_node)) {
 		mutex_lock(&kthreads_hotplug_lock);
@@ -333,9 +304,7 @@ void __noreturn kthread_exit(long result)
 			kthread->preferred_affinity = NULL;
 		}
 	}
-	do_exit(0);
 }
-EXPORT_SYMBOL(kthread_exit);
 
 /**
  * kthread_complete_and_exit - Exit the current kthread.
@@ -593,18 +562,16 @@ EXPORT_SYMBOL(kthread_create_on_node);
 
 static void __kthread_bind_mask(struct task_struct *p, const struct cpumask *mask, unsigned int state)
 {
-	unsigned long flags;
-
 	if (!wait_task_inactive(p, state)) {
 		WARN_ON(1);
 		return;
 	}
 
+	scoped_guard (raw_spinlock_irqsave, &p->pi_lock)
+		set_cpus_allowed_force(p, mask);
+
 	/* It's safe because the task is inactive. */
-	raw_spin_lock_irqsave(&p->pi_lock, flags);
-	do_set_cpus_allowed(p, mask);
 	p->flags |= PF_NO_SETAFFINITY;
-	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 }
 
 static void __kthread_bind(struct task_struct *p, unsigned int cpu, unsigned int state)
@@ -682,7 +649,7 @@ void kthread_set_per_cpu(struct task_struct *k, int cpu)
 
 bool kthread_is_per_cpu(struct task_struct *p)
 {
-	struct kthread *kthread = __to_kthread(p);
+	struct kthread *kthread = tsk_is_kthread(p);
 	if (!kthread)
 		return false;
 
@@ -857,7 +824,6 @@ int kthread_affine_preferred(struct task_struct *p, const struct cpumask *mask)
 {
 	struct kthread *kthread = to_kthread(p);
 	cpumask_var_t affinity;
-	unsigned long flags;
 	int ret = 0;
 
 	if (!wait_task_inactive(p, TASK_UNINTERRUPTIBLE) || kthread->started) {
@@ -882,10 +848,8 @@ int kthread_affine_preferred(struct task_struct *p, const struct cpumask *mask)
 	list_add_tail(&kthread->hotplug_node, &kthreads_hotplug);
 	kthread_fetch_affinity(kthread, affinity);
 
-	/* It's safe because the task is inactive. */
-	raw_spin_lock_irqsave(&p->pi_lock, flags);
-	do_set_cpus_allowed(p, affinity);
-	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
+	scoped_guard (raw_spinlock_irqsave, &p->pi_lock)
+		set_cpus_allowed_force(p, affinity);
 
 	mutex_unlock(&kthreads_hotplug_lock);
 out:
@@ -1604,6 +1568,7 @@ void kthread_use_mm(struct mm_struct *mm)
 
 	WARN_ON_ONCE(!(tsk->flags & PF_KTHREAD));
 	WARN_ON_ONCE(tsk->mm);
+	WARN_ON_ONCE(!mm->user_ns);
 
 	/*
 	 * It is possible for mm to be the same as tsk->active_mm, but

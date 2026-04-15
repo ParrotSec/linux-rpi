@@ -34,6 +34,11 @@ debian/iwlwifi-do-not-request-unreleased-firmware.patch
 debian/firmware_loader-log-direct-loading-failures-as-info-for-d-i.patch
 bugfix/all/radeon-amdgpu-firmware-is-required-for-drm-and-kms-on-r600-onward.patch
 
+# Parrot patches
+features/all/wifi-injection.patch
+features/all/wireless-carl9170-Enable-sniffer-mode-promisc-flag-t.patch
+features/all/dwav-usb-mt-driver.patch
+
 # Change some defaults for security reasons
 debian/af_802154-Disable-auto-loading-as-mitigation-against.patch
 debian/rds-Disable-auto-loading-as-mitigation-against-local.patch
@@ -66,6 +71,13 @@ bugfix/arm64/arm64-acpi-Add-fixup-for-HPE-m400-quirks.patch
 # Arch features
 features/x86/x86-memtest-WARN-if-bad-RAM-found.patch
 features/x86/x86-make-x32-syscall-support-conditional.patch
+features/riscv64/phy-spacemit-Introduce-PCIe-combo-PHY.patch
+features/riscv64/phy-spacemit-support-K1-USB2.0-PHY-controller.patch
+features/riscv64/riscv-dts-spacemit-Add-a-PCIe-regulator.patch
+features/riscv64/riscv-dts-spacemit-PCIe-and-PHY-related-updates.patch
+features/riscv64/riscv-dts-spacemit-Add-USB2-PHY-node-for-K1.patch
+features/riscv64/riscv-dts-spacemit-Add-DWC3-USB-3.0-controller-node-.patch
+features/riscv64/riscv-dts-spacemit-Enable-USB3.0-on-BananaPi-F3.patch
 
 # Miscellaneous bug fixes
 bugfix/all/disable-some-marvell-phys.patch

@@ -1,4 +1,0 @@
-usr/lib/linux-kbuild-6.17.13+2/scripts                          usr/src/linux-headers-6.17.13+2-powerpc64-64k/scripts
-usr/lib/linux-kbuild-6.17.13+2/tools                            usr/src/linux-headers-6.17.13+2-powerpc64-64k/tools
-usr/src/linux-headers-6.17.13+2-powerpc64-64k                                               usr/lib/modules/6.17.13+2-powerpc64-64k/build
-usr/src/linux-headers-6.17.13+2-common  usr/lib/modules/6.17.13+2-powerpc64-64k/source

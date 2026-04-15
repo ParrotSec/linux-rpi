@@ -376,6 +376,15 @@ static const struct uvc_control_info uvc_ctrls[] = {
 				| UVC_CTRL_FLAG_GET_DEF
 				| UVC_CTRL_FLAG_AUTO_UPDATE,
 	},
+	{
+		.entity		= UVC_GUID_CHROMEOS_XU,
+		.selector	= UVC_CROSXU_CONTROL_IQ_PROFILE,
+		.index		= 3,
+		.size		= 1,
+		.flags		= UVC_CTRL_FLAG_SET_CUR
+				| UVC_CTRL_FLAG_GET_RANGE
+				| UVC_CTRL_FLAG_RESTORE,
+	},
 };
 
 static const u32 uvc_control_classes[] = {
@@ -384,6 +393,19 @@ static const u32 uvc_control_classes[] = {
 };
 
 static const int exposure_auto_mapping[] = { 2, 1, 4, 8 };
+static const int cros_colorfx_mapping[] = {
+	1,	/* V4L2_COLORFX_NONE */
+	-1,	/* V4L2_COLORFX_BW */
+	-1,	/* V4L2_COLORFX_SEPIA */
+	-1,	/* V4L2_COLORFX_NEGATIVE */
+	-1,	/* V4L2_COLORFX_EMBOSS */
+	-1,	/* V4L2_COLORFX_SKETCH */
+	-1,	/* V4L2_COLORFX_SKY_BLUE */
+	-1,	/* V4L2_COLORFX_GRASS_GREEN */
+	-1,	/* V4L2_COLORFX_SKIN_WHITEN */
+	0,	/* V4L2_COLORFX_VIVID */
+};
+
 
 static bool uvc_ctrl_mapping_is_compound(struct uvc_control_mapping *mapping)
 {
@@ -975,6 +997,18 @@ static const struct uvc_control_mapping uvc_ctrl_mappings[] = {
 		.data_type	= UVC_CTRL_DATA_TYPE_BITMASK,
 		.name		= "Region of Interest Auto Ctrls",
 	},
+	{
+		.id		= V4L2_CID_COLORFX,
+		.entity		= UVC_GUID_CHROMEOS_XU,
+		.selector	= UVC_CROSXU_CONTROL_IQ_PROFILE,
+		.size		= 8,
+		.offset		= 0,
+		.v4l2_type	= V4L2_CTRL_TYPE_MENU,
+		.data_type	= UVC_CTRL_DATA_TYPE_ENUM,
+		.menu_mapping	= cros_colorfx_mapping,
+		.menu_mask	= BIT(V4L2_COLORFX_VIVID) |
+				  BIT(V4L2_COLORFX_NONE),
+	},
 };
 
 /* ------------------------------------------------------------------------
@@ -1398,7 +1432,7 @@ static bool uvc_ctrl_is_readable(u32 which, struct uvc_control *ctrl,
  * auto_exposure=1, exposure_time_absolute=251.
  */
 int uvc_ctrl_is_accessible(struct uvc_video_chain *chain, u32 v4l2_id,
-			   const struct v4l2_ext_controls *ctrls,
+			   const struct v4l2_ext_controls *ctrls, u32 which,
 			   unsigned long ioctl)
 {
 	struct uvc_control_mapping *master_map = NULL;
@@ -1408,12 +1442,22 @@ int uvc_ctrl_is_accessible(struct uvc_video_chain *chain, u32 v4l2_id,
 	s32 val;
 	int ret;
 	int i;
+	/*
+	 * There is no need to check the ioctl, all the ioctls except
+	 * VIDIOC_G_EXT_CTRLS use which=V4L2_CTRL_WHICH_CUR_VAL.
+	 */
+	bool is_which_min_max = which == V4L2_CTRL_WHICH_MIN_VAL ||
+				which == V4L2_CTRL_WHICH_MAX_VAL;
 
 	if (__uvc_query_v4l2_class(chain, v4l2_id, 0) >= 0)
-		return -EACCES;
+		return is_which_min_max ? -EINVAL : -EACCES;
 
 	ctrl = uvc_find_control(chain, v4l2_id, &mapping);
 	if (!ctrl)
+		return -EINVAL;
+
+	if ((!(ctrl->info.flags & UVC_CTRL_FLAG_GET_MIN) ||
+	     !(ctrl->info.flags & UVC_CTRL_FLAG_GET_MAX)) && is_which_min_max)
 		return -EINVAL;
 
 	if (ioctl == VIDIOC_G_EXT_CTRLS)
@@ -1619,7 +1663,7 @@ static int __uvc_query_v4l2_ctrl(struct uvc_video_chain *chain,
 		}
 
 		if (ret == -EIO) {
-			dev_warn_ratelimited(&chain->dev->udev->dev,
+			dev_warn_ratelimited(&chain->dev->intf->dev,
 					     "UVC non compliance: Error %d querying master control %x (%s)\n",
 					     ret, master_map->id,
 					     uvc_map_get_name(master_map));
@@ -1643,7 +1687,7 @@ static int __uvc_query_v4l2_ctrl(struct uvc_video_chain *chain,
 
 	ret = __uvc_queryctrl_boundaries(chain, ctrl, mapping, v4l2_ctrl);
 	if (ret && !mapping->disabled) {
-		dev_warn(&chain->dev->udev->dev,
+		dev_warn(&chain->dev->intf->dev,
 			 "UVC non compliance: permanently disabling control %x (%s), due to error %d\n",
 			 mapping->id, uvc_map_get_name(mapping), ret);
 		mapping->disabled = true;
@@ -1858,7 +1902,7 @@ static int uvc_ctrl_set_handle(struct uvc_control *ctrl, struct uvc_fh *handle)
 	lockdep_assert_held(&handle->chain->ctrl_mutex);
 
 	if (ctrl->handle) {
-		dev_warn_ratelimited(&handle->stream->dev->udev->dev,
+		dev_warn_ratelimited(&handle->stream->dev->intf->dev,
 				     "UVC non compliance: Setting an async control with a pending operation.");
 
 		if (ctrl->handle == handle)
@@ -1956,7 +2000,7 @@ static void uvc_ctrl_status_event_work(struct work_struct *work)
 	w->urb->interval = dev->int_ep->desc.bInterval;
 	ret = usb_submit_urb(w->urb, GFP_KERNEL);
 	if (ret < 0)
-		dev_err(&dev->udev->dev,
+		dev_err(&dev->intf->dev,
 			"Failed to resubmit status URB (%d).\n", ret);
 }
 
@@ -2895,7 +2939,7 @@ int uvc_ctrl_restore_values(struct uvc_device *dev)
 			if (!ctrl->initialized || !ctrl->modified ||
 			    (ctrl->info.flags & UVC_CTRL_FLAG_RESTORE) == 0)
 				continue;
-			dev_dbg(&dev->udev->dev,
+			dev_dbg(&dev->intf->dev,
 				"restoring control %pUl/%u/%u\n",
 				ctrl->info.entity, ctrl->info.index,
 				ctrl->info.selector);
@@ -3180,15 +3224,6 @@ static void uvc_ctrl_init_ctrl(struct uvc_video_chain *chain,
 			       struct uvc_control *ctrl)
 {
 	unsigned int i;
-
-	/*
-	 * XU controls initialization requires querying the device for control
-	 * information. As some buggy UVC devices will crash when queried
-	 * repeatedly in a tight loop, delay XU controls initialization until
-	 * first use.
-	 */
-	if (UVC_ENTITY_TYPE(ctrl->entity) == UVC_VC_EXTENSION_UNIT)
-		return;
 
 	for (i = 0; i < ARRAY_SIZE(uvc_ctrls); ++i) {
 		const struct uvc_control_info *info = &uvc_ctrls[i];

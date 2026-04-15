@@ -71,9 +71,6 @@ queue_requests_store(struct gendisk *disk, const char *page, size_t count)
 	unsigned long nr;
 	int ret;
 
-	if (!queue_is_mq(q))
-		return -EINVAL;
-
 	ret = queue_var_store(&nr, page, count);
 	if (ret < 0)
 		return ret;
@@ -81,8 +78,14 @@ queue_requests_store(struct gendisk *disk, const char *page, size_t count)
 	/*
 	 * Serialize updating nr_requests with concurrent queue_requests_store()
 	 * and switching elevator.
+	 *
+	 * Use trylock to avoid circular lock dependency with kernfs active
+	 * reference during concurrent disk deletion:
+	 *   update_nr_hwq_lock -> kn->active (via del_gendisk -> kobject_del)
+	 *   kn->active -> update_nr_hwq_lock (via this sysfs write path)
 	 */
-	down_write(&set->update_nr_hwq_lock);
+	if (!down_write_trylock(&set->update_nr_hwq_lock))
+		return -EBUSY;
 
 	if (nr == q->nr_requests)
 		goto unlock;
@@ -146,21 +149,22 @@ queue_ra_store(struct gendisk *disk, const char *page, size_t count)
 {
 	unsigned long ra_kb;
 	ssize_t ret;
-	unsigned int memflags;
 	struct request_queue *q = disk->queue;
 
 	ret = queue_var_store(&ra_kb, page, count);
 	if (ret < 0)
 		return ret;
 	/*
-	 * ->ra_pages is protected by ->limits_lock because it is usually
-	 * calculated from the queue limits by queue_limits_commit_update.
+	 * The ->ra_pages change below is protected by ->limits_lock because it
+	 * is usually calculated from the queue limits by
+	 * queue_limits_commit_update().
+	 *
+	 * bdi->ra_pages reads are not serialized against bdi->ra_pages writes.
+	 * Use WRITE_ONCE() to write bdi->ra_pages once.
 	 */
 	mutex_lock(&q->limits_lock);
-	memflags = blk_mq_freeze_queue(q);
-	disk->bdi->ra_pages = ra_kb >> (PAGE_SHIFT - 10);
+	WRITE_ONCE(disk->bdi->ra_pages, ra_kb >> (PAGE_SHIFT - 10));
 	mutex_unlock(&q->limits_lock);
-	blk_mq_unfreeze_queue(q, memflags);
 
 	return ret;
 }
@@ -378,21 +382,18 @@ static ssize_t queue_nomerges_store(struct gendisk *disk, const char *page,
 				    size_t count)
 {
 	unsigned long nm;
-	unsigned int memflags;
 	struct request_queue *q = disk->queue;
 	ssize_t ret = queue_var_store(&nm, page, count);
 
 	if (ret < 0)
 		return ret;
 
-	memflags = blk_mq_freeze_queue(q);
 	blk_queue_flag_clear(QUEUE_FLAG_NOMERGES, q);
 	blk_queue_flag_clear(QUEUE_FLAG_NOXMERGES, q);
 	if (nm == 2)
 		blk_queue_flag_set(QUEUE_FLAG_NOMERGES, q);
 	else if (nm)
 		blk_queue_flag_set(QUEUE_FLAG_NOXMERGES, q);
-	blk_mq_unfreeze_queue(q, memflags);
 
 	return ret;
 }
@@ -412,7 +413,6 @@ queue_rq_affinity_store(struct gendisk *disk, const char *page, size_t count)
 #ifdef CONFIG_SMP
 	struct request_queue *q = disk->queue;
 	unsigned long val;
-	unsigned int memflags;
 
 	ret = queue_var_store(&val, page, count);
 	if (ret < 0)
@@ -424,7 +424,6 @@ queue_rq_affinity_store(struct gendisk *disk, const char *page, size_t count)
 	 * are accessed individually using atomic test_bit operation. So we
 	 * don't grab any lock while updating these flags.
 	 */
-	memflags = blk_mq_freeze_queue(q);
 	if (val == 2) {
 		blk_queue_flag_set(QUEUE_FLAG_SAME_COMP, q);
 		blk_queue_flag_set(QUEUE_FLAG_SAME_FORCE, q);
@@ -435,7 +434,6 @@ queue_rq_affinity_store(struct gendisk *disk, const char *page, size_t count)
 		blk_queue_flag_clear(QUEUE_FLAG_SAME_COMP, q);
 		blk_queue_flag_clear(QUEUE_FLAG_SAME_FORCE, q);
 	}
-	blk_mq_unfreeze_queue(q, memflags);
 #endif
 	return ret;
 }
@@ -449,11 +447,9 @@ static ssize_t queue_poll_delay_store(struct gendisk *disk, const char *page,
 static ssize_t queue_poll_store(struct gendisk *disk, const char *page,
 				size_t count)
 {
-	unsigned int memflags;
 	ssize_t ret = count;
 	struct request_queue *q = disk->queue;
 
-	memflags = blk_mq_freeze_queue(q);
 	if (!(q->limits.features & BLK_FEAT_POLL)) {
 		ret = -EINVAL;
 		goto out;
@@ -462,7 +458,6 @@ static ssize_t queue_poll_store(struct gendisk *disk, const char *page,
 	pr_info_ratelimited("writes to the poll attribute are ignored.\n");
 	pr_info_ratelimited("please use driver specific parameters instead.\n");
 out:
-	blk_mq_unfreeze_queue(q, memflags);
 	return ret;
 }
 
@@ -475,7 +470,7 @@ static ssize_t queue_io_timeout_show(struct gendisk *disk, char *page)
 static ssize_t queue_io_timeout_store(struct gendisk *disk, const char *page,
 				  size_t count)
 {
-	unsigned int val, memflags;
+	unsigned int val;
 	int err;
 	struct request_queue *q = disk->queue;
 
@@ -483,9 +478,7 @@ static ssize_t queue_io_timeout_store(struct gendisk *disk, const char *page,
 	if (err || val == 0)
 		return -EINVAL;
 
-	memflags = blk_mq_freeze_queue(q);
 	blk_queue_rq_timeout(q, msecs_to_jiffies(val));
-	blk_mq_unfreeze_queue(q, memflags);
 
 	return count;
 }
@@ -661,6 +654,11 @@ static ssize_t queue_wb_lat_store(struct gendisk *disk, const char *page,
 	if (val < -1)
 		return -EINVAL;
 
+	/*
+	 * Ensure that the queue is idled, in case the latency update
+	 * ends up either enabling or disabling wbt completely. We can't
+	 * have IO inflight if that happens.
+	 */
 	memflags = blk_mq_freeze_queue(q);
 
 	rqos = wbt_rq_qos(q);
@@ -679,11 +677,6 @@ static ssize_t queue_wb_lat_store(struct gendisk *disk, const char *page,
 	if (wbt_get_min_lat(q) == val)
 		goto out;
 
-	/*
-	 * Ensure that the queue is idled, in case the latency update
-	 * ends up either enabling or disabling wbt completely. We can't
-	 * have IO inflight if that happens.
-	 */
 	blk_mq_quiesce_queue(q);
 
 	mutex_lock(&disk->rqos_state_mutex);
@@ -945,7 +938,7 @@ int blk_register_queue(struct gendisk *disk)
 		elevator_set_default(q);
 
 	blk_queue_flag_set(QUEUE_FLAG_REGISTERED, q);
-	wbt_enable_default(disk);
+	wbt_init_enable_default(disk);
 
 	/* Now everything is ready and send out KOBJ_ADD uevent */
 	kobject_uevent(&disk->queue_kobj, KOBJ_ADD);

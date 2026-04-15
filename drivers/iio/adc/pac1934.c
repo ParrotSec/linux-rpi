@@ -665,9 +665,9 @@ static int pac1934_reg_snapshot(struct pac1934_chip_info *info,
 			/* add the power_acc field */
 			curr_energy += inc;
 
-			clamp(curr_energy, PAC_193X_MIN_POWER_ACC, PAC_193X_MAX_POWER_ACC);
-
-			reg_data->energy_sec_acc[cnt] = curr_energy;
+			reg_data->energy_sec_acc[cnt] = clamp(curr_energy,
+							      PAC_193X_MIN_POWER_ACC,
+							      PAC_193X_MAX_POWER_ACC);
 		}
 
 		offset_reg_data_p += PAC1934_VPOWER_ACC_REG_LEN;
@@ -768,7 +768,7 @@ static int pac1934_retrieve_data(struct pac1934_chip_info *info,
 		 * Re-schedule the work for the read registers on timeout
 		 * (to prevent chip registers saturation)
 		 */
-		mod_delayed_work(system_wq, &info->work_chip_rfsh,
+		mod_delayed_work(system_percpu_wq, &info->work_chip_rfsh,
 				 msecs_to_jiffies(PAC1934_MAX_RFSH_LIMIT_MS));
 	}
 
@@ -1471,13 +1471,6 @@ static int pac1934_prep_custom_attributes(struct pac1934_chip_info *info,
 	return 0;
 }
 
-static void pac1934_mutex_destroy(void *data)
-{
-	struct mutex *lock = data;
-
-	mutex_destroy(lock);
-}
-
 static const struct iio_info pac1934_info = {
 	.read_raw = pac1934_read_raw,
 	.write_raw = pac1934_write_raw,
@@ -1536,9 +1529,7 @@ static int pac1934_probe(struct i2c_client *client)
 		return dev_err_probe(dev, ret,
 				     "parameter parsing returned an error\n");
 
-	mutex_init(&info->lock);
-	ret = devm_add_action_or_reset(dev, pac1934_mutex_destroy,
-				       &info->lock);
+	ret = devm_mutex_init(dev, &info->lock);
 	if (ret < 0)
 		return ret;
 

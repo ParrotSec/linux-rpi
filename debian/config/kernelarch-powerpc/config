@@ -712,7 +712,6 @@ CONFIG_FB_IBM_GXT4500=m
 ##
 ## file: drivers/video/fbdev/core/Kconfig
 ##
-CONFIG_FB_MODE_HELPERS=y
 CONFIG_FB_TILEBLITTING=y
 
 ##
@@ -741,9 +740,6 @@ CONFIG_KEXEC=y
 ## file: lib/Kconfig.debug
 ##
 CONFIG_DEBUG_INFO_BTF=y
-#. Workaround module loading of different builds of on-disk modules
-#. vs booted kernel when keeping same ABI, cf. #1003210, #1022202
-CONFIG_MODULE_ALLOW_BTF_MISMATCH=y
 # CONFIG_DEBUG_STACK_USAGE is not set
 # CONFIG_DEBUG_STACKOVERFLOW is not set
 

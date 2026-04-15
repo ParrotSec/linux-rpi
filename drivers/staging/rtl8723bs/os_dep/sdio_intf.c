@@ -377,7 +377,8 @@ static int rtw_drv_init(
 	if (status != _SUCCESS)
 		goto free_if1;
 
-	if (sdio_alloc_irq(dvobj) != _SUCCESS)
+	status = sdio_alloc_irq(dvobj);
+	if (status != _SUCCESS)
 		goto free_if1;
 
 	status = _SUCCESS;
@@ -490,3 +491,5 @@ static void __exit rtw_drv_halt(void)
 	sdio_unregister_driver(&rtl8723bs_sdio_driver);
 }
 module_exit(rtw_drv_halt);
+
+MODULE_DESCRIPTION("Realtek RTL8723BS SDIO WiFi driver");

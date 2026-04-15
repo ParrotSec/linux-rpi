@@ -90,20 +90,17 @@ class TestVersionLinux:
     def test_stable(self) -> None:
         v = VersionLinux('1.2.3-4')
         assert v.linux_version == '1.2'
-        assert v.linux_version_update == '1.2.3'
-        assert v.linux_upstream_full == '1.2.3'
+        assert v.linux_version_full == '1.2.3'
 
     def test_rc(self) -> None:
         v = VersionLinux('1.2~rc3-4')
         assert v.linux_version == '1.2'
-        assert v.linux_version_update == '1.2'
-        assert v.linux_upstream_full == '1.2-rc3'
+        assert v.linux_version_full == '1.2-rc3'
 
     def test_update(self) -> None:
         v = VersionLinux('1.2.3-a1~rc3-4')
         assert v.linux_version == '1.2'
-        assert v.linux_version_update == '1.2.3-a1'
-        assert v.linux_upstream_full == '1.2.3-a1-rc3'
+        assert v.linux_version_full == '1.2.3-a1-rc3'
 
 
 class TestPackageArchitecture:
@@ -238,8 +235,8 @@ class TestPackageRelation:
         assert a[1][0].name == 'bar'
 
     def test_str(self) -> None:
-        a = PackageRelation('foo ,bar')
-        assert str(a) == 'foo, bar'
+        a = PackageRelation('${misc:Depends} , foo ,bar')
+        assert str(a) == 'bar, foo, ${misc:Depends}'
 
 
 class TestPackageBuildprofileEntry:
@@ -272,9 +269,19 @@ class TestPackageBuildprofileEntry:
         a = PackageBuildprofileEntry()
         assert len(a) == 0
 
-    def test_isdisjoint(self) -> None:
+    def test_isdisjoint_empty(self) -> None:
+        a = PackageBuildprofileEntry.parse('profile1')
+        b = PackageBuildprofileEntry()
+        assert not a.isdisjoint(b)
+
+    def test_isdisjoint_pos(self) -> None:
         a = PackageBuildprofileEntry.parse('profile1 profile2')
         b = PackageBuildprofileEntry.parse('profile1 profile3')
+        assert a.isdisjoint(b)
+
+    def test_isdisjoint_neg(self) -> None:
+        a = PackageBuildprofileEntry.parse('!profile1 !profile2')
+        b = PackageBuildprofileEntry.parse('!profile1 !profile3')
         assert a.isdisjoint(b)
 
     def test_issubset_empty(self) -> None:
@@ -373,10 +380,21 @@ class TestPackageBuildprofile:
         assert str(a) == '<profile1> <!profile2> <profile3> <!profile4>'
 
     def test_update(self) -> None:
-        a = PackageBuildprofile.parse('<profile1 profile2> <profile2>')
-        b = PackageBuildprofile.parse('<profile1> <profile2 !profile3> <profile3>')
+        a = PackageBuildprofile.parse('<profile1> <profile2 profile3>')
+        b = PackageBuildprofile.parse('<profile3>')
         a.update(b)
-        assert str(a) == '<profile1> <profile2> <profile3>'
+        assert str(a) == '<profile1> <profile3>'
+
+    def test_update_empty(self) -> None:
+        a = PackageBuildprofile.parse('')
+        b = PackageBuildprofile.parse('<profile1>')
+        a.update(b)
+        assert str(a) == ''
+
+        a = PackageBuildprofile.parse('<profile1>')
+        b = PackageBuildprofile.parse('')
+        a.update(b)
+        assert str(a) == ''
 
     def test_intersection_update(self) -> None:
         a = PackageBuildprofile.parse('<profile1> <profile2>')

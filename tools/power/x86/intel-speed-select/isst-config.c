@@ -16,7 +16,7 @@ struct process_cmd_struct {
 	int arg;
 };
 
-static const char *version_str = "v1.23";
+static const char *version_str = "v1.24";
 
 static const int supported_api_ver = 3;
 static struct isst_if_platform_info isst_platform_info;
@@ -950,9 +950,11 @@ int isolate_cpus(struct isst_id *id, int mask_size, cpu_set_t *cpu_mask, int lev
 		ret = write(fd, "member", strlen("member"));
 		if (ret == -1) {
 			printf("Can't update to member\n");
+			close(fd);
 			return ret;
 		}
 
+		close(fd);
 		return 0;
 	}
 

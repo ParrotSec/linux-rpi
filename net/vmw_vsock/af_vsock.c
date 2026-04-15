@@ -987,7 +987,7 @@ static int vsock_release(struct socket *sock)
 }
 
 static int
-vsock_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
+vsock_bind(struct socket *sock, struct sockaddr_unsized *addr, int addr_len)
 {
 	int err;
 	struct sock *sk;
@@ -1029,12 +1029,7 @@ static int vsock_getname(struct socket *sock,
 		vm_addr = &vsk->local_addr;
 	}
 
-	/* sys_getsockname() and sys_getpeername() pass us a
-	 * MAX_SOCK_ADDR-sized buffer and don't set addr_len.  Unfortunately
-	 * that macro is defined in socket.c instead of .h, so we hardcode its
-	 * value here.
-	 */
-	BUILD_BUG_ON(sizeof(*vm_addr) > 128);
+	BUILD_BUG_ON(sizeof(*vm_addr) > sizeof(struct sockaddr_storage));
 	memcpy(addr, vm_addr, sizeof(*vm_addr));
 	err = sizeof(*vm_addr);
 
@@ -1333,7 +1328,7 @@ out:
 }
 
 static int vsock_dgram_connect(struct socket *sock,
-			       struct sockaddr *addr, int addr_len, int flags)
+			       struct sockaddr_unsized *addr, int addr_len, int flags)
 {
 	int err;
 	struct sock *sk;
@@ -1533,7 +1528,7 @@ static void vsock_connect_timeout(struct work_struct *work)
 	sock_put(sk);
 }
 
-static int vsock_connect(struct socket *sock, struct sockaddr *addr,
+static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 			 int addr_len, int flags)
 {
 	int err;
@@ -1654,7 +1649,7 @@ static int vsock_connect(struct socket *sock, struct sockaddr *addr,
 			 * reschedule it, then ungrab the socket refcount to
 			 * keep it balanced.
 			 */
-			if (mod_delayed_work(system_wq, &vsk->connect_work,
+			if (mod_delayed_work(system_percpu_wq, &vsk->connect_work,
 					     timeout))
 				sock_put(sk);
 
@@ -1792,6 +1787,10 @@ static int vsock_accept(struct socket *sock, struct socket *newsock,
 		} else {
 			newsock->state = SS_CONNECTED;
 			sock_graft(connected, newsock);
+
+			set_bit(SOCK_CUSTOM_SOCKOPT,
+				&connected->sk_socket->flags);
+
 			if (vsock_msgzerocopy_allow(vconnected->transport))
 				set_bit(SOCK_SUPPORT_ZC,
 					&connected->sk_socket->flags);

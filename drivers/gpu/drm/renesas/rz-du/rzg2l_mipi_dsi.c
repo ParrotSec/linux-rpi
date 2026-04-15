@@ -646,6 +646,13 @@ static void rzg2l_mipi_dsi_atomic_disable(struct drm_bridge *bridge,
 
 	rzg2l_mipi_dsi_stop_video(dsi);
 	rzg2l_mipi_dsi_stop_hs_clock(dsi);
+}
+
+static void rzg2l_mipi_dsi_atomic_post_disable(struct drm_bridge *bridge,
+					       struct drm_atomic_state *state)
+{
+	struct rzg2l_mipi_dsi *dsi = bridge_to_rzg2l_mipi_dsi(bridge);
+
 	rzg2l_mipi_dsi_stop(dsi);
 }
 
@@ -681,6 +688,7 @@ static const struct drm_bridge_funcs rzg2l_mipi_dsi_bridge_ops = {
 	.atomic_pre_enable = rzg2l_mipi_dsi_atomic_pre_enable,
 	.atomic_enable = rzg2l_mipi_dsi_atomic_enable,
 	.atomic_disable = rzg2l_mipi_dsi_atomic_disable,
+	.atomic_post_disable = rzg2l_mipi_dsi_atomic_post_disable,
 	.mode_valid = rzg2l_mipi_dsi_bridge_mode_valid,
 };
 
@@ -913,7 +921,7 @@ static const struct mipi_dsi_host_ops rzg2l_mipi_dsi_host_ops = {
  * Power Management
  */
 
-static int __maybe_unused rzg2l_mipi_pm_runtime_suspend(struct device *dev)
+static int rzg2l_mipi_pm_runtime_suspend(struct device *dev)
 {
 	struct rzg2l_mipi_dsi *dsi = dev_get_drvdata(dev);
 
@@ -923,7 +931,7 @@ static int __maybe_unused rzg2l_mipi_pm_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused rzg2l_mipi_pm_runtime_resume(struct device *dev)
+static int rzg2l_mipi_pm_runtime_resume(struct device *dev)
 {
 	struct rzg2l_mipi_dsi *dsi = dev_get_drvdata(dev);
 	int ret;
@@ -940,7 +948,7 @@ static int __maybe_unused rzg2l_mipi_pm_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rzg2l_mipi_pm_ops = {
-	SET_RUNTIME_PM_OPS(rzg2l_mipi_pm_runtime_suspend, rzg2l_mipi_pm_runtime_resume, NULL)
+	RUNTIME_PM_OPS(rzg2l_mipi_pm_runtime_suspend, rzg2l_mipi_pm_runtime_resume, NULL)
 };
 
 /* -----------------------------------------------------------------------------
@@ -1072,7 +1080,7 @@ static struct platform_driver rzg2l_mipi_dsi_platform_driver = {
 	.remove = rzg2l_mipi_dsi_remove,
 	.driver	= {
 		.name = "rzg2l-mipi-dsi",
-		.pm = &rzg2l_mipi_pm_ops,
+		.pm = pm_ptr(&rzg2l_mipi_pm_ops),
 		.of_match_table = rzg2l_mipi_dsi_of_table,
 	},
 };

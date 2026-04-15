@@ -16,8 +16,7 @@
  *   Thomas Klein
  */
 
-#define KMSG_COMPONENT "zpci"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "zpci: " fmt
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -232,24 +231,33 @@ int zpci_fmb_disable_device(struct zpci_dev *zdev)
 static int zpci_cfg_load(struct zpci_dev *zdev, int offset, u32 *val, u8 len)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, ZPCI_PCIAS_CFGSPC, len);
+	int rc = -ENODEV;
 	u64 data;
-	int rc;
+
+	if (!zdev_enabled(zdev))
+		goto out_err;
 
 	rc = __zpci_load(&data, req, offset);
-	if (!rc) {
-		data = le64_to_cpu((__force __le64) data);
-		data >>= (8 - len) * 8;
-		*val = (u32) data;
-	} else
-		*val = 0xffffffff;
+	if (rc)
+		goto out_err;
+	data = le64_to_cpu((__force __le64)data);
+	data >>= (8 - len) * 8;
+	*val = (u32)data;
+	return 0;
+
+out_err:
+	PCI_SET_ERROR_RESPONSE(val);
 	return rc;
 }
 
 static int zpci_cfg_store(struct zpci_dev *zdev, int offset, u32 val, u8 len)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, ZPCI_PCIAS_CFGSPC, len);
+	int rc = -ENODEV;
 	u64 data = val;
-	int rc;
+
+	if (!zdev_enabled(zdev))
+		return rc;
 
 	data <<= (8 - len) * 8;
 	data = (__force u64) cpu_to_le64(data);
@@ -709,6 +717,12 @@ int zpci_reenable_device(struct zpci_dev *zdev)
 	if (rc)
 		return rc;
 
+	if (zdev->msi_nr_irqs > 0) {
+		rc = zpci_set_irq(zdev);
+		if (rc)
+			return rc;
+	}
+
 	rc = zpci_iommu_register_ioat(zdev, &status);
 	if (rc)
 		zpci_disable_device(zdev);
@@ -956,6 +970,7 @@ void zpci_device_reserved(struct zpci_dev *zdev)
 }
 
 void zpci_release_device(struct kref *kref)
+	__releases(&zpci_list_lock)
 {
 	struct zpci_dev *zdev = container_of(kref, struct zpci_dev, kref);
 
@@ -1143,6 +1158,7 @@ static void zpci_add_devices(struct list_head *scan_list)
 
 int zpci_scan_devices(void)
 {
+	struct zpci_bus *zbus;
 	LIST_HEAD(scan_list);
 	int rc;
 
@@ -1151,7 +1167,10 @@ int zpci_scan_devices(void)
 		return rc;
 
 	zpci_add_devices(&scan_list);
-	zpci_bus_scan_busses();
+	zpci_bus_for_each(zbus) {
+		zpci_bus_scan_bus(zbus);
+		cond_resched();
+	}
 	return 0;
 }
 
@@ -1185,6 +1204,10 @@ static int __init pci_base_init(void)
 		goto out_irq;
 
 	rc = zpci_scan_devices();
+	if (rc)
+		goto out_find;
+
+	rc = zpci_fw_sysfs_init();
 	if (rc)
 		goto out_find;
 

@@ -1,4 +1,0 @@
-# Add symlinks to vmlinux from the locations expected by kdump-tools,
-# systemtap and others
-usr/lib/debug/boot/vmlinux-6.17.13+deb13-armmp-lpae  usr/lib/debug/vmlinux-6.17.13+deb13-armmp-lpae
-usr/lib/debug/boot/vmlinux-6.17.13+deb13-armmp-lpae  usr/lib/debug/lib/modules/6.17.13+deb13-armmp-lpae/vmlinux

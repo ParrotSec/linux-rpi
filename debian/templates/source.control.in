@@ -1,6 +1,6 @@
 Section: kernel
 Priority: optional
-Maintainer: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
+Maintainer: Parrot Dev Team <team@parrotsec.org>
 Uploaders: Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>
 Standards-Version: 4.2.0
 Build-Depends:

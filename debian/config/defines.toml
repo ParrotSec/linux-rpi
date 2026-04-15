@@ -4,6 +4,13 @@ name = 'alpha'
   name = 'alpha'
 
 [[kernelarch]]
+name = 'arc'
+  [[kernelarch.debianarch]]
+  name = 'arc'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+
+[[kernelarch]]
 name = 'arm'
   [[kernelarch.debianarch]]
   name = 'armel'
@@ -37,11 +44,39 @@ name = 'mips'
   [[kernelarch.debianarch]]
   name = 'mips64'
   [[kernelarch.debianarch]]
+  name = 'mips64r6'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
   name = 'mips64el'
   [[kernelarch.debianarch]]
   name = 'mips64r6el'
   [[kernelarch.debianarch]]
   name = 'mipsel'
+  [[kernelarch.debianarch]]
+  name = 'mipsn32'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
+  name = 'mipsn32el'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
+  name = 'mipsn32r6'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
+  name = 'mipsn32r6el'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
+  name = 'mipsr6'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
+  [[kernelarch.debianarch]]
+  name = 'mipsr6el'
+    [kernelarch.debianarch.packages]
+    libc_dev_cross_only = true
 
 [[kernelarch]]
 name = 'powerpc'
@@ -119,6 +154,10 @@ name_regex = 'bookworm-backports'
 abi_suffix = '+deb12'
 revision_regex = '\d+(\.\d+)?(\+deb13u\d+)?~bpo12\+\d+'
 
+[[debianrelease]]
+name_regex = 'echo'
+abi_suffix = '+parrot7'
+
 # Use default rules for any suite with no explicit config
 [[debianrelease]]
 name_regex = '.*'
@@ -129,11 +168,16 @@ rt = 'This kernel is configured with PREEMPT_RT real time support.'
 rt = 'PREEMPT_RT'
 
 [build]
-compiler = 'gcc-14'
+c_compiler = 'gcc-14'
+rust_build_depends = [
+  'rustc:native (>= 1.78.0)',
+  'bindgen:native (>= 0.65.1)',
+  'rust-src (>= 1.78.0)',
+]
 
 [relations.image]
 depends = [
-  'initramfs-tools (>= 0.120+deb8u2) | linux-initramfs-tool',
+  'dracut | initramfs-tools (>= 0.120+deb8u2) | linux-initramfs-tool',
 ]
 recommends = [
   'apparmor',

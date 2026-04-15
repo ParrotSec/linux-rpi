@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/bitmap.h>
 #include <linux/buffer_head.h>
+#include <linux/backing-dev.h>
 
 #include "exfat_raw.h"
 #include "exfat_fs.h"
@@ -73,9 +74,11 @@ static int exfat_allocate_bitmap(struct super_block *sb,
 		struct exfat_dentry *ep)
 {
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
+	struct blk_plug plug;
 	long long map_size;
 	unsigned int i, j, need_map_size;
 	sector_t sector;
+	unsigned int max_ra_count;
 
 	sbi->map_clu = le32_to_cpu(ep->dentry.bitmap.start_clu);
 	map_size = le64_to_cpu(ep->dentry.bitmap.size);
@@ -99,7 +102,17 @@ static int exfat_allocate_bitmap(struct super_block *sb,
 		return -ENOMEM;
 
 	sector = exfat_cluster_to_sector(sbi, sbi->map_clu);
+	max_ra_count = min(sb->s_bdi->ra_pages, sb->s_bdi->io_pages) <<
+		(PAGE_SHIFT - sb->s_blocksize_bits);
 	for (i = 0; i < sbi->map_sectors; i++) {
+		/* Trigger the next readahead in advance. */
+		if (max_ra_count && 0 == (i % max_ra_count)) {
+			blk_start_plug(&plug);
+			for (j = i; j < min(max_ra_count, sbi->map_sectors - i) + i; j++)
+				sb_breadahead(sb, sector + j);
+			blk_finish_plug(&plug);
+		}
+
 		sbi->vol_amap[i] = sb_bread(sb, sector + i);
 		if (!sbi->vol_amap[i])
 			goto err_out;
@@ -170,11 +183,10 @@ void exfat_free_bitmap(struct exfat_sb_info *sbi)
 	kvfree(sbi->vol_amap);
 }
 
-int exfat_set_bitmap(struct inode *inode, unsigned int clu, bool sync)
+int exfat_set_bitmap(struct super_block *sb, unsigned int clu, bool sync)
 {
 	int i, b;
 	unsigned int ent_idx;
-	struct super_block *sb = inode->i_sb;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 
 	if (!is_valid_cluster(sbi, clu))
@@ -189,11 +201,10 @@ int exfat_set_bitmap(struct inode *inode, unsigned int clu, bool sync)
 	return 0;
 }
 
-int exfat_clear_bitmap(struct inode *inode, unsigned int clu, bool sync)
+int exfat_clear_bitmap(struct super_block *sb, unsigned int clu, bool sync)
 {
 	int i, b;
 	unsigned int ent_idx;
-	struct super_block *sb = inode->i_sb;
 	struct exfat_sb_info *sbi = EXFAT_SB(sb);
 
 	if (!is_valid_cluster(sbi, clu))
@@ -211,6 +222,28 @@ int exfat_clear_bitmap(struct inode *inode, unsigned int clu, bool sync)
 	exfat_update_bh(sbi->vol_amap[i], sync);
 
 	return 0;
+}
+
+bool exfat_test_bitmap(struct super_block *sb, unsigned int clu)
+{
+	int i, b;
+	unsigned int ent_idx;
+	struct exfat_sb_info *sbi = EXFAT_SB(sb);
+
+	if (!sbi->vol_amap)
+		return true;
+
+	if (!is_valid_cluster(sbi, clu))
+		return false;
+
+	ent_idx = CLUSTER_TO_BITMAP_ENT(clu);
+	i = BITMAP_OFFSET_SECTOR_INDEX(sb, ent_idx);
+	b = BITMAP_OFFSET_BIT_IN_SECTOR(sb, ent_idx);
+
+	if (!test_bit_le(b, sbi->vol_amap[i]->b_data))
+		return false;
+
+	return true;
 }
 
 /*

@@ -8,8 +8,7 @@
  *	      Cornelia Huck (cornelia.huck@de.ibm.com)
  */
 
-#define KMSG_COMPONENT "cio"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "cio: " fmt
 
 #include <linux/export.h>
 #include <linux/init.h>
@@ -236,7 +235,7 @@ struct subchannel *css_alloc_subchannel(struct subchannel_id schid,
 	return sch;
 
 err:
-	kfree(sch);
+	put_device(&sch->dev);
 	return ERR_PTR(ret);
 }
 

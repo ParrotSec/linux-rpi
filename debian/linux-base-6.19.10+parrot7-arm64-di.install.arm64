@@ -1,0 +1,2 @@
+lib/modules/6.19.10+parrot7-arm64/modules.*  usr/lib/modules/6.19.10+parrot7-arm64
+lib/modules/6.19.10+parrot7-arm64/dtb        usr/lib/modules/6.19.10+parrot7-arm64

@@ -1,0 +1,7 @@
+#!/bin/sh -e
+
+version=6.19.10+parrot7-alpha-generic
+
+linux-run-hooks headers postinst $version -- "$@"
+
+exit 0

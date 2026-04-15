@@ -1,0 +1,3 @@
+boot/config-*
+boot/System.map-*
+lib/modules/6.19.10+parrot7-powerpc64le-64k/modules.*  usr/lib/modules/6.19.10+parrot7-powerpc64le-64k

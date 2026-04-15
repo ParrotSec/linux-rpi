@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.19.10+parrot7/scripts                          usr/src/linux-headers-6.19.10+parrot7-arm64/scripts
+usr/lib/linux-kbuild-6.19.10+parrot7/tools                            usr/src/linux-headers-6.19.10+parrot7-arm64/tools
+usr/src/linux-headers-6.19.10+parrot7-arm64                                               usr/lib/modules/6.19.10+parrot7-arm64/build
+usr/src/linux-headers-6.19.10+parrot7-common  usr/lib/modules/6.19.10+parrot7-arm64/source

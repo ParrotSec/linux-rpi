@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.19.13+parrot7/scripts                          usr/src/linux-headers-6.19.13+parrot7-powerpc/scripts
+usr/lib/linux-kbuild-6.19.13+parrot7/tools                            usr/src/linux-headers-6.19.13+parrot7-powerpc/tools
+usr/src/linux-headers-6.19.13+parrot7-powerpc                                               usr/lib/modules/6.19.13+parrot7-powerpc/build
+usr/src/linux-headers-6.19.13+parrot7-common  usr/lib/modules/6.19.13+parrot7-powerpc/source

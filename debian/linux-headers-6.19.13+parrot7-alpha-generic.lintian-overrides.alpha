@@ -1,0 +1,3 @@
+# This 'executable' file intentionally contains only BTF sections
+linux-headers-6.19.13+parrot7-alpha-generic: statically-linked-binary [usr/src/*/vmlinux]
+linux-headers-6.19.13+parrot7-alpha-generic: unstripped-binary-or-object [usr/src/*/vmlinux]

@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.19.13+parrot7/scripts                          usr/src/linux-headers-6.19.13+parrot7-sparc64-smp/scripts
+usr/lib/linux-kbuild-6.19.13+parrot7/tools                            usr/src/linux-headers-6.19.13+parrot7-sparc64-smp/tools
+usr/src/linux-headers-6.19.13+parrot7-sparc64-smp                                               usr/lib/modules/6.19.13+parrot7-sparc64-smp/build
+usr/src/linux-headers-6.19.13+parrot7-common  usr/lib/modules/6.19.13+parrot7-sparc64-smp/source

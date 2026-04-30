@@ -1,0 +1,4 @@
+boot/config-*
+boot/System.map-*
+lib/modules/6.19.13+parrot7-armmp-lpae/modules.*  usr/lib/modules/6.19.13+parrot7-armmp-lpae
+lib/modules/6.19.13+parrot7-armmp-lpae/dtb        usr/lib/modules/6.19.13+parrot7-armmp-lpae

@@ -1,7 +1,0 @@
-#!/bin/sh -e
-
-version=6.19.10+parrot7-cloud-amd64
-
-linux-run-hooks headers postinst $version -- "$@"
-
-exit 0

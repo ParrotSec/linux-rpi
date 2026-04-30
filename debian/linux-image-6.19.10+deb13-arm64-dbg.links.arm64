@@ -1,4 +1,0 @@
-# Add symlinks to vmlinux from the locations expected by kdump-tools,
-# systemtap and others
-usr/lib/debug/boot/vmlinux-6.19.10+deb13-arm64  usr/lib/debug/vmlinux-6.19.10+deb13-arm64
-usr/lib/debug/boot/vmlinux-6.19.10+deb13-arm64  usr/lib/debug/lib/modules/6.19.10+deb13-arm64/vmlinux

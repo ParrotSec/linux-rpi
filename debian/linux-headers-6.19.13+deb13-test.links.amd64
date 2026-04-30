@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-6.19.13+deb13/scripts                          usr/src/linux-headers-6.19.13+deb13-test/scripts
+usr/lib/linux-kbuild-6.19.13+deb13/tools                            usr/src/linux-headers-6.19.13+deb13-test/tools
+usr/src/linux-headers-6.19.13+deb13-test                                               usr/lib/modules/6.19.13+deb13-test/build
+usr/src/linux-headers-6.19.13+deb13-common  usr/lib/modules/6.19.13+deb13-test/source

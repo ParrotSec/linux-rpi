@@ -1,0 +1,3 @@
+boot/config-*
+boot/System.map-*
+lib/modules/6.19.13+parrot7-sh7751r/modules.*  usr/lib/modules/6.19.13+parrot7-sh7751r

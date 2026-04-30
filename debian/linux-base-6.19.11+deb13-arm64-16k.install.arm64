@@ -1,0 +1,4 @@
+boot/config-*
+boot/System.map-*
+lib/modules/6.19.11+deb13-arm64-16k/modules.*  usr/lib/modules/6.19.11+deb13-arm64-16k
+lib/modules/6.19.11+deb13-arm64-16k/dtb        usr/lib/modules/6.19.11+deb13-arm64-16k

@@ -1,4 +1,0 @@
-boot/config-*
-boot/System.map-*
-lib/modules/6.19.10+parrot7-test/modules.*  usr/lib/modules/6.19.10+parrot7-test
-lib/modules/6.19.10+parrot7-test/dtb        usr/lib/modules/6.19.10+parrot7-test

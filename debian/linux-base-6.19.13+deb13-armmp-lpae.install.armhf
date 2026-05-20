@@ -1,4 +1,0 @@
-boot/config-*
-boot/System.map-*
-lib/modules/6.19.13+deb13-armmp-lpae/modules.*  usr/lib/modules/6.19.13+deb13-armmp-lpae
-lib/modules/6.19.13+deb13-armmp-lpae/dtb        usr/lib/modules/6.19.13+deb13-armmp-lpae

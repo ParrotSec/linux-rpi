@@ -112,7 +112,7 @@ static int memfd_luo_preserve_folios(struct file *file,
 	 * up being smaller if there are higher order folios.
 	 */
 	max_folios = PAGE_ALIGN(size) / PAGE_SIZE;
-	folios = kvmalloc_array(max_folios, sizeof(*folios), GFP_KERNEL);
+	folios = kvmalloc_objs(*folios, max_folios);
 	if (!folios)
 		return -ENOMEM;
 
@@ -466,8 +466,13 @@ put_folios:
 	 */
 	for (long j = i + 1; j < nr_folios; j++) {
 		const struct memfd_luo_folio_ser *pfolio = &folios_ser[j];
+		phys_addr_t phys;
 
-		folio = kho_restore_folio(pfolio->pfn);
+		if (!pfolio->pfn)
+			continue;
+
+		phys = PFN_PHYS(pfolio->pfn);
+		folio = kho_restore_folio(phys);
 		if (folio)
 			folio_put(folio);
 	}

@@ -1498,6 +1498,9 @@ static struct l2cap_chan *l2cap_sock_new_connection_cb(struct l2cap_chan *chan)
 {
 	struct sock *sk, *parent = chan->data;
 
+	if (!parent)
+		return NULL;
+
 	lock_sock(parent);
 
 	/* Check for backlog size */
@@ -1571,8 +1574,7 @@ static int l2cap_sock_recv_cb(struct l2cap_chan *chan, struct sk_buff *skb)
 	    (chan->mode == L2CAP_MODE_ERTM ||
 	     chan->mode == L2CAP_MODE_LE_FLOWCTL ||
 	     chan->mode == L2CAP_MODE_EXT_FLOWCTL)) {
-		struct l2cap_rx_busy *rx_busy =
-			kmalloc(sizeof(*rx_busy), GFP_KERNEL);
+		struct l2cap_rx_busy *rx_busy = kmalloc_obj(*rx_busy);
 		if (!rx_busy) {
 			err = -ENOMEM;
 			goto done;
@@ -1657,6 +1659,9 @@ static void l2cap_sock_state_change_cb(struct l2cap_chan *chan, int state,
 				       int err)
 {
 	struct sock *sk = chan->data;
+
+	if (!sk)
+		return;
 
 	sk->sk_state = state;
 
@@ -1758,6 +1763,9 @@ static void l2cap_sock_set_shutdown_cb(struct l2cap_chan *chan)
 static long l2cap_sock_get_sndtimeo_cb(struct l2cap_chan *chan)
 {
 	struct sock *sk = chan->data;
+
+	if (!sk)
+		return 0;
 
 	return READ_ONCE(sk->sk_sndtimeo);
 }

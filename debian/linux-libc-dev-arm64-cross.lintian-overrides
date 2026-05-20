@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-arm64-cross: non-standard-dir-in-usr [usr/aarch64-linux-gnu]

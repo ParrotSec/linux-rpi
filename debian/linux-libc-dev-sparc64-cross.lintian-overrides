@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-sparc64-cross: non-standard-dir-in-usr [usr/sparc64-linux-gnu]

@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-armel-cross: non-standard-dir-in-usr [usr/arm-linux-gnueabi]

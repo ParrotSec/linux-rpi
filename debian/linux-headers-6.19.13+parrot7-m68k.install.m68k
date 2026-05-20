@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.19.13+parrot7-m68k
-scripts/module.lds                       usr/src/linux-headers-6.19.13+parrot7-m68k/arch/m68k
-arch/m68k/include             usr/src/linux-headers-6.19.13+parrot7-m68k/arch/m68k

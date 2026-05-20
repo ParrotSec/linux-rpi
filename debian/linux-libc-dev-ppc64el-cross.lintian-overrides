@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-ppc64el-cross: non-standard-dir-in-usr [usr/powerpc64le-linux-gnu]

@@ -330,9 +330,8 @@ static int ucan_alloc_context_array(struct ucan_priv *up)
 	/* release contexts if any */
 	ucan_release_context_array(up);
 
-	up->context_array = kcalloc(up->device_info.tx_fifo,
-				    sizeof(*up->context_array),
-				    GFP_KERNEL);
+	up->context_array = kzalloc_objs(*up->context_array,
+					 up->device_info.tx_fifo);
 	if (!up->context_array) {
 		netdev_err(up->netdev,
 			   "Not enough memory to allocate tx contexts\n");
@@ -1398,7 +1397,7 @@ static int ucan_probe(struct usb_interface *intf,
 	 */
 
 	/* Prepare Memory for control transfers */
-	ctl_msg_buffer = devm_kzalloc(&udev->dev,
+	ctl_msg_buffer = devm_kzalloc(&intf->dev,
 				      sizeof(union ucan_ctl_payload),
 				      GFP_KERNEL);
 	if (!ctl_msg_buffer) {

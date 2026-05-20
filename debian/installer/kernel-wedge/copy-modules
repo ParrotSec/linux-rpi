@@ -1,0 +1,167 @@
+#!/usr/bin/perl
+#
+# Copy modules into the right directories in preparation for building udebs.
+# This script is named after the its counterpart in the original
+# kernel-image-di package by Joey Hess <joeyh@debian.org>.
+#
+# Copyright (c) 2001-2002 Herbert Xu <herbert@debian.org>
+#
+# Usage: copy-modules version flavour installedname
+use strict;
+use warnings;
+use autodie;
+
+use Cwd qw(getcwd realpath);
+use File::Basename qw(dirname);
+use File::Temp ();
+use FileHandle;
+use List::Util qw(uniqstr);
+
+use lib dirname(__FILE__);
+use KernelWedge qw(read_package_lists for_each_package package_enabled);
+
+my $prefix = '/usr';
+my $kw_bin_dir = dirname(__FILE__);
+
+my $version = "${ARGV[0]}-${ARGV[1]}";
+my $flavour = $ARGV[1];
+my $installedname = $ARGV[2];
+my $configdir = realpath($ENV{KW_CONFIG_DIR});
+my $arch = `dpkg-architecture -qDEB_HOST_ARCH`;
+chomp $arch;
+my $home = getcwd();
+
+# SOURCEDIR must be set externally to control where to copy from.
+my $moddir = "$ENV{SOURCEDIR}/lib/modules/$installedname";
+exit 0 unless -d $moddir;
+
+# The directory of modules lists to use.
+my $modlistdir;
+if (-d "$configdir/modules/$arch-$flavour") {
+	$modlistdir = "$configdir/modules/$arch-$flavour";
+} elsif (-d "$configdir/modules/$flavour") {
+	$modlistdir = "$configdir/modules/$flavour";
+} else {
+	$modlistdir = "$configdir/modules/$arch";
+}
+
+# get module dependencies from modules.dep
+my $depmod_pipe;
+{
+	local $ENV{'PATH'} = "/usr/sbin:/sbin:${ENV{PATH}}";
+	open($depmod_pipe,
+	     ($ENV{'DEPMOD'} || 'depmod')
+	     . " -b ${ENV{SOURCEDIR}} $installedname -n |");
+}
+my %mod_deps;
+while (<$depmod_pipe>) {
+	next if /^(#|alias |softdep )/;
+	chomp;
+	my @words = split(" ");
+	if ($words[0] =~ /:$/) {
+		$words[0] =~ s/:$//;
+		my $module = shift @words;
+		push @{$mod_deps{$module}}, @words;
+	} elsif (@words == 3 && $words[2] =~ /^[bc]\d+:\d+$/) {
+		# Device node dependency; ignore it
+	} else {
+		STDERR->print("W: Unrecognised depmod line $_\n");
+	}
+}
+close($depmod_pipe);
+
+unless (keys %mod_deps) {
+	print STDERR "No module interdependencies found. This probably means your modules.dep is broken.\n";
+	exit 1;
+}
+
+sub add_module_deps {
+	my ($mods, $excl_mods) = @_;
+	my @work = keys %$mods;
+	my $i = 0;
+
+	while ($i <= $#work) {
+		my @deps = (grep { !$mods->{$_} && !$excl_mods->{$_} }
+			    @{$mod_deps{$work[$i]}});
+		push @work, @deps;
+		$mods->{$_} = 1 for @deps;
+		++$i;
+	}
+}
+
+# generate module interrelationships from package-list file
+my $pkg_deps_file = new File::Temp;
+my %pkg_deps_direct;
+my $versions = [[$arch, '-', $flavour]];
+my $packages = read_package_lists();
+for_each_package($packages, $versions, sub {
+	my (undef, undef, undef, $package) = @_;
+	my $pkg_name = $package->("Package");
+	my @depends = split(", ", $package->("Depends") || "");
+
+	$pkg_deps_file->print("$pkg_name\t$pkg_name\n");
+	foreach my $dep (@depends) {
+		# Skip depends that are not built for this
+		# architecture.
+		next unless package_enabled($packages, $dep, $arch, $flavour);
+		push @{$pkg_deps_direct{$pkg_name}}, $dep;
+		$pkg_deps_file->print("$pkg_name\t$dep\n");
+	}
+});
+
+my %pkg_deps_full;
+my %pkg_mods;
+# loop over all udebs, sort that all dependent modules are processed first
+open(my $deps_sort_pipe, "tsort < $pkg_deps_file | tac |");
+while (<$deps_sort_pipe>) {
+	chomp;
+	my $i = $_;
+
+	# Get all module package dependencies (direct and indirect)
+	my @pkg_deps;
+	for (@{$pkg_deps_direct{$i}}) {
+		push @pkg_deps, $_, @{$pkg_deps_full{$_}};
+	}
+	$pkg_deps_full{$i} = [uniqstr(sort(@pkg_deps))];
+
+	# Get all modules present in package dependencies
+	my %excl_mods;
+	for (@{$pkg_deps_full{$i}}) {
+		for (keys %{$pkg_mods{$_}}) {
+			$excl_mods{$_} = 1
+		}
+	}
+
+	# preprocess file, handle includes and excludes
+	open(my $preproc_pipe,
+	     "$kw_bin_dir/preprocess $modlistdir $i $moddir |");
+	my %mods;
+	while (<$preproc_pipe>) {
+		chomp;
+		$mods{$_} = 1;
+	}
+	close($preproc_pipe);
+
+	# Add dependent modules which are not in a package dependency
+	add_module_deps(\%mods, \%excl_mods);
+
+	$pkg_mods{$i} = \%mods;
+
+	if (keys %mods) {
+		# copy kernel modules to package build dir
+		open(my $cpio_pipe,
+		     "| cd $moddir && cpio -pd --quiet $home/debian/$i-$version-di$prefix/lib/modules/$installedname");
+		$cpio_pipe->print("$_\n") for keys %mods;
+		close($cpio_pipe);
+
+		open(my $postinst_fh, '>', "debian/$i-$version-di.postinst");
+		$postinst_fh->print(<<~EOF);
+		#!/bin/sh -e
+		depmod $installedname
+		EOF
+		close($postinst_fh);
+	}
+}
+close($deps_sort_pipe);
+
+exit 0;

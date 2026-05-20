@@ -22,11 +22,13 @@
 
 use core::ops::Deref;
 use kernel::{
-    c_str,
     clk::Clk,
     device::{Bound, Core, Device},
     devres,
-    io::mem::IoMem,
+    io::{
+        mem::IoMem,
+        Io, //
+    },
     of, platform,
     prelude::*,
     pwm, time,
@@ -62,10 +64,7 @@ const TH1520_PWM_REG_SIZE: usize = 0xB0;
 fn ns_to_cycles(ns: u64, rate_hz: u64) -> u64 {
     const NSEC_PER_SEC_U64: u64 = time::NSEC_PER_SEC as u64;
 
-    (match ns.checked_mul(rate_hz) {
-        Some(product) => product,
-        None => u64::MAX,
-    }) / NSEC_PER_SEC_U64
+    ns.saturating_mul(rate_hz) / NSEC_PER_SEC_U64
 }
 
 fn cycles_to_ns(cycles: u64, rate_hz: u64) -> u64 {
@@ -327,7 +326,7 @@ kernel::of_device_table!(
     OF_TABLE,
     MODULE_OF_TABLE,
     <Th1520PwmPlatformDriver as platform::Driver>::IdInfo,
-    [(of::DeviceId::new(c_str!("thead,th1520-pwm")), ())]
+    [(of::DeviceId::new(c"thead,th1520-pwm"), ())]
 );
 
 impl platform::Driver for Th1520PwmPlatformDriver {
@@ -372,7 +371,7 @@ impl platform::Driver for Th1520PwmPlatformDriver {
             }),
         )?;
 
-        pwm::Registration::register(dev, chip)?;
+        chip.register()?;
 
         Ok(Th1520PwmPlatformDriver)
     }

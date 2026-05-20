@@ -191,8 +191,8 @@ static int eventfs_set_attr(struct mnt_idmap *idmap, struct dentry *dentry,
 	/* Preallocate the children mode array if necessary */
 	if (!(dentry->d_inode->i_mode & S_IFDIR)) {
 		if (!ei->entry_attrs) {
-			ei->entry_attrs = kcalloc(ei->nr_entries, sizeof(*ei->entry_attrs),
-						  GFP_NOFS);
+			ei->entry_attrs = kzalloc_objs(*ei->entry_attrs,
+						       ei->nr_entries, GFP_NOFS);
 			if (!ei->entry_attrs) {
 				ret = -ENOMEM;
 				goto out;
@@ -249,6 +249,8 @@ static void eventfs_set_attrs(struct eventfs_inode *ei, bool update_uid, kuid_t 
 			      bool update_gid, kgid_t gid, int level)
 {
 	struct eventfs_inode *ei_child;
+
+	lockdep_assert_held(&eventfs_mutex);
 
 	/* Update events/<system>/<event> */
 	if (WARN_ON_ONCE(level > 3))
@@ -439,7 +441,7 @@ static inline struct eventfs_inode *init_ei(struct eventfs_inode *ei, const char
 
 static inline struct eventfs_inode *alloc_ei(const char *name)
 {
-	struct eventfs_inode *ei = kzalloc(sizeof(*ei), GFP_KERNEL);
+	struct eventfs_inode *ei = kzalloc_obj(*ei);
 	struct eventfs_inode *result;
 
 	if (!ei)
@@ -454,7 +456,7 @@ static inline struct eventfs_inode *alloc_ei(const char *name)
 
 static inline struct eventfs_inode *alloc_root_ei(const char *name)
 {
-	struct eventfs_root_inode *rei = kzalloc(sizeof(*rei), GFP_KERNEL);
+	struct eventfs_root_inode *rei = kzalloc_obj(*rei);
 	struct eventfs_inode *ei;
 
 	if (!rei)
@@ -911,4 +913,16 @@ void eventfs_remove_events_dir(struct eventfs_inode *ei)
 	 */
 	d_invalidate(dentry);
 	d_make_discardable(dentry);
+}
+
+int eventfs_remount_lock(void)
+{
+	mutex_lock(&eventfs_mutex);
+	return srcu_read_lock(&eventfs_srcu);
+}
+
+void eventfs_remount_unlock(int srcu_idx)
+{
+	srcu_read_unlock(&eventfs_srcu, srcu_idx);
+	mutex_unlock(&eventfs_mutex);
 }

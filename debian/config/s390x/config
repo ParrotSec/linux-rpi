@@ -78,11 +78,6 @@ CONFIG_S390_PRNG=m
 # CONFIG_MEMSTICK is not set
 
 ##
-## file: drivers/net/ppp/Kconfig
-##
-# CONFIG_PPP is not set
-
-##
 ## file: drivers/net/slip/Kconfig
 ##
 # CONFIG_SLIP is not set
@@ -129,8 +124,6 @@ CONFIG_SCLP_CONSOLE=y
 CONFIG_SCLP_VT220_TTY=y
 CONFIG_SCLP_VT220_CONSOLE=y
 CONFIG_S390_TAPE=m
-CONFIG_S390_TAPE_34XX=m
-CONFIG_S390_TAPE_3590=m
 CONFIG_VMLOGRDR=m
 CONFIG_VMCP=y
 CONFIG_MONREADER=m

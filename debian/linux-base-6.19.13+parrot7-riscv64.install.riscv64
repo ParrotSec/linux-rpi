@@ -1,4 +1,0 @@
-boot/config-*
-boot/System.map-*
-lib/modules/6.19.13+parrot7-riscv64/modules.*  usr/lib/modules/6.19.13+parrot7-riscv64
-lib/modules/6.19.13+parrot7-riscv64/dtb        usr/lib/modules/6.19.13+parrot7-riscv64

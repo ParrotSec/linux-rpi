@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-mips64r6-cross: non-standard-dir-in-usr [usr/mipsisa64r6-linux-gnuabi64]

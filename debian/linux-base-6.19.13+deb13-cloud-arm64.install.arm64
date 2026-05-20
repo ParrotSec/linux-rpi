@@ -1,4 +1,0 @@
-boot/config-*
-boot/System.map-*
-lib/modules/6.19.13+deb13-cloud-arm64/modules.*  usr/lib/modules/6.19.13+deb13-cloud-arm64
-lib/modules/6.19.13+deb13-cloud-arm64/dtb        usr/lib/modules/6.19.13+deb13-cloud-arm64

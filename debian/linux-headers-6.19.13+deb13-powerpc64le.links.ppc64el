@@ -1,4 +1,0 @@
-usr/lib/linux-kbuild-6.19.13+deb13/scripts                          usr/src/linux-headers-6.19.13+deb13-powerpc64le/scripts
-usr/lib/linux-kbuild-6.19.13+deb13/tools                            usr/src/linux-headers-6.19.13+deb13-powerpc64le/tools
-usr/src/linux-headers-6.19.13+deb13-powerpc64le                                               usr/lib/modules/6.19.13+deb13-powerpc64le/build
-usr/src/linux-headers-6.19.13+deb13-common  usr/lib/modules/6.19.13+deb13-powerpc64le/source

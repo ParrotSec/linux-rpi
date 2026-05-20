@@ -300,6 +300,7 @@ build_doc: $(STAMPS_DIR)/build-doc
 
 binary_doc: DIR = $(BUILD_DIR)/build-doc
 binary_doc: OUT_DIR = $(DESTDIR)/usr/share/doc/$(PACKAGE_NAME)
+binary_doc: DH_INSTALL_ARGS = -X__pycache__
 binary_doc: $(STAMPS_DIR)/build-doc
 	$(dh_binary_pre)
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
@@ -315,7 +316,8 @@ ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
 	set -o pipefail; \
 	cd $(DIR)/Documentation/output; \
 	find * -name '*.rst' -prune -o -name objects.inv -prune \
-		-o -name xml -prune -o -print | \
+		-o -name xml -prune -o -name __pycache__ -prune \
+		-o -print | \
 	cpio -pd --preserve-modification-time '$(OUT_DIR)/html'
 	find $(OUT_DIR)/Documentation -type f | xargs gzip -9n
 # Fix up symlinks to gzipped docs
@@ -437,11 +439,6 @@ binary_base: DH_INSTALL_ARGS = --sourcedir=$(BUILD_DIR)/build_$(ARCH)_$(FEATURES
 binary_base: DH_STRIP_ARGS = --no-automatic-dbgsym
 binary_base: $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 	$(dh_binary_pre)
-
-	dh_installdirs usr/share/bug/$(PACKAGE_NAME)
-	cp -a debian/templates/base.bug/* $(DESTDIR)/usr/share/bug/$(PACKAGE_NAME)
-	printf "RELEASE='$(REAL_VERSION)'\nDISTRIBUTOR='$(DEB_VENDOR)'\nSOURCEVERSION='$(SOURCEVERSION)'\nPACKAGE_NAME='$(PACKAGE_NAME)'\nPACKAGE_VERSION='$(SOURCEVERSION)'" > $(DESTDIR)/usr/share/bug/$(PACKAGE_NAME)/info
-
 	$(dh_binary_post)
 
 setup_binary: $(STAMPS_DIR)/setup_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
@@ -534,16 +531,15 @@ binary_signed-template:
 
 build_installer:
 
-binary_installer: export KW_DEFCONFIG_DIR=debian/installer
 binary_installer: export KW_CONFIG_DIR=debian/installer
 binary_installer: export SOURCEDIR = $(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)/output/image
 binary_installer: REAL_VERSION = $(ABINAME)$(LOCALVERSION)
 binary_installer: $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 	$(dh_binary_pre)
-	kernel-wedge copy-modules $(ABINAME) $(FLAVOUR) $(REAL_VERSION)
-	kernel-wedge find-dups $(REAL_VERSION)
-	kernel-wedge find-unpackaged $(REAL_VERSION) $(REAL_VERSION)
-	kernel-wedge check $$(dh_listpackages)
+	debian/installer/kernel-wedge/copy-modules $(ABINAME) $(FLAVOUR) $(REAL_VERSION)
+	debian/installer/kernel-wedge/find-dups $(REAL_VERSION)
+	debian/installer/kernel-wedge/find-unpackaged $(REAL_VERSION) $(REAL_VERSION)
+	debian/installer/kernel-wedge/check $$(dh_listpackages)
 	dh_fixperms
 	dh_gencontrol
 	dh_builddeb -- $(BUILDDEB_ARGS)

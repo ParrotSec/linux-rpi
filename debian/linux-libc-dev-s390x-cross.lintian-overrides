@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-s390x-cross: non-standard-dir-in-usr [usr/s390x-linux-gnu]

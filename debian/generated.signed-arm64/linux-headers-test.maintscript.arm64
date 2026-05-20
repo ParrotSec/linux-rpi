@@ -1,1 +1,1 @@
-dir_to_symlink /usr/share/doc/linux-headers-test linux-headers-6.19.13+deb13-test 5.7~rc5-1~exp1 linux-headers-test
+dir_to_symlink /usr/share/doc/linux-headers-test linux-headers-7.0.7+deb13-test 5.7~rc5-1~exp1 linux-headers-test

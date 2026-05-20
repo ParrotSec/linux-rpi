@@ -1,38 +1,38 @@
 {
   "packages": {
-    "linux-binary-unsigned-6.19.13+deb13-arm64": {
+    "linux-binary-unsigned-7.0.7+deb13-arm64": {
       "trusted_certs": [],
       "files": [
         {
           "sig_type": "efi",
-          "file": "boot/vmlinuz-6.19.13+deb13-arm64"
+          "file": "boot/vmlinuz-7.0.7+deb13-arm64"
         }
       ]
     },
-    "linux-binary-unsigned-6.19.13+deb13-cloud-arm64": {
+    "linux-binary-unsigned-7.0.7+deb13-cloud-arm64": {
       "trusted_certs": [],
       "files": [
         {
           "sig_type": "efi",
-          "file": "boot/vmlinuz-6.19.13+deb13-cloud-arm64"
+          "file": "boot/vmlinuz-7.0.7+deb13-cloud-arm64"
         }
       ]
     },
-    "linux-binary-unsigned-6.19.13+deb13-arm64-16k": {
+    "linux-binary-unsigned-7.0.7+deb13-arm64-16k": {
       "trusted_certs": [],
       "files": [
         {
           "sig_type": "efi",
-          "file": "boot/vmlinuz-6.19.13+deb13-arm64-16k"
+          "file": "boot/vmlinuz-7.0.7+deb13-arm64-16k"
         }
       ]
     },
-    "linux-binary-unsigned-6.19.13+deb13-rt-arm64": {
+    "linux-binary-unsigned-7.0.7+deb13-rt-arm64": {
       "trusted_certs": [],
       "files": [
         {
           "sig_type": "efi",
-          "file": "boot/vmlinuz-6.19.13+deb13-rt-arm64"
+          "file": "boot/vmlinuz-7.0.7+deb13-rt-arm64"
         }
       ]
     }

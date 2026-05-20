@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-arc-cross: non-standard-dir-in-usr [usr/arc-linux-gnu]

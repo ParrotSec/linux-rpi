@@ -291,7 +291,7 @@ static struct snd_pcm_chmap_elem *convert_chmap(int channels, unsigned int bits,
 	if (channels > ARRAY_SIZE(chmap->map))
 		return NULL;
 
-	chmap = kzalloc(sizeof(*chmap), GFP_KERNEL);
+	chmap = kzalloc_obj(*chmap);
 	if (!chmap)
 		return NULL;
 
@@ -335,7 +335,7 @@ snd_pcm_chmap_elem *convert_chmap_v3(struct uac3_cluster_header_descriptor
 	if (channels > ARRAY_SIZE(chmap->map))
 		return NULL;
 
-	chmap = kzalloc(sizeof(*chmap), GFP_KERNEL);
+	chmap = kzalloc_obj(*chmap);
 	if (!chmap)
 		return NULL;
 
@@ -352,6 +352,8 @@ snd_pcm_chmap_elem *convert_chmap_v3(struct uac3_cluster_header_descriptor
 		if (len < sizeof(*cs_desc))
 			break;
 		cs_len = le16_to_cpu(cs_desc->wLength);
+		if (cs_len < sizeof(*cs_desc))
+			break;
 		if (len < cs_len)
 			break;
 		cs_type = cs_desc->bSegmentType;
@@ -526,7 +528,7 @@ static int __snd_usb_add_audio_stream(struct snd_usb_audio *chip,
 	}
 
 	/* create a new pcm */
-	as = kzalloc(sizeof(*as), GFP_KERNEL);
+	as = kzalloc_obj(*as);
 	if (!as)
 		return -ENOMEM;
 	as->pcm_index = chip->pcm_devs;
@@ -693,7 +695,7 @@ audio_format_alloc_init(struct snd_usb_audio *chip,
 	struct usb_host_endpoint *ep = &alts->endpoint[0];
 	struct audioformat *fp;
 
-	fp = kzalloc(sizeof(*fp), GFP_KERNEL);
+	fp = kzalloc_obj(*fp);
 	if (!fp)
 		return NULL;
 
@@ -927,7 +929,7 @@ snd_usb_get_audioformat_uac3(struct snd_usb_audio *chip,
 			break;
 		}
 
-		chmap = kzalloc(sizeof(*chmap), GFP_KERNEL);
+		chmap = kzalloc_obj(*chmap);
 		if (!chmap)
 			return ERR_PTR(-ENOMEM);
 
@@ -995,7 +997,7 @@ snd_usb_get_audioformat_uac3(struct snd_usb_audio *chip,
 	 * and request Cluster Descriptor
 	 */
 	wLength = le16_to_cpu(hc_header.wLength);
-	if (wLength < sizeof(cluster))
+	if (wLength < sizeof(*cluster))
 		return NULL;
 	cluster = kzalloc(wLength, GFP_KERNEL);
 	if (!cluster)
@@ -1078,7 +1080,7 @@ found_clock:
 		fp->rate_max = UAC3_BADD_SAMPLING_RATE;
 		fp->rates = SNDRV_PCM_RATE_CONTINUOUS;
 
-		pd = kzalloc(sizeof(*pd), GFP_KERNEL);
+		pd = kzalloc_obj(*pd);
 		if (!pd) {
 			audioformat_free(fp);
 			return NULL;

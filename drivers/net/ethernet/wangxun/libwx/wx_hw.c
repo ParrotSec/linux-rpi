@@ -2480,8 +2480,11 @@ int wx_sw_init(struct wx *wx)
 	wx->oem_svid = pdev->subsystem_vendor;
 	wx->oem_ssid = pdev->subsystem_device;
 	wx->bus.device = PCI_SLOT(pdev->devfn);
-	wx->bus.func = FIELD_GET(WX_CFG_PORT_ST_LANID,
-				 rd32(wx, WX_CFG_PORT_ST));
+	if (pdev->is_virtfn)
+		wx->bus.func = PCI_FUNC(pdev->devfn);
+	else
+		wx->bus.func = FIELD_GET(WX_CFG_PORT_ST_LANID,
+					 rd32(wx, WX_CFG_PORT_ST));
 
 	if (wx->oem_svid == PCI_VENDOR_ID_WANGXUN ||
 	    pdev->is_virtfn) {
@@ -2505,9 +2508,8 @@ int wx_sw_init(struct wx *wx)
 	wx->rss_flags = WX_RSS_FIELD_IPV4 | WX_RSS_FIELD_IPV4_TCP |
 			WX_RSS_FIELD_IPV6 | WX_RSS_FIELD_IPV6_TCP;
 
-	wx->mac_table = kcalloc(wx->mac.num_rar_entries,
-				sizeof(struct wx_mac_addr),
-				GFP_KERNEL);
+	wx->mac_table = kzalloc_objs(struct wx_mac_addr,
+				     wx->mac.num_rar_entries);
 	if (!wx->mac_table) {
 		wx_err(wx, "mac_table allocation failed\n");
 		kfree(wx->rss_key);

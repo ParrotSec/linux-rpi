@@ -1,7 +1,0 @@
-#!/bin/sh -e
-
-version=6.19.13+parrot7-alpha-smp
-
-linux-run-hooks headers postinst $version -- "$@"
-
-exit 0

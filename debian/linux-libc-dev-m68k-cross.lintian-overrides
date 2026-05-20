@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-m68k-cross: non-standard-dir-in-usr [usr/m68k-linux-gnu]

@@ -398,7 +398,7 @@ static int snd_pcm_hw_param_near(struct snd_pcm_substream *pcm,
 	}
 
 	struct snd_pcm_hw_params *save __free(kfree) =
-		kmalloc(sizeof(*save), GFP_KERNEL);
+		kmalloc_obj(*save);
 	if (save == NULL)
 		return -ENOMEM;
 	*save = *params;
@@ -411,7 +411,7 @@ static int snd_pcm_hw_param_near(struct snd_pcm_substream *pcm,
 			goto _end;
 
 		struct snd_pcm_hw_params *params1 __free(kfree) =
-			kmalloc(sizeof(*params1), GFP_KERNEL);
+			kmalloc_obj(*params1);
 		if (params1 == NULL)
 			return -ENOMEM;
 		*params1 = *save;
@@ -786,7 +786,7 @@ static int choose_rate(struct snd_pcm_substream *substream,
 	unsigned int rate, prev;
 
 	struct snd_pcm_hw_params *save __free(kfree) =
-		kmalloc(sizeof(*save), GFP_KERNEL);
+		kmalloc_obj(*save);
 	if (save == NULL)
 		return -ENOMEM;
 	*save = *params;
@@ -861,9 +861,9 @@ static int snd_pcm_oss_change_params_locked(struct snd_pcm_substream *substream)
 
 	if (!runtime->oss.params)
 		return 0;
-	sw_params = kzalloc(sizeof(*sw_params), GFP_KERNEL);
-	params = kmalloc(sizeof(*params), GFP_KERNEL);
-	sparams = kmalloc(sizeof(*sparams), GFP_KERNEL);
+	sw_params = kzalloc_obj(*sw_params);
+	params = kmalloc_obj(*params);
+	sparams = kmalloc_obj(*sparams);
 	if (!sw_params || !params || !sparams) {
 		err = -ENOMEM;
 		goto failure;
@@ -1859,7 +1859,7 @@ static int snd_pcm_oss_get_formats(struct snd_pcm_oss_file *pcm_oss_file)
 			AFMT_S24_PACKED;
 
 	struct snd_pcm_hw_params *params __free(kfree) =
-		kmalloc(sizeof(*params), GFP_KERNEL);
+		kmalloc_obj(*params);
 	if (!params)
 		return -ENOMEM;
 	_snd_pcm_hw_params_any(params);
@@ -2149,10 +2149,16 @@ static int snd_pcm_oss_get_trigger(struct snd_pcm_oss_file *pcm_oss_file)
 
 	psubstream = pcm_oss_file->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	csubstream = pcm_oss_file->streams[SNDRV_PCM_STREAM_CAPTURE];
-	if (psubstream && psubstream->runtime && psubstream->runtime->oss.trigger)
-		result |= PCM_ENABLE_OUTPUT;
-	if (csubstream && csubstream->runtime && csubstream->runtime->oss.trigger)
-		result |= PCM_ENABLE_INPUT;
+	if (psubstream && psubstream->runtime) {
+		guard(mutex)(&psubstream->runtime->oss.params_lock);
+		if (psubstream->runtime->oss.trigger)
+			result |= PCM_ENABLE_OUTPUT;
+	}
+	if (csubstream && csubstream->runtime) {
+		guard(mutex)(&csubstream->runtime->oss.params_lock);
+		if (csubstream->runtime->oss.trigger)
+			result |= PCM_ENABLE_INPUT;
+	}
 	return result;
 }
 
@@ -2418,7 +2424,7 @@ static int snd_pcm_oss_open_file(struct file *file,
 	if (rpcm_oss_file)
 		*rpcm_oss_file = NULL;
 
-	pcm_oss_file = kzalloc(sizeof(*pcm_oss_file), GFP_KERNEL);
+	pcm_oss_file = kzalloc_obj(*pcm_oss_file);
 	if (pcm_oss_file == NULL)
 		return -ENOMEM;
 
@@ -2826,6 +2832,17 @@ static int snd_pcm_oss_capture_ready(struct snd_pcm_substream *substream)
 						runtime->oss.period_frames;
 }
 
+static bool need_input_retrigger(struct snd_pcm_runtime *runtime)
+{
+	bool ret;
+
+	guard(mutex)(&runtime->oss.params_lock);
+	ret = runtime->oss.trigger;
+	if (ret)
+		runtime->oss.trigger = 0;
+	return ret;
+}
+
 static __poll_t snd_pcm_oss_poll(struct file *file, poll_table * wait)
 {
 	struct snd_pcm_oss_file *pcm_oss_file;
@@ -2858,11 +2875,11 @@ static __poll_t snd_pcm_oss_poll(struct file *file, poll_table * wait)
 			    snd_pcm_oss_capture_ready(csubstream))
 				mask |= EPOLLIN | EPOLLRDNORM;
 		}
-		if (ostate != SNDRV_PCM_STATE_RUNNING && runtime->oss.trigger) {
+		if (ostate != SNDRV_PCM_STATE_RUNNING &&
+		    need_input_retrigger(runtime)) {
 			struct snd_pcm_oss_file ofile;
 			memset(&ofile, 0, sizeof(ofile));
 			ofile.streams[SNDRV_PCM_STREAM_CAPTURE] = pcm_oss_file->streams[SNDRV_PCM_STREAM_CAPTURE];
-			runtime->oss.trigger = 0;
 			snd_pcm_oss_set_trigger(&ofile, PCM_ENABLE_INPUT);
 		}
 	}
@@ -3032,7 +3049,7 @@ static void snd_pcm_oss_proc_write(struct snd_info_entry *entry,
 			}
 		} while (*str);
 		if (setup == NULL) {
-			setup = kmalloc(sizeof(*setup), GFP_KERNEL);
+			setup = kmalloc_obj(*setup);
 			if (! setup) {
 				buffer->error = -ENOMEM;
 				return;

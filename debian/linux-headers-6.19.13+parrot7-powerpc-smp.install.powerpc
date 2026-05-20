@@ -1,4 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-6.19.13+parrot7-powerpc-smp
-scripts/module.lds                       usr/src/linux-headers-6.19.13+parrot7-powerpc-smp/arch/powerpc
-arch/powerpc/include             usr/src/linux-headers-6.19.13+parrot7-powerpc-smp/arch/powerpc
-arch/powerpc/lib/crtsavres.o     usr/src/linux-headers-6.19.13+parrot7-powerpc-smp/arch/powerpc/lib

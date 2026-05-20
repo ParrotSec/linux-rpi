@@ -1,3 +1,18 @@
+linux (7.0.7-1parrot1) echo; urgency=medium
+
+  * Import new Debian backports release.
+  * Re-apply parrot patches.
+  * Disable signed binaries (we don't have a key).
+  * Try using CONFIG_HZ_1000.
+
+ -- Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>  Wed, 20 May 2026 18:44:51 +0200
+
+linux (7.0.7-1~bpo13+1) trixie-backports; urgency=medium
+
+  * Rebuild for trixie-backports
+
+ -- Ben Hutchings <benh@debian.org>  Sat, 16 May 2026 10:43:26 +0200
+
 linux (6.19.13-1parrot1) echo; urgency=medium
 
   * Import new Debian backports release.

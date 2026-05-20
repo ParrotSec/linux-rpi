@@ -1,0 +1,2 @@
+# The -cross packages use the sysroot layout
+linux-libc-dev-hppa-cross: non-standard-dir-in-usr [usr/hppa-linux-gnu]

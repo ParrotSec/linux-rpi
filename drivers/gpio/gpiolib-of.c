@@ -634,6 +634,7 @@ static struct gpio_desc *of_find_gpio_rename(struct device_node *np,
 	return ERR_PTR(-ENOENT);
 }
 
+#if IS_ENABLED(CONFIG_SND_SOC_MT2701_CS42448)
 static struct gpio_desc *of_find_mt2701_gpio(struct device_node *np,
 					     const char *con_id,
 					     unsigned int idx,
@@ -665,6 +666,7 @@ static struct gpio_desc *of_find_mt2701_gpio(struct device_node *np,
 
 	return desc;
 }
+#endif
 
 /*
  * Trigger sources are special, they allow us to use any GPIO as a LED trigger
@@ -699,7 +701,9 @@ typedef struct gpio_desc *(*of_find_gpio_quirk)(struct device_node *np,
 						enum of_gpio_flags *of_flags);
 static const of_find_gpio_quirk of_find_gpio_quirks[] = {
 	of_find_gpio_rename,
+#if IS_ENABLED(CONFIG_SND_SOC_MT2701_CS42448)
 	of_find_mt2701_gpio,
+#endif
 	of_find_trigger_gpio,
 	NULL
 };
@@ -1206,7 +1210,14 @@ int of_gpiochip_add(struct gpio_chip *chip)
 
 void of_gpiochip_remove(struct gpio_chip *chip)
 {
-	of_node_put(dev_of_node(&chip->gpiodev->dev));
+	struct device_node *np = dev_of_node(&chip->gpiodev->dev);
+
+	for_each_child_of_node_scoped(np, child) {
+		if (of_property_present(child, "gpio-hog"))
+			of_node_clear_flag(child, OF_POPULATED);
+	}
+
+	of_node_put(np);
 }
 
 bool of_gpiochip_instance_match(struct gpio_chip *gc, unsigned int index)

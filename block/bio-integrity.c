@@ -97,7 +97,7 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
 	if (WARN_ON_ONCE(bio_has_crypt_ctx(bio)))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	bia = kmalloc(struct_size(bia, bvecs, nr_vecs), gfp_mask);
+	bia = kmalloc_flex(*bia, bvecs, nr_vecs, gfp_mask);
 	if (unlikely(!bia))
 		return ERR_PTR(-ENOMEM);
 	bio_integrity_init(bio, &bia->bip, bia->bvecs, nr_vecs);
@@ -167,10 +167,10 @@ int bio_integrity_add_page(struct bio *bio, struct page *page,
 	if (bip->bip_vcnt > 0) {
 		struct bio_vec *bv = &bip->bip_vec[bip->bip_vcnt - 1];
 
-		if (!zone_device_pages_have_same_pgmap(bv->bv_page, page))
+		if (!zone_device_pages_compatible(bv->bv_page, page))
 			return 0;
-
-		if (bvec_try_merge_hw_page(q, bv, page, len, offset)) {
+		if (zone_device_pages_have_same_pgmap(bv->bv_page, page) &&
+		    bvec_try_merge_hw_page(q, bv, page, len, offset)) {
 			bip->bip_iter.bi_size += len;
 			return len;
 		}
@@ -322,7 +322,7 @@ int bio_integrity_map_user(struct bio *bio, struct iov_iter *iter)
 	if (nr_vecs > BIO_MAX_VECS)
 		return -E2BIG;
 	if (nr_vecs > UIO_FASTIOV) {
-		bvec = kcalloc(nr_vecs, sizeof(*bvec), GFP_KERNEL);
+		bvec = kzalloc_objs(*bvec, nr_vecs);
 		if (!bvec)
 			return -ENOMEM;
 		pages = NULL;

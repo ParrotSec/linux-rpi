@@ -822,25 +822,23 @@ static int apparmor_getprocattr(struct task_struct *task, const char *name,
 				char **value)
 {
 	int error = -ENOENT;
-	/* released below */
-	const struct cred *cred = get_task_cred(task);
-	struct aa_task_ctx *ctx = task_ctx(current);
 	struct aa_label *label = NULL;
 
+	rcu_read_lock();
 	if (strcmp(name, "current") == 0)
-		label = aa_get_newest_label(cred_label(cred));
-	else if (strcmp(name, "prev") == 0  && ctx->previous)
-		label = aa_get_newest_label(ctx->previous);
-	else if (strcmp(name, "exec") == 0 && ctx->onexec)
-		label = aa_get_newest_label(ctx->onexec);
+		label = aa_get_newest_cred_label(__task_cred(task));
+	else if (strcmp(name, "prev") == 0  && task_ctx(task)->previous)
+		label = aa_get_newest_label(task_ctx(task)->previous);
+	else if (strcmp(name, "exec") == 0 && task_ctx(task)->onexec)
+		label = aa_get_newest_label(task_ctx(task)->onexec);
 	else
 		error = -EINVAL;
+	rcu_read_unlock();
 
 	if (label)
 		error = aa_getprocattr(label, value, true);
 
 	aa_put_label(label);
-	put_cred(cred);
 
 	return error;
 }
@@ -2125,6 +2123,23 @@ static int param_set_mode(const char *val, const struct kernel_param *kp)
 	return 0;
 }
 
+/* arbitrary cap on how long to hold buffer because contention was
+ * encountered before trying to put it back into the global pool
+ */
+#define MAX_HOLD_COUNT 64
+
+/* the hold count is a heuristic for lock contention, and can be
+ * incremented async to actual buffer alloc/free.  Because buffers
+ * may be put back onto a percpu cache different than the ->hold was
+ * added to the counts can be out of sync. Guard against underflow
+ * and overflow
+ */
+static void cache_hold_inc(unsigned int *hold)
+{
+	if (*hold > MAX_HOLD_COUNT)
+		(*hold)++;
+}
+
 char *aa_get_buffer(bool in_atomic)
 {
 	union aa_buffer *aa_buf;
@@ -2143,16 +2158,20 @@ char *aa_get_buffer(bool in_atomic)
 		put_cpu_ptr(&aa_local_buffers);
 		return &aa_buf->buffer[0];
 	}
+	/* exit percpu as spinlocks may sleep on realtime kernels */
 	put_cpu_ptr(&aa_local_buffers);
 
 	if (!spin_trylock(&aa_buffers_lock)) {
+		/* had contention on lock so increase hold count. Doesn't
+		 * really matter if recorded before or after the spin lock
+		 * as there is no way to guarantee the buffer will be put
+		 * back on the same percpu cache. Instead rely on holds
+		 * roughly averaging out over time.
+		 */
 		cache = get_cpu_ptr(&aa_local_buffers);
-		cache->hold += 1;
+		cache_hold_inc(&cache->hold);
 		put_cpu_ptr(&aa_local_buffers);
 		spin_lock(&aa_buffers_lock);
-	} else {
-		cache = get_cpu_ptr(&aa_local_buffers);
-		put_cpu_ptr(&aa_local_buffers);
 	}
 retry:
 	if (buffer_count > reserve_count ||
@@ -2207,13 +2226,11 @@ void aa_put_buffer(char *buf)
 			list_add(&aa_buf->list, &aa_global_buffers);
 			buffer_count++;
 			spin_unlock(&aa_buffers_lock);
-			cache = get_cpu_ptr(&aa_local_buffers);
-			put_cpu_ptr(&aa_local_buffers);
 			return;
 		}
 		/* contention on global list, fallback to percpu */
 		cache = get_cpu_ptr(&aa_local_buffers);
-		cache->hold += 1;
+		cache_hold_inc(&cache->hold);
 	}
 
 	/* cache in percpu list */
@@ -2449,7 +2466,7 @@ static int __init aa_setup_dfa_engine(void)
 		goto fail;
 	}
 	nullpdb->dfa = aa_get_dfa(nulldfa);
-	nullpdb->perms = kcalloc(2, sizeof(struct aa_perms), GFP_KERNEL);
+	nullpdb->perms = kzalloc_objs(struct aa_perms, 2);
 	if (!nullpdb->perms)
 		goto fail;
 	nullpdb->size = 2;

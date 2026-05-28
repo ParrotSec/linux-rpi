@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-7.0.9+deb13/scripts                          usr/src/linux-headers-7.0.9+deb13-parisc/scripts
+usr/lib/linux-kbuild-7.0.9+deb13/tools                            usr/src/linux-headers-7.0.9+deb13-parisc/tools
+usr/src/linux-headers-7.0.9+deb13-parisc                                               usr/lib/modules/7.0.9+deb13-parisc/build
+usr/src/linux-headers-7.0.9+deb13-common  usr/lib/modules/7.0.9+deb13-parisc/source

@@ -1,0 +1,18 @@
+#!/bin/sh -e
+
+version=7.0.9+deb13-powerpc64le-64k
+image_path=/boot/vmlinux-$version
+
+rm -f /lib/modules/$version/.fresh-install
+
+if [ "$1" != upgrade ] && command -v linux-update-symlinks >/dev/null; then
+    linux-update-symlinks remove $version $image_path
+fi
+
+if command -v linux-run-hooks >/dev/null; then
+    linux-run-hooks image postrm $version $image_path -- "$@"
+else
+    echo >&2 'W: linux-base is not installed; cannot run postrm hooks'
+fi
+
+exit 0

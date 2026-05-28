@@ -1,6 +1,0 @@
-boot/config-*
-boot/System.map-*
-# Keep list uptodate with debian/templates/modules.postrm.j2
-lib/modules/7.0.7+deb13-powerpc64le-64k/modules.builtin          usr/lib/modules/7.0.7+deb13-powerpc64le-64k
-lib/modules/7.0.7+deb13-powerpc64le-64k/modules.builtin.modinfo  usr/lib/modules/7.0.7+deb13-powerpc64le-64k
-lib/modules/7.0.7+deb13-powerpc64le-64k/modules.order            usr/lib/modules/7.0.7+deb13-powerpc64le-64k

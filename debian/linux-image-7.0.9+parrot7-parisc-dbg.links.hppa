@@ -1,0 +1,4 @@
+# Add symlinks to vmlinux from the locations expected by kdump-tools,
+# systemtap and others
+usr/lib/debug/boot/vmlinux-7.0.9+parrot7-parisc  usr/lib/debug/vmlinux-7.0.9+parrot7-parisc
+usr/lib/debug/boot/vmlinux-7.0.9+parrot7-parisc  usr/lib/debug/lib/modules/7.0.9+parrot7-parisc/vmlinux

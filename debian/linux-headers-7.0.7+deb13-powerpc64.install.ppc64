@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.7+deb13-powerpc64
-scripts/module.lds                       usr/src/linux-headers-7.0.7+deb13-powerpc64/arch/powerpc
-arch/powerpc/include             usr/src/linux-headers-7.0.7+deb13-powerpc64/arch/powerpc

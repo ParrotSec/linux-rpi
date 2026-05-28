@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.7+parrot7-sparc64
-scripts/module.lds                       usr/src/linux-headers-7.0.7+parrot7-sparc64/arch/sparc
-arch/sparc/include             usr/src/linux-headers-7.0.7+parrot7-sparc64/arch/sparc

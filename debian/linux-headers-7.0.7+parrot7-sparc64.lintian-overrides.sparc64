@@ -1,3 +1,0 @@
-# This 'executable' file intentionally contains only BTF sections
-linux-headers-7.0.7+parrot7-sparc64: statically-linked-binary [usr/src/*/vmlinux]
-linux-headers-7.0.7+parrot7-sparc64: unstripped-binary-or-object [usr/src/*/vmlinux]

@@ -1,5 +1,3 @@
-CONFIG_HZ_100=y
-
 ##
 ## file: block/Kconfig.iosched
 ##

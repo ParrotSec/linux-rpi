@@ -6374,9 +6374,9 @@ CONFIG_RUST=y
 ##
 ## choice: Timer frequency
 # CONFIG_HZ_100 is not set
-CONFIG_HZ_1000=y
-# CONFIG_HZ_300 is not set
 # CONFIG_HZ_250 is not set
+# CONFIG_HZ_300 is not set
+CONFIG_HZ_1000=y
 ## end choice
 
 ##
@@ -8069,6 +8069,14 @@ CONFIG_SND_SOC_TAS2781_I2C=m
 ## file: sound/soc/hisilicon/Kconfig
 ##
 # CONFIG_SND_I2S_HI6210_I2S is not set
+
+##
+## file: sound/soc/sdca/Kconfig
+##
+CONFIG_SND_SOC_SDCA_HID=y
+CONFIG_SND_SOC_SDCA_IRQ=y
+CONFIG_SND_SOC_SDCA_FDL=y
+CONFIG_SND_SOC_SDCA_CLASS=m
 
 ##
 ## file: sound/soc/sunxi/Kconfig

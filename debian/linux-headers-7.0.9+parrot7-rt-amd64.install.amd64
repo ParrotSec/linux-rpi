@@ -1,0 +1,3 @@
+.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+parrot7-rt-amd64
+scripts/module.lds                       usr/src/linux-headers-7.0.9+parrot7-rt-amd64/arch/x86
+arch/x86/include             usr/src/linux-headers-7.0.9+parrot7-rt-amd64/arch/x86

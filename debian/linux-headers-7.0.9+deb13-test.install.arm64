@@ -1,0 +1,3 @@
+.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+deb13-test
+scripts/module.lds                       usr/src/linux-headers-7.0.9+deb13-test/arch/arm64
+arch/arm64/include             usr/src/linux-headers-7.0.9+deb13-test/arch/arm64

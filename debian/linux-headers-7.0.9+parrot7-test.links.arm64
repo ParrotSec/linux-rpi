@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-7.0.9+parrot7/scripts                          usr/src/linux-headers-7.0.9+parrot7-test/scripts
+usr/lib/linux-kbuild-7.0.9+parrot7/tools                            usr/src/linux-headers-7.0.9+parrot7-test/tools
+usr/src/linux-headers-7.0.9+parrot7-test                                               usr/lib/modules/7.0.9+parrot7-test/build
+usr/src/linux-headers-7.0.9+parrot7-common  usr/lib/modules/7.0.9+parrot7-test/source

@@ -1,0 +1,2 @@
+# vmlinux needs extra sections that would normally be stripped.
+linux-binary-7.0.9+parrot7-powerpc64le-di: unstripped-binary-or-object *boot/vmlinu*

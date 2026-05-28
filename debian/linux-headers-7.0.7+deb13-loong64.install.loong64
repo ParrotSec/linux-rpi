@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.7+deb13-loong64
-scripts/module.lds                       usr/src/linux-headers-7.0.7+deb13-loong64/arch/loongarch
-arch/loongarch/include             usr/src/linux-headers-7.0.7+deb13-loong64/arch/loongarch

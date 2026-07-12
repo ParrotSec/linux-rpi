@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #pragma once
 
+#include <getopt.h>
 #include "actions.h"
 #include "timerlat_u.h"
 #include "trace.h"
@@ -156,7 +157,18 @@ int osnoise_set_stop_us(struct osnoise_context *context, long long stop_us);
 int osnoise_set_stop_total_us(struct osnoise_context *context,
 			      long long stop_total_us);
 
-int common_parse_options(int argc, char **argv, struct common_params *common);
+int getopt_auto(int argc, char **argv, const struct option *long_opts);
+
+#define COMMON_OPTIONS \
+	{"cpus",                required_argument,      0, 'c'},\
+	{"cgroup",              optional_argument,      0, 'C'},\
+	{"debug",               no_argument,            0, 'D'},\
+	{"duration",            required_argument,      0, 'd'},\
+	{"event",               required_argument,      0, 'e'},\
+	{"house-keeping",       required_argument,      0, 'H'},\
+	{"priority",            required_argument,      0, 'P'}
+int set_common_option(int c, int argc, char **argv, struct common_params *common);
+
 int common_apply_config(struct osnoise_tool *tool, struct common_params *params);
 int top_main_loop(struct osnoise_tool *tool);
 int hist_main_loop(struct osnoise_tool *tool);

@@ -1891,7 +1891,11 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
 		goto error;
 	}
 
-	init_data.asic_id.chip_family = adev->family;
+	/* special handling for early revisions of GC 11.5.4 */
+	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(11, 5, 4))
+		init_data.asic_id.chip_family = AMDGPU_FAMILY_GC_11_5_4;
+	else
+		init_data.asic_id.chip_family = adev->family;
 
 	init_data.asic_id.pci_revision_id = adev->pdev->revision;
 	init_data.asic_id.hw_internal_rev = adev->external_rev_id;
@@ -10012,7 +10016,7 @@ static void amdgpu_dm_commit_planes(struct drm_atomic_state *state,
 			continue;
 
 		bundle->surface_updates[planes_count].surface = dc_plane;
-		if (new_pcrtc_state->color_mgmt_changed) {
+		if (new_pcrtc_state->color_mgmt_changed || new_plane_state->color_mgmt_changed) {
 			bundle->surface_updates[planes_count].gamma = &dc_plane->gamma_correction;
 			bundle->surface_updates[planes_count].in_transfer_func = &dc_plane->in_transfer_func;
 			bundle->surface_updates[planes_count].gamut_remap_matrix = &dc_plane->gamut_remap_matrix;
@@ -11750,6 +11754,10 @@ static bool should_reset_plane(struct drm_atomic_state *state,
 
 	/* CRTC Degamma changes currently require us to recreate planes. */
 	if (new_crtc_state->color_mgmt_changed)
+		return true;
+
+	/* Plane color pipeline or its colorop changes. */
+	if (new_plane_state->color_mgmt_changed)
 		return true;
 
 	/*

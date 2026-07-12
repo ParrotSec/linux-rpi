@@ -63,6 +63,7 @@ enum adreno_family {
 #define ADRENO_QUIRK_PREEMPTION			BIT(5)
 #define ADRENO_QUIRK_4GB_VA			BIT(6)
 #define ADRENO_QUIRK_IFPC			BIT(7)
+#define ADRENO_QUIRK_SOFTFUSE			BIT(8)
 
 /* Helper for formating the chip_id in the way that userspace tools like
  * crashdec expect.
@@ -79,9 +80,10 @@ struct adreno_gpu;
 struct adreno_gpu_funcs {
 	struct msm_gpu_funcs base;
 	struct msm_gpu *(*init)(struct drm_device *dev);
-	int (*get_timestamp)(struct msm_gpu *gpu, uint64_t *value);
+	u64 (*get_timestamp)(struct msm_gpu *gpu);
 	void (*bus_halt)(struct adreno_gpu *adreno_gpu, bool gx_off);
 	int (*mmu_fault_handler)(void *arg, unsigned long iova, int flags, void *data);
+	bool (*gx_is_on)(struct adreno_gpu *adreno_gpu);
 };
 
 struct adreno_reglist {

@@ -1,9 +1,0 @@
-#!/bin/sh -e
-
-version=7.0.9+deb13-powerpc64le
-
-if [ "$1" = configure ]; then
-  depmod "$version"
-fi
-
-exit 0

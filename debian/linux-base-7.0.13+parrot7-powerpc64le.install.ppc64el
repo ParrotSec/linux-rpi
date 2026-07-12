@@ -1,0 +1,6 @@
+boot/config-*
+boot/System.map-*
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.0.13+parrot7-powerpc64le/modules.builtin          usr/lib/modules/7.0.13+parrot7-powerpc64le
+lib/modules/7.0.13+parrot7-powerpc64le/modules.builtin.modinfo  usr/lib/modules/7.0.13+parrot7-powerpc64le
+lib/modules/7.0.13+parrot7-powerpc64le/modules.order            usr/lib/modules/7.0.13+parrot7-powerpc64le

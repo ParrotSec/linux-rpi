@@ -1,0 +1,3 @@
+# This 'executable' file intentionally contains only BTF sections
+linux-headers-7.0.13+parrot7-powerpc-smp: statically-linked-binary [usr/src/*/vmlinux]
+linux-headers-7.0.13+parrot7-powerpc-smp: unstripped-binary-or-object [usr/src/*/vmlinux]

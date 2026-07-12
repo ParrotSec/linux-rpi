@@ -1,7 +1,0 @@
-boot/config-*
-boot/System.map-*
-# Keep list uptodate with debian/templates/modules.postrm.j2
-lib/modules/7.0.9+parrot7-arm64-16k/modules.builtin          usr/lib/modules/7.0.9+parrot7-arm64-16k
-lib/modules/7.0.9+parrot7-arm64-16k/modules.builtin.modinfo  usr/lib/modules/7.0.9+parrot7-arm64-16k
-lib/modules/7.0.9+parrot7-arm64-16k/modules.order            usr/lib/modules/7.0.9+parrot7-arm64-16k
-lib/modules/7.0.9+parrot7-arm64-16k/dtb                      usr/lib/modules/7.0.9+parrot7-arm64-16k

@@ -1,7 +1,0 @@
-boot/config-*
-boot/System.map-*
-# Keep list uptodate with debian/templates/modules.postrm.j2
-lib/modules/7.0.9+deb13-armmp-lpae/modules.builtin          usr/lib/modules/7.0.9+deb13-armmp-lpae
-lib/modules/7.0.9+deb13-armmp-lpae/modules.builtin.modinfo  usr/lib/modules/7.0.9+deb13-armmp-lpae
-lib/modules/7.0.9+deb13-armmp-lpae/modules.order            usr/lib/modules/7.0.9+deb13-armmp-lpae
-lib/modules/7.0.9+deb13-armmp-lpae/dtb                      usr/lib/modules/7.0.9+deb13-armmp-lpae

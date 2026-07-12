@@ -1,3 +1,12 @@
+linux (7.0.13-1parrot1) echo; urgency=medium
+
+  * Import new Debian Backports release.
+  * Re-apply parrot patches.
+  * Disable signed binaries (we don't have a key).
+  * Use CONFIG_HZ_1000.
+
+ -- Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>  Sun, 12 Jul 2026 13:36:19 +0200
+
 linux (7.0.9-1parrot1) echo; urgency=medium
 
   * Import new Debian backports release.

@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+deb13-sh7751r
-scripts/module.lds                       usr/src/linux-headers-7.0.9+deb13-sh7751r/arch/sh
-arch/sh/include             usr/src/linux-headers-7.0.9+deb13-sh7751r/arch/sh

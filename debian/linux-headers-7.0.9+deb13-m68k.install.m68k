@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+deb13-m68k
-scripts/module.lds                       usr/src/linux-headers-7.0.9+deb13-m68k/arch/m68k
-arch/m68k/include             usr/src/linux-headers-7.0.9+deb13-m68k/arch/m68k

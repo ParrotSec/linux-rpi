@@ -1,4 +1,0 @@
-usr/lib/linux-kbuild-7.0.9+parrot7/scripts                          usr/src/linux-headers-7.0.9+parrot7-powerpc-smp/scripts
-usr/lib/linux-kbuild-7.0.9+parrot7/tools                            usr/src/linux-headers-7.0.9+parrot7-powerpc-smp/tools
-usr/src/linux-headers-7.0.9+parrot7-powerpc-smp                                               usr/lib/modules/7.0.9+parrot7-powerpc-smp/build
-usr/src/linux-headers-7.0.9+parrot7-common  usr/lib/modules/7.0.9+parrot7-powerpc-smp/source

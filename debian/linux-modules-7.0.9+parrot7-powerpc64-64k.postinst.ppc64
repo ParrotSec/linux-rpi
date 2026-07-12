@@ -1,9 +1,0 @@
-#!/bin/sh -e
-
-version=7.0.9+parrot7-powerpc64-64k
-
-if [ "$1" = configure ]; then
-  depmod "$version"
-fi
-
-exit 0

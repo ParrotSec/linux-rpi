@@ -4864,8 +4864,9 @@ static struct sock *sctp_clone_sock(struct sock *sk,
 	if (!newsk)
 		return ERR_PTR(err);
 
-	/* sk_clone() sets refcnt to 2 */
+	/* sk_clone() sets refcnt to 2 and increments sockets_allocated */
 	sock_put(newsk);
+	sk_sockets_allocated_dec(newsk);
 
 	newinet = inet_sk(newsk);
 	newsp = sctp_sk(newsk);
@@ -7042,7 +7043,7 @@ static int sctp_getsockopt_peer_auth_chunks(struct sock *sk, int len,
 
 	/* See if the user provided enough room for all the data */
 	num_chunks = ntohs(ch->param_hdr.length) - sizeof(struct sctp_paramhdr);
-	if (len < num_chunks)
+	if (len < sizeof(struct sctp_authchunks) + num_chunks)
 		return -EINVAL;
 
 	if (copy_to_user(to, ch->chunks, num_chunks))
@@ -9402,6 +9403,8 @@ static int sctp_wait_for_connect(struct sctp_association *asoc, long *timeo_p)
 		release_sock(sk);
 		current_timeo = schedule_timeout(current_timeo);
 		lock_sock(sk);
+		if (sk != asoc->base.sk)
+			goto do_error;
 
 		*timeo_p = current_timeo;
 	}

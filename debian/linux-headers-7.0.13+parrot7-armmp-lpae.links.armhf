@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-7.0.13+parrot7/scripts                          usr/src/linux-headers-7.0.13+parrot7-armmp-lpae/scripts
+usr/lib/linux-kbuild-7.0.13+parrot7/tools                            usr/src/linux-headers-7.0.13+parrot7-armmp-lpae/tools
+usr/src/linux-headers-7.0.13+parrot7-armmp-lpae                                               usr/lib/modules/7.0.13+parrot7-armmp-lpae/build
+usr/src/linux-headers-7.0.13+parrot7-common  usr/lib/modules/7.0.13+parrot7-armmp-lpae/source

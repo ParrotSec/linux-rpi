@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+parrot7-s390x
-scripts/module.lds                       usr/src/linux-headers-7.0.9+parrot7-s390x/arch/s390
-arch/s390/include             usr/src/linux-headers-7.0.9+parrot7-s390x/arch/s390

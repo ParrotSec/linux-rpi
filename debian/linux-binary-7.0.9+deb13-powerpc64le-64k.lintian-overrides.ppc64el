@@ -1,2 +1,0 @@
-# vmlinux needs extra sections that would normally be stripped.
-linux-binary-7.0.9+deb13-powerpc64le-64k: unstripped-binary-or-object *boot/vmlinu*

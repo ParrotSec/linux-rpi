@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+deb13-riscv64
-scripts/module.lds                       usr/src/linux-headers-7.0.9+deb13-riscv64/arch/riscv
-arch/riscv/include             usr/src/linux-headers-7.0.9+deb13-riscv64/arch/riscv

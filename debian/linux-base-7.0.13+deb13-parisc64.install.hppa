@@ -1,0 +1,6 @@
+boot/config-*
+boot/System.map-*
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.0.13+deb13-parisc64/modules.builtin          usr/lib/modules/7.0.13+deb13-parisc64
+lib/modules/7.0.13+deb13-parisc64/modules.builtin.modinfo  usr/lib/modules/7.0.13+deb13-parisc64
+lib/modules/7.0.13+deb13-parisc64/modules.order            usr/lib/modules/7.0.13+deb13-parisc64

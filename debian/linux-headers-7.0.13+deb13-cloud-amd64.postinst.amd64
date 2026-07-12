@@ -1,0 +1,7 @@
+#!/bin/sh -e
+
+version=7.0.13+deb13-cloud-amd64
+
+linux-run-hooks headers postinst $version -- "$@"
+
+exit 0

@@ -1,3 +1,0 @@
-.config .kernel* Module.symvers include  usr/src/linux-headers-7.0.9+parrot7-armmp
-scripts/module.lds                       usr/src/linux-headers-7.0.9+parrot7-armmp/arch/arm
-arch/arm/include             usr/src/linux-headers-7.0.9+parrot7-armmp/arch/arm

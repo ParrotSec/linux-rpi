@@ -94,6 +94,7 @@
 
 #include "dev.h"
 #include "devmem.h"
+#include "net-sysfs.h"
 #include "netmem_priv.h"
 #include "sock_destructor.h"
 
@@ -105,10 +106,9 @@ static struct kmem_cache *skbuff_ext_cache __ro_after_init;
 #define SKB_SMALL_HEAD_SIZE SKB_HEAD_ALIGN(max(MAX_TCP_HEADER, \
 					       GRO_MAX_HEAD_PAD))
 
-/* We want SKB_SMALL_HEAD_CACHE_SIZE to not be a power of two.
- * This should ensure that SKB_SMALL_HEAD_HEADROOM is a unique
- * size, and we can differentiate heads from skb_small_head_cache
- * vs system slabs by looking at their size (skb_end_offset()).
+/* SKB_SMALL_HEAD_CACHE_SIZE is the size used for the skbuff_small_head
+ * kmem_cache. The non-power-of-2 padding is kept for historical reasons and
+ * to avoid potential collisions with generic kmalloc bucket sizes.
  */
 #define SKB_SMALL_HEAD_CACHE_SIZE					\
 	(is_power_of_2(SKB_SMALL_HEAD_SIZE) ?			\
@@ -891,17 +891,6 @@ skb_fail:
 }
 EXPORT_SYMBOL(napi_alloc_skb);
 
-void skb_add_rx_frag_netmem(struct sk_buff *skb, int i, netmem_ref netmem,
-			    int off, int size, unsigned int truesize)
-{
-	DEBUG_NET_WARN_ON_ONCE(size > truesize);
-
-	skb_fill_netmem_desc(skb, i, netmem, off, size);
-	skb->len += size;
-	skb->data_len += size;
-	skb->truesize += truesize;
-}
-EXPORT_SYMBOL(skb_add_rx_frag_netmem);
 
 void skb_coalesce_rx_frag(struct sk_buff *skb, int i, int size,
 			  unsigned int truesize)
@@ -936,6 +925,18 @@ static void skb_clone_fraglist(struct sk_buff *skb)
 		skb_get(list);
 }
 
+/**
+ * skb_pp_cow_data() - copy skb data into page-pool backed storage
+ * @pool: page pool to allocate from
+ * @pskb: pointer to skb pointer, replaced with the copied skb on success
+ * @headroom: headroom to reserve in the copied skb
+ *
+ * skb_copy_bits() handles both frags[] and frag_list input. If the copied
+ * skb remains non-linear, it uses frags[], which is the representation used
+ * by XDP multi-buffer.
+ *
+ * Return: 0 on success or a negative errno on failure.
+ */
 int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
 		    unsigned int headroom)
 {
@@ -944,12 +945,6 @@ int skb_pp_cow_data(struct page_pool *pool, struct sk_buff **pskb,
 	struct sk_buff *skb = *pskb, *nskb;
 	int err, i, head_off;
 	void *data;
-
-	/* XDP does not support fraglist so we need to linearize
-	 * the skb.
-	 */
-	if (skb_has_frag_list(skb))
-		return -EOPNOTSUPP;
 
 	max_head_size = SKB_WITH_OVERHEAD(PAGE_SIZE - headroom);
 	if (skb->len > max_head_size + MAX_SKB_FRAGS * PAGE_SIZE)
@@ -1081,7 +1076,7 @@ static int skb_pp_frag_ref(struct sk_buff *skb)
 	return 0;
 }
 
-static void skb_kfree_head(void *head, unsigned int end_offset)
+static void skb_kfree_head(void *head)
 {
 	kfree(head);
 }
@@ -1095,7 +1090,7 @@ static void skb_free_head(struct sk_buff *skb)
 			return;
 		skb_free_frag(head);
 	} else {
-		skb_kfree_head(head, skb_end_offset(skb));
+		skb_kfree_head(head);
 	}
 }
 
@@ -1527,7 +1522,8 @@ void napi_consume_skb(struct sk_buff *skb, int budget)
 
 	DEBUG_NET_WARN_ON_ONCE(!in_softirq());
 
-	if (skb->alloc_cpu != smp_processor_id() && !skb_shared(skb)) {
+	if (!static_branch_unlikely(&skb_defer_disable_key) &&
+	    skb->alloc_cpu != smp_processor_id() && !skb_shared(skb)) {
 		skb_release_head_state(skb);
 		return skb_attempt_defer_free(skb);
 	}
@@ -2371,7 +2367,7 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	return 0;
 
 nofrags:
-	skb_kfree_head(data, size);
+	skb_kfree_head(data);
 nodata:
 	return -ENOMEM;
 }
@@ -2416,20 +2412,6 @@ int __skb_unclone_keeptruesize(struct sk_buff *skb, gfp_t pri)
 
 	if (likely(skb_end_offset(skb) == saved_end_offset))
 		return 0;
-
-	/* We can not change skb->end if the original or new value
-	 * is SKB_SMALL_HEAD_HEADROOM, as it might break skb_kfree_head().
-	 */
-	if (saved_end_offset == SKB_SMALL_HEAD_HEADROOM ||
-	    skb_end_offset(skb) == SKB_SMALL_HEAD_HEADROOM) {
-		/* We think this path should not be taken.
-		 * Add a temporary trace to warn us just in case.
-		 */
-		pr_err_once("__skb_unclone_keeptruesize() skb_end_offset() %u -> %u\n",
-			    saved_end_offset, skb_end_offset(skb));
-		WARN_ON_ONCE(1);
-		return 0;
-	}
 
 	shinfo = skb_shinfo(skb);
 
@@ -5183,7 +5165,7 @@ static __always_inline __no_profile unsigned int skb_ext_total_length(void)
 	return l;
 }
 
-static void skb_extensions_init(void)
+static noinline void __init __no_profile skb_extensions_init(void)
 {
 	BUILD_BUG_ON(SKB_EXT_NUM > 8);
 	BUILD_BUG_ON(skb_ext_total_length() > 255);
@@ -6859,7 +6841,7 @@ static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 	if (skb_cloned(skb)) {
 		/* drop the old head gracefully */
 		if (skb_orphan_frags(skb, gfp_mask)) {
-			skb_kfree_head(data, size);
+			skb_kfree_head(data);
 			return -ENOMEM;
 		}
 		if (skb_zcopy(skb))
@@ -6973,7 +6955,7 @@ static int pskb_carve_inside_nonlinear(struct sk_buff *skb, const u32 off,
 	memcpy((struct skb_shared_info *)(data + size),
 	       skb_shinfo(skb), offsetof(struct skb_shared_info, frags[0]));
 	if (skb_orphan_frags(skb, gfp_mask)) {
-		skb_kfree_head(data, size);
+		skb_kfree_head(data);
 		return -ENOMEM;
 	}
 	shinfo = (struct skb_shared_info *)(data + size);
@@ -7009,7 +6991,7 @@ static int pskb_carve_inside_nonlinear(struct sk_buff *skb, const u32 off,
 		/* skb_frag_unref() is not needed here as shinfo->nr_frags = 0. */
 		if (skb_has_frag_list(skb))
 			kfree_skb_list(skb_shinfo(skb)->frag_list);
-		skb_kfree_head(data, size);
+		skb_kfree_head(data);
 		return -ENOMEM;
 	}
 	if (skb_zcopy(skb))
@@ -7308,6 +7290,8 @@ static void kfree_skb_napi_cache(struct sk_buff *skb)
 	local_bh_enable();
 }
 
+DEFINE_STATIC_KEY_FALSE(skb_defer_disable_key);
+
 /**
  * skb_attempt_defer_free - queue skb for remote freeing
  * @skb: buffer
@@ -7323,6 +7307,9 @@ void skb_attempt_defer_free(struct sk_buff *skb)
 	unsigned int defer_max;
 	bool kick;
 	int cpu;
+
+	if (static_branch_unlikely(&skb_defer_disable_key))
+		goto nodefer;
 
 	/* zero copy notifications should not be delayed. */
 	if (skb_zcopy(skb))

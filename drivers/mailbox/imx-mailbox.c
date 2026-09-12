@@ -23,8 +23,6 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
-#include "mailbox.h"
-
 #define IMX_MU_CHANS		24
 /* TX0/RX0/RXDB[0-3] */
 #define IMX_MU_SCU_CHANS	6
@@ -229,6 +227,7 @@ static int imx_mu_generic_tx(struct imx_mu_priv *priv,
 	u32 val;
 	int ret, count;
 
+	ret = 0;
 	switch (cp->type) {
 	case IMX_MU_TYPE_TX:
 		imx_mu_write(priv, *arg, priv->dcfg->xTR + cp->idx * 4);
@@ -261,7 +260,7 @@ static int imx_mu_generic_tx(struct imx_mu_priv *priv,
 		return -EINVAL;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int imx_mu_generic_rx(struct imx_mu_priv *priv,
@@ -734,7 +733,7 @@ static struct mbox_chan * imx_mu_xlate(struct mbox_controller *mbox,
 	p_chan = &mbox->chans[chan];
 
 	if (type == IMX_MU_TYPE_TXDB_V2)
-		p_chan->txdone_method = TXDONE_BY_ACK;
+		p_chan->txdone_method = MBOX_TXDONE_BY_ACK;
 
 	return p_chan;
 }

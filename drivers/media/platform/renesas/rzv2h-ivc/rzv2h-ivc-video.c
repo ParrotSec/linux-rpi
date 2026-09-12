@@ -143,13 +143,11 @@ void rzv2h_ivc_buffer_done(struct rzv2h_ivc *ivc)
 	vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_DONE);
 }
 
-static void rzv2h_ivc_transfer_buffer(struct work_struct *work)
+void rzv2h_ivc_transfer_buffer(struct rzv2h_ivc *ivc)
 {
-	struct rzv2h_ivc *ivc = container_of(work, struct rzv2h_ivc,
-					     buffers.work);
 	struct rzv2h_ivc_buf *buf;
 
-	guard(spinlock_irqsave)(&ivc->spinlock);
+	lockdep_assert_held(&ivc->spinlock);
 
 	if (ivc->vvalid_ifp)
 		return;
@@ -204,7 +202,7 @@ static void rzv2h_ivc_buf_queue(struct vb2_buffer *vb)
 
 	scoped_guard(spinlock_irq, &ivc->spinlock) {
 		if (vb2_is_streaming(vb->vb2_queue))
-			queue_work(ivc->buffers.async_wq, &ivc->buffers.work);
+			rzv2h_ivc_transfer_buffer(ivc);
 	}
 }
 
@@ -282,7 +280,9 @@ static int rzv2h_ivc_start_streaming(struct vb2_queue *q, unsigned int count)
 
 	rzv2h_ivc_format_configure(ivc);
 
-	queue_work(ivc->buffers.async_wq, &ivc->buffers.work);
+	scoped_guard(spinlock_irq, &ivc->spinlock) {
+		rzv2h_ivc_transfer_buffer(ivc);
+	}
 
 	return 0;
 
@@ -297,12 +297,33 @@ err_return_buffers:
 static void rzv2h_ivc_stop_streaming(struct vb2_queue *q)
 {
 	struct rzv2h_ivc *ivc = vb2_get_drv_priv(q);
-	u32 val = 0;
+	unsigned int loop = 5;
 
-	rzv2h_ivc_write(ivc, RZV2H_IVC_REG_FM_STOP, RZV2H_IVC_REG_FM_STOP_FSTOP);
-	readl_poll_timeout(ivc->base + RZV2H_IVC_REG_FM_STOP,
-			   val, !(val & RZV2H_IVC_REG_FM_STOP_FSTOP),
-			   10 * USEC_PER_MSEC, 250 * USEC_PER_MSEC);
+	/*
+	 * If no frame transfer is in progress, we're done, otherwise, wait for
+	 * the transfer to complete.
+	 *
+	 * Transferring a 1920x1080@10bit frame to the ISP takes less than 5
+	 * msec so sleep for 2.5 msec (+- 25%) and give up after 5 attempts.
+	 */
+	for (; loop > 0; loop--) {
+		unsigned int vvalid_ifp;
+
+		/*
+		 * Inspect the ivc->vvalid_ifp variable holding the spinlock not
+		 * to the race with the rzv2h_ivc_buffer_done() call in the irq
+		 * handler.
+		 */
+		scoped_guard(spinlock_irq, &ivc->spinlock) {
+			vvalid_ifp = ivc->vvalid_ifp;
+		}
+		if (vvalid_ifp < 2)
+			break;
+
+		fsleep(2500);
+	}
+	if (!loop)
+		dev_err(ivc->dev, "Failed to stop streaming\n");
 
 	rzv2h_ivc_return_buffers(ivc, VB2_BUF_STATE_ERROR);
 	video_device_pipeline_stop(&ivc->vdev.dev);
@@ -449,11 +470,6 @@ int rzv2h_ivc_init_vdev(struct rzv2h_ivc *ivc, struct v4l2_device *v4l2_dev)
 
 	spin_lock_init(&ivc->buffers.lock);
 	INIT_LIST_HEAD(&ivc->buffers.queue);
-	INIT_WORK(&ivc->buffers.work, rzv2h_ivc_transfer_buffer);
-
-	ivc->buffers.async_wq = alloc_workqueue("rzv2h-ivc", 0, 0);
-	if (!ivc->buffers.async_wq)
-		return -EINVAL;
 
 	/* Initialise vb2 queue */
 	vb2q = &ivc->vdev.vb2q;
@@ -471,7 +487,7 @@ int rzv2h_ivc_init_vdev(struct rzv2h_ivc *ivc, struct v4l2_device *v4l2_dev)
 	ret = vb2_queue_init(vb2q);
 	if (ret) {
 		dev_err(ivc->dev, "vb2 queue init failed\n");
-		goto err_destroy_workqueue;
+		return ret;
 	}
 
 	/* Initialise Video Device */
@@ -520,8 +536,6 @@ err_cleanup_vdev_entity:
 	media_entity_cleanup(&vdev->entity);
 err_release_vb2q:
 	vb2_queue_release(vb2q);
-err_destroy_workqueue:
-	destroy_workqueue(ivc->buffers.async_wq);
 
 	return ret;
 }

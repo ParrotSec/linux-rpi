@@ -19,11 +19,11 @@
 #include "util/hist.h"  /* perf_hist_config */
 #include "util/stat.h"  /* perf_stat__set_big_num */
 #include "util/evsel.h"  /* evsel__hw_names, evsel__use_bpf_counters */
-#include "util/addr2line.h"  /* addr2line_timeout_ms */
 #include "srcline.h"
 #include "build-id.h"
 #include "debug.h"
 #include "config.h"
+#include "unwind.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <stdlib.h>
@@ -459,7 +459,10 @@ static int perf_default_core_config(const char *var, const char *value)
 		proc_map_timeout = strtoul(value, NULL, 10);
 
 	if (!strcmp(var, "core.addr2line-timeout"))
-		addr2line_timeout_ms = strtoul(value, NULL, 10);
+		symbol_conf.addr2line_timeout_ms = strtoul(value, NULL, 10);
+
+	if (!strcmp(var, "core.addr2line-disable-warn"))
+		symbol_conf.addr2line_disable_warn = perf_config_bool(var, value);
 
 	/* Add other config variables here. */
 	return 0;
@@ -522,6 +525,9 @@ int perf_default_config(const char *var, const char *value,
 
 	if (strstarts(var, "addr2line."))
 		return addr2line_configure(var, value, dummy);
+
+	if (strstarts(var, "unwind."))
+		return unwind__configure(var, value, dummy);
 
 	/* Add other config variables here. */
 	return 0;

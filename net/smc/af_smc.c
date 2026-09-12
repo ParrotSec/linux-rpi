@@ -1631,12 +1631,8 @@ static void smc_connect_work(struct work_struct *work)
 	lock_sock(&smc->sk);
 	if (rc != 0 || smc->sk.sk_err) {
 		smc->sk.sk_state = SMC_CLOSED;
-		if (rc == -EPIPE || rc == -EAGAIN)
-			smc->sk.sk_err = EPIPE;
-		else if (rc == -ECONNREFUSED)
-			smc->sk.sk_err = ECONNREFUSED;
-		else if (signal_pending(current))
-			smc->sk.sk_err = -sock_intr_errno(timeo);
+		if (!smc->sk.sk_err)
+			smc->sk.sk_err = (rc == -EAGAIN) ? EPIPE : -rc;
 		sock_put(&smc->sk); /* passive closing */
 		goto out;
 	}
@@ -1935,11 +1931,12 @@ static void smc_listen_out(struct smc_sock *new_smc)
 		atomic_dec(&lsmc->queued_smc_hs);
 
 	release_sock(newsmcsk); /* lock in smc_listen_work() */
+	lock_sock_nested(&lsmc->sk, SINGLE_DEPTH_NESTING);
 	if (lsmc->sk.sk_state == SMC_LISTEN) {
-		lock_sock_nested(&lsmc->sk, SINGLE_DEPTH_NESTING);
 		smc_accept_enqueue(&lsmc->sk, newsmcsk);
 		release_sock(&lsmc->sk);
 	} else { /* no longer listening */
+		release_sock(&lsmc->sk);
 		smc_close_non_accepted(newsmcsk);
 	}
 

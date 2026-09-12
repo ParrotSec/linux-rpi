@@ -275,7 +275,13 @@ void vgic_v3_deactivate(struct kvm_vcpu *vcpu, u64 val)
 		lr = vgic_v3_compute_lr(vcpu, irq) & ~ICH_LR_ACTIVE_BIT;
 	}
 
-	if (lr & ICH_LR_HW)
+	/*
+	 * In the nested state, the irq has already been deactivated via the HW
+	 * bit in the LR. Deactivating again would be harmless except AmpereOne
+	 * errata AC03_CPU_57, AC04_CPU_29 could cause irq delivery to break if
+	 * the deactivation hits the highest priority pending irq.
+	 */
+	if ((lr & ICH_LR_HW) && !vgic_state_is_nested(vcpu))
 		vgic_v3_deactivate_phys(FIELD_GET(ICH_LR_PHYS_ID_MASK, lr));
 
 	vgic_v3_fold_lr(vcpu, lr);
@@ -499,7 +505,7 @@ void vcpu_set_ich_hcr(struct kvm_vcpu *vcpu)
 {
 	struct vgic_v3_cpu_if *vgic_v3 = &vcpu->arch.vgic_cpu.vgic_v3;
 
-	if (!vgic_is_v3(vcpu->kvm))
+	if (!vgic_host_has_gicv3())
 		return;
 
 	/* Hide GICv3 sysreg if necessary */

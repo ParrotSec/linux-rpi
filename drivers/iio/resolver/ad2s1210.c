@@ -896,14 +896,14 @@ static const struct iio_event_spec ad2s1210_monitor_signal_event_spec[] = {
 		.mask_separate = BIT(IIO_EV_INFO_VALUE),
 	},
 	{
-		/* Sine/cosine DOS overrange fault.*/
+		/* Sine/cosine DOS overrange fault. */
 		.type = IIO_EV_TYPE_THRESH,
 		.dir = IIO_EV_DIR_RISING,
-		/* Degredation of signal overrange threshold. */
+		/* Degradation of signal overrange threshold. */
 		.mask_separate = BIT(IIO_EV_INFO_VALUE),
 	},
 	{
-		/* Sine/cosine DOS mismatch fault.*/
+		/* Sine/cosine DOS mismatch fault. */
 		.type = IIO_EV_TYPE_MAG,
 		.dir = IIO_EV_DIR_RISING,
 		.mask_separate = BIT(IIO_EV_INFO_VALUE),
@@ -1334,7 +1334,7 @@ static irqreturn_t ad2s1210_trigger_handler(int irq, void *p)
 
 		ret = regmap_read(st->regmap, AD2S1210_REG_FAULT, &reg_val);
 		if (ret < 0)
-			return ret;
+			goto error_ret;
 
 		st->sample.fault = reg_val;
 	}

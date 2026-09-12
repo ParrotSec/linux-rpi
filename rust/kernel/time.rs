@@ -60,7 +60,13 @@ pub fn msecs_to_jiffies(msecs: Msecs) -> Jiffies {
 /// cases the user of the clock has to decide which clock is best suited for the
 /// purpose. In most scenarios clock [`Monotonic`] is the best choice as it
 /// provides a accurate monotonic notion of time (leap second smearing ignored).
-pub trait ClockSource {
+///
+/// # Safety
+///
+/// Implementers must ensure that `ktime_get()` returns a value in the inclusive range
+/// `0..=KTIME_MAX` (i.e., greater than or equal to 0 and less than or equal to
+/// `KTIME_MAX`, where `KTIME_MAX` equals `i64::MAX`).
+pub unsafe trait ClockSource {
     /// The kernel clock ID associated with this clock source.
     ///
     /// This constant corresponds to the C side `clockid_t` value.
@@ -68,7 +74,7 @@ pub trait ClockSource {
 
     /// Get the current time from the clock source.
     ///
-    /// The function must return a value in the range from 0 to `KTIME_MAX`.
+    /// The function must return a value in the range `0..=KTIME_MAX`.
     fn ktime_get() -> bindings::ktime_t;
 }
 
@@ -85,7 +91,9 @@ pub trait ClockSource {
 /// count time that the system is suspended.
 pub struct Monotonic;
 
-impl ClockSource for Monotonic {
+// SAFETY: The kernel's `ktime_get()` is guaranteed to return a value
+// in `0..=KTIME_MAX`.
+unsafe impl ClockSource for Monotonic {
     const ID: bindings::clockid_t = bindings::CLOCK_MONOTONIC as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
@@ -110,7 +118,9 @@ impl ClockSource for Monotonic {
 /// the clock will experience discontinuity around leap second adjustment.
 pub struct RealTime;
 
-impl ClockSource for RealTime {
+// SAFETY: The kernel's `ktime_get_real()` is guaranteed to return a value
+// in `0..=KTIME_MAX`.
+unsafe impl ClockSource for RealTime {
     const ID: bindings::clockid_t = bindings::CLOCK_REALTIME as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
@@ -128,7 +138,9 @@ impl ClockSource for RealTime {
 /// discontinuities if the time is changed using settimeofday(2) or similar.
 pub struct BootTime;
 
-impl ClockSource for BootTime {
+// SAFETY: The kernel's `ktime_get_boottime()` is guaranteed to return a value
+// in `0..=KTIME_MAX`.
+unsafe impl ClockSource for BootTime {
     const ID: bindings::clockid_t = bindings::CLOCK_BOOTTIME as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
@@ -150,7 +162,9 @@ impl ClockSource for BootTime {
 /// The acronym TAI refers to International Atomic Time.
 pub struct Tai;
 
-impl ClockSource for Tai {
+// SAFETY: The kernel's `ktime_get_clocktai()` is guaranteed to return a value
+// in `0..=KTIME_MAX`.
+unsafe impl ClockSource for Tai {
     const ID: bindings::clockid_t = bindings::CLOCK_TAI as bindings::clockid_t;
 
     fn ktime_get() -> bindings::ktime_t {
@@ -363,6 +377,12 @@ impl Delta {
     /// A span of time equal to zero.
     pub const ZERO: Self = Self { nanos: 0 };
 
+    /// Create a new [`Delta`] from a number of nanoseconds.
+    #[inline]
+    pub const fn from_nanos(nanos: i64) -> Self {
+        Self { nanos }
+    }
+
     /// Create a new [`Delta`] from a number of microseconds.
     ///
     /// The `micros` can range from -9_223_372_036_854_775 to 9_223_372_036_854_775.
@@ -421,15 +441,22 @@ impl Delta {
     /// to the value in the [`Delta`].
     #[inline]
     pub fn as_micros_ceil(self) -> i64 {
+        let n = self.as_nanos();
+        let n = if n >= 0 {
+            n.saturating_add(NSEC_PER_USEC - 1)
+        } else {
+            n
+        };
+
         #[cfg(CONFIG_64BIT)]
         {
-            self.as_nanos().saturating_add(NSEC_PER_USEC - 1) / NSEC_PER_USEC
+            n / NSEC_PER_USEC
         }
 
         #[cfg(not(CONFIG_64BIT))]
         // SAFETY: It is always safe to call `ktime_to_us()` with any value.
         unsafe {
-            bindings::ktime_to_us(self.as_nanos().saturating_add(NSEC_PER_USEC - 1))
+            bindings::ktime_to_us(n)
         }
     }
 

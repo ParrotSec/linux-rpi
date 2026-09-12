@@ -114,6 +114,14 @@ static void bucket_table_free(const struct bucket_table *tbl)
 	kvfree(tbl);
 }
 
+static void bucket_table_free_atomic(const struct bucket_table *tbl)
+{
+	if (tbl->nest)
+		nested_bucket_table_free(tbl);
+
+	kvfree_atomic(tbl);
+}
+
 static void bucket_table_free_rcu(struct rcu_head *head)
 {
 	bucket_table_free(container_of(head, struct bucket_table, rcu));
@@ -441,8 +449,31 @@ static void rht_deferred_worker(struct work_struct *work)
 
 	mutex_unlock(&ht->mutex);
 
+	/*
+	 * Re-arm via @run_work, not @run_irq_work.
+	 * rhashtable_free_and_destroy() drains async work as irq_work_sync()
+	 * followed by cancel_work_sync(). If this site queued irq_work while
+	 * cancel_work_sync() was waiting for us, irq_work_sync() would already
+	 * have returned and the stale irq_work could fire post-teardown.
+	 * cancel_work_sync() natively handles self-requeue on @run_work.
+	 */
 	if (err)
 		schedule_work(&ht->run_work);
+}
+
+/*
+ * Insert-path callers can run under a raw spinlock (e.g. an insecure_elasticity
+ * user). Calling schedule_work() under that lock records caller_lock ->
+ * pool->lock -> pi_lock -> rq->__lock, closing a locking cycle if any of
+ * these is acquired in the reverse direction elsewhere. Bounce through
+ * irq_work so the schedule_work() runs with the caller's lock no longer held.
+ */
+static void rht_deferred_irq_work(struct irq_work *irq_work)
+{
+	struct rhashtable *ht = container_of(irq_work, struct rhashtable,
+					     run_irq_work);
+
+	schedule_work(&ht->run_work);
 }
 
 static int rhashtable_insert_rehash(struct rhashtable *ht,
@@ -473,11 +504,11 @@ static int rhashtable_insert_rehash(struct rhashtable *ht,
 
 	err = rhashtable_rehash_attach(ht, tbl, new_tbl);
 	if (err) {
-		bucket_table_free(new_tbl);
+		bucket_table_free_atomic(new_tbl);
 		if (err == -EEXIST)
 			err = 0;
 	} else
-		schedule_work(&ht->run_work);
+		irq_work_queue(&ht->run_irq_work);
 
 	return err;
 
@@ -488,7 +519,7 @@ fail:
 
 	/* Schedule async rehash to retry allocation in process context. */
 	if (err == -ENOMEM)
-		schedule_work(&ht->run_work);
+		irq_work_queue(&ht->run_irq_work);
 
 	return err;
 }
@@ -538,7 +569,7 @@ static void *rhashtable_lookup_one(struct rhashtable *ht,
 		return NULL;
 	}
 
-	if (elasticity <= 0)
+	if (elasticity <= 0 && !ht->p.insecure_elasticity)
 		return ERR_PTR(-EAGAIN);
 
 	return ERR_PTR(-ENOENT);
@@ -568,7 +599,8 @@ static struct bucket_table *rhashtable_insert_one(
 	if (unlikely(rht_grow_above_max(ht, tbl)))
 		return ERR_PTR(-E2BIG);
 
-	if (unlikely(rht_grow_above_100(ht, tbl)))
+	if (unlikely(rht_grow_above_100(ht, tbl)) &&
+	    !ht->p.insecure_elasticity)
 		return ERR_PTR(-EAGAIN);
 
 	head = rht_ptr(bkt, tbl, hash);
@@ -629,7 +661,7 @@ static void *rhashtable_try_insert(struct rhashtable *ht, const void *key,
 			rht_unlock(tbl, bkt, flags);
 
 			if (inserted && rht_grow_above_75(ht, tbl))
-				schedule_work(&ht->run_work);
+				irq_work_queue(&ht->run_irq_work);
 		}
 	} while (!IS_ERR_OR_NULL(new_tbl));
 
@@ -744,6 +776,7 @@ int rhashtable_walk_start_check(struct rhashtable_iter *iter)
 		iter->walker.tbl = rht_dereference_rcu(ht->tbl, ht);
 		iter->slot = 0;
 		iter->skip = 0;
+		iter->p = NULL;
 		return -EAGAIN;
 	}
 
@@ -1025,8 +1058,9 @@ static u32 rhashtable_jhash2(const void *key, u32 length, u32 seed)
  *	.obj_hashfn = my_hash_fn,
  * };
  */
-int rhashtable_init_noprof(struct rhashtable *ht,
-		    const struct rhashtable_params *params)
+int __rhashtable_init_noprof(struct rhashtable *ht,
+		    const struct rhashtable_params *params,
+		    struct lock_class_key *key)
 {
 	struct bucket_table *tbl;
 	size_t size;
@@ -1036,7 +1070,7 @@ int rhashtable_init_noprof(struct rhashtable *ht,
 		return -EINVAL;
 
 	memset(ht, 0, sizeof(*ht));
-	mutex_init(&ht->mutex);
+	mutex_init_with_key(&ht->mutex, key);
 	spin_lock_init(&ht->lock);
 	memcpy(&ht->p, params, sizeof(*params));
 
@@ -1084,10 +1118,11 @@ int rhashtable_init_noprof(struct rhashtable *ht,
 	RCU_INIT_POINTER(ht->tbl, tbl);
 
 	INIT_WORK(&ht->run_work, rht_deferred_worker);
+	init_irq_work(&ht->run_irq_work, rht_deferred_irq_work);
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rhashtable_init_noprof);
+EXPORT_SYMBOL_GPL(__rhashtable_init_noprof);
 
 /**
  * rhltable_init - initialize a new hash list table
@@ -1098,15 +1133,17 @@ EXPORT_SYMBOL_GPL(rhashtable_init_noprof);
  *
  * See documentation for rhashtable_init.
  */
-int rhltable_init_noprof(struct rhltable *hlt, const struct rhashtable_params *params)
+int __rhltable_init_noprof(struct rhltable *hlt,
+			   const struct rhashtable_params *params,
+			   struct lock_class_key *key)
 {
 	int err;
 
-	err = rhashtable_init_noprof(&hlt->ht, params);
+	err = __rhashtable_init_noprof(&hlt->ht, params, key);
 	hlt->ht.rhlist = true;
 	return err;
 }
-EXPORT_SYMBOL_GPL(rhltable_init_noprof);
+EXPORT_SYMBOL_GPL(__rhltable_init_noprof);
 
 static void rhashtable_free_one(struct rhashtable *ht, struct rhash_head *obj,
 				void (*free_fn)(void *ptr, void *arg),
@@ -1122,7 +1159,7 @@ static void rhashtable_free_one(struct rhashtable *ht, struct rhash_head *obj,
 	list = container_of(obj, struct rhlist_head, rhead);
 	do {
 		obj = &list->rhead;
-		list = rht_dereference(list->next, ht);
+		list = rcu_dereference_raw(list->next);
 		free_fn(rht_obj(ht, obj), arg);
 	} while (list);
 }
@@ -1141,6 +1178,11 @@ static void rhashtable_free_one(struct rhashtable *ht, struct rhash_head *obj,
  * This function will eventually sleep to wait for an async resize
  * to complete. The caller is responsible that no further write operations
  * occurs in parallel.
+ *
+ * After cancel_work_sync() has returned, the deferred rehash worker is
+ * quiesced and, per the contract above, no other concurrent access to the
+ * rhashtable is possible. The tables are therefore owned exclusively by
+ * this function and can be walked without ht->mutex held.
  */
 void rhashtable_free_and_destroy(struct rhashtable *ht,
 				 void (*free_fn)(void *ptr, void *arg),
@@ -1149,10 +1191,18 @@ void rhashtable_free_and_destroy(struct rhashtable *ht,
 	struct bucket_table *tbl, *next_tbl;
 	unsigned int i;
 
+	irq_work_sync(&ht->run_irq_work);
 	cancel_work_sync(&ht->run_work);
 
-	mutex_lock(&ht->mutex);
-	tbl = rht_dereference(ht->tbl, ht);
+	/*
+	 * Do NOT take ht->mutex here. The rehash worker establishes
+	 * ht->mutex -> fs_reclaim via GFP_KERNEL bucket allocation under
+	 * the mutex; callers on the reclaim path (e.g. simple_xattr_ht_free()
+	 * from evict() under the dcache shrinker for shmem/kernfs/pidfs
+	 * inodes) would otherwise close a circular dependency
+	 * fs_reclaim -> ht->mutex.
+	 */
+	tbl = rcu_dereference_raw(ht->tbl);
 restart:
 	if (free_fn) {
 		for (i = 0; i < tbl->size; i++) {
@@ -1161,22 +1211,21 @@ restart:
 			cond_resched();
 			for (pos = rht_ptr_exclusive(rht_bucket(tbl, i)),
 			     next = !rht_is_a_nulls(pos) ?
-					rht_dereference(pos->next, ht) : NULL;
+					rcu_dereference_raw(pos->next) : NULL;
 			     !rht_is_a_nulls(pos);
 			     pos = next,
 			     next = !rht_is_a_nulls(pos) ?
-					rht_dereference(pos->next, ht) : NULL)
+					rcu_dereference_raw(pos->next) : NULL)
 				rhashtable_free_one(ht, pos, free_fn, arg);
 		}
 	}
 
-	next_tbl = rht_dereference(tbl->future_tbl, ht);
+	next_tbl = rcu_dereference_raw(tbl->future_tbl);
 	bucket_table_free(tbl);
 	if (next_tbl) {
 		tbl = next_tbl;
 		goto restart;
 	}
-	mutex_unlock(&ht->mutex);
 }
 EXPORT_SYMBOL_GPL(rhashtable_free_and_destroy);
 

@@ -782,28 +782,33 @@ static enum bp_result bios_parser_encoder_control(
 	return bp->cmd_tbl.dig_encoder_control(bp, cntl);
 }
 
+static enum bp_result bios_parser_external_encoder_control(
+	struct dc_bios *dcb,
+	struct bp_external_encoder_control *cntl)
+{
+	struct bios_parser *bp = BP_FROM_DCB(dcb);
+
+	if (!bp->cmd_tbl.external_encoder_control)
+		return BP_RESULT_UNSUPPORTED;
+
+	return bp->cmd_tbl.external_encoder_control(bp, cntl);
+}
+
 static enum bp_result bios_parser_dac_load_detection(
 	struct dc_bios *dcb,
 	enum engine_id engine_id,
-	enum dal_device_type device_type,
-	uint32_t enum_id)
+	struct graphics_object_id ext_enc_id)
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
 	struct dc_context *ctx = dcb->ctx;
 	struct bp_load_detection_parameters bp_params = {0};
-	enum bp_result bp_result;
+	struct bp_external_encoder_control ext_cntl = {0};
+	enum bp_result bp_result = BP_RESULT_UNSUPPORTED;
 	uint32_t bios_0_scratch;
 	uint32_t device_id_mask = 0;
 
-	bp_params.engine_id = engine_id;
-	bp_params.device_id = get_support_mask_for_device_id(device_type, enum_id);
-
-	if (engine_id != ENGINE_ID_DACA &&
-	    engine_id != ENGINE_ID_DACB)
-		return BP_RESULT_UNSUPPORTED;
-
-	if (!bp->cmd_tbl.dac_load_detection)
-		return BP_RESULT_UNSUPPORTED;
+	bp_params.device_id = get_support_mask_for_device_id(
+		DEVICE_TYPE_CRT, engine_id == ENGINE_ID_DACB ? 2 : 1);
 
 	if (bp_params.device_id == ATOM_DEVICE_CRT1_SUPPORT)
 		device_id_mask = ATOM_S0_CRT1_MASK;
@@ -817,7 +822,20 @@ static enum bp_result bios_parser_dac_load_detection(
 	bios_0_scratch &= ~device_id_mask;
 	dm_write_reg(ctx, bp->base.regs->BIOS_SCRATCH_0, bios_0_scratch);
 
-	bp_result = bp->cmd_tbl.dac_load_detection(bp, &bp_params);
+	if (engine_id == ENGINE_ID_DACA || engine_id == ENGINE_ID_DACB) {
+		if (!bp->cmd_tbl.dac_load_detection)
+			return BP_RESULT_UNSUPPORTED;
+
+		bp_params.engine_id = engine_id;
+		bp_result = bp->cmd_tbl.dac_load_detection(bp, &bp_params);
+	} else if (ext_enc_id.id) {
+		if (!bp->cmd_tbl.external_encoder_control)
+			return BP_RESULT_UNSUPPORTED;
+
+		ext_cntl.action = EXTERNAL_ENCODER_CONTROL_DAC_LOAD_DETECT;
+		ext_cntl.encoder_id = ext_enc_id;
+		bp_result = bp->cmd_tbl.external_encoder_control(bp, &ext_cntl);
+	}
 
 	if (bp_result != BP_RESULT_OK)
 		return bp_result;
@@ -2020,7 +2038,7 @@ static enum bp_result get_gpio_i2c_info(struct bios_parser *bp,
 	count = (le16_to_cpu(header->sHeader.usStructureSize)
 			- sizeof(ATOM_COMMON_TABLE_HEADER))
 				/ sizeof(ATOM_GPIO_I2C_ASSIGMENT);
-	if (count < record->sucI2cId.bfI2C_LineMux)
+	if (count <= record->sucI2cId.bfI2C_LineMux)
 		return BP_RESULT_BADBIOSTABLE;
 
 	/* get the GPIO_I2C_INFO */
@@ -2753,6 +2771,7 @@ static enum bp_result update_slot_layout_info(struct dc_bios *dcb,
 					      struct slot_layout_info *slot_layout_info,
 					      unsigned int record_offset)
 {
+	(void)i;
 	unsigned int j;
 	unsigned int n;
 	struct bios_parser *bp;
@@ -2978,6 +2997,8 @@ static const struct dc_vbios_funcs vbios_funcs = {
 	.select_crtc_source = bios_parser_select_crtc_source,
 
 	.encoder_control = bios_parser_encoder_control,
+
+	.external_encoder_control = bios_parser_external_encoder_control,
 
 	.dac_load_detection = bios_parser_dac_load_detection,
 

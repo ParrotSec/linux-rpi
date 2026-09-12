@@ -231,6 +231,10 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	for (i = 0; i < exec_params.hdr.e_phnum; i++, phdr++) {
 		switch (phdr->p_type) {
 		case PT_INTERP:
+			/* elf ABI allows only one interpreter */
+			if (interpreter_name)
+				continue;
+
 			retval = -ENOMEM;
 			if (phdr->p_filesz > PATH_MAX)
 				goto error;
@@ -917,7 +921,7 @@ static int elf_fdpic_map_file(struct elf_fdpic_params *params,
 	return 0;
 
 dynamic_error:
-	printk("ELF FDPIC %s with invalid DYNAMIC section (inode=%lu)\n",
+	printk("ELF FDPIC %s with invalid DYNAMIC section (inode=%llu)\n",
 	       what, file_inode(file)->i_ino);
 	return -ELIBBAD;
 }

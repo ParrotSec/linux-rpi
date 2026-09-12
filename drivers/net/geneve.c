@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <linux/etherdevice.h>
 #include <linux/hash.h>
-#include <net/ipv6_stubs.h>
 #include <net/dst_metadata.h>
 #include <net/gro_cells.h>
 #include <net/rtnetlink.h>
@@ -44,8 +43,17 @@ MODULE_PARM_DESC(log_ecn_error, "Log packets received with corrupted ECN");
 #define GENEVE_OPT_GRO_HINT_LEN		1
 
 struct geneve_opt_gro_hint {
+#if defined(__LITTLE_ENDIAN_BITFIELD)
 	u8	inner_proto_id:2,
-		nested_is_v6:1;
+		nested_is_v6:1,
+		rsvd:5;
+#elif defined(__BIG_ENDIAN_BITFIELD)
+	u8	rsvd:5,
+		nested_is_v6:1,
+		inner_proto_id:2;
+#else
+#error "Please fix <asm/byteorder.h>"
+#endif
 	u8	nested_nh_offset;
 	u8	nested_tp_offset;
 	u8	nested_hdr_len;
@@ -577,6 +585,7 @@ static int geneve_post_decap_hint(const struct sock *sk, struct sk_buff *skb,
 	struct iphdr *iph;
 	struct udphdr *uh;
 	__be16 p;
+	int err;
 
 	hint_off = geneve_sk_gro_hint_off(sk, *geneveh, &p, &len);
 	if (!hint_off)
@@ -601,11 +610,19 @@ static int geneve_post_decap_hint(const struct sock *sk, struct sk_buff *skb,
 		     !geneve_opt_gro_hint_validate(skb->data, gro_hint)))
 		return -EINVAL;
 
+	total_len = skb->len - gro_hint->nested_nh_offset;
+	if (total_len >= GRO_LEGACY_MAX_SIZE)
+		return -E2BIG;
+
+	err = skb_ensure_writable(skb, gro_hint->nested_tp_offset + sizeof(*uh));
+	if (unlikely(err))
+		return err;
+
+	*geneveh = geneve_hdr(skb);
+	gro_hint = geneve_opt_gro_hint(*geneveh, hint_off);
+
 	ipv6h = (void *)skb->data + gro_hint->nested_nh_offset;
 	iph = (struct iphdr *)ipv6h;
-	total_len = skb->len - gro_hint->nested_nh_offset;
-	if (total_len > GRO_LEGACY_MAX_SIZE)
-		return -E2BIG;
 
 	/*
 	 * After stripping the outer encap, the packet still carries a
@@ -949,13 +966,27 @@ static int geneve_gro_complete(struct sock *sk, struct sk_buff *skb,
 	struct genevehdr *gh;
 	struct packet_offload *ptype;
 	__be16 type;
-	int gh_len;
+	unsigned int gh_len;
 	int err = -ENOSYS;
 
 	gh = (struct genevehdr *)(skb->data + nhoff);
 	gh_len = geneve_hlen(gh);
 	type = gh->proto_type;
-	geneve_opt_gro_hint_off(gh, &type, &gh_len);
+	geneve_sk_gro_hint_off(sk, gh, &type, &gh_len);
+
+	/* Bail out if we are about to dispatch past the inner network header
+	 * gro_receive() validated. An inner VLAN tag only pushes
+	 * inner_network_offset out, so use a lower bound.
+	 */
+	if (skb->encapsulation) {
+		unsigned int inner_nh = nhoff + gh_len;
+
+		if (type == htons(ETH_P_TEB))
+			inner_nh += ETH_HLEN;
+
+		if (unlikely(inner_nh > NAPI_GRO_CB(skb)->inner_network_offset))
+			return -EINVAL;
+	}
 
 	/* since skb->encapsulation is set, eth_gro_complete() sets the inner mac header */
 	if (likely(type == htons(ETH_P_TEB)))
@@ -1007,7 +1038,7 @@ static struct geneve_sock *geneve_socket_create(struct net *net, __be16 port,
 	tunnel_cfg.encap_rcv = geneve_udp_encap_recv;
 	tunnel_cfg.encap_err_lookup = geneve_udp_encap_err_lookup;
 	tunnel_cfg.encap_destroy = NULL;
-	setup_udp_tunnel_sock(net, sock, &tunnel_cfg);
+	setup_udp_tunnel_sock(net, sock->sk, &tunnel_cfg);
 	list_add(&gs->list, &gn->sock_list);
 	return gs;
 }
@@ -1019,7 +1050,7 @@ static void __geneve_sock_release(struct geneve_sock *gs)
 
 	list_del(&gs->list);
 	udp_tunnel_notify_del_rx_port(gs->sock, UDP_TUNNEL_TYPE_GENEVE);
-	udp_tunnel_sock_release(gs->sock);
+	udp_tunnel_sock_release(gs->sock->sk);
 	kfree_rcu(gs, rcu);
 }
 
@@ -2219,6 +2250,9 @@ static int geneve_changelink(struct net_device *dev, struct nlattr *tb[],
 	struct geneve_sock *gs4, *gs6;
 	struct geneve_config cfg;
 	int err;
+
+	if (!rtnl_dev_link_net_capable(dev, geneve->net))
+		return -EPERM;
 
 	/* If the geneve device is configured for metadata (or externally
 	 * controlled, for example, OVS), then nothing can be changed.

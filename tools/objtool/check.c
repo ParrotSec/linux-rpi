@@ -211,6 +211,7 @@ static bool is_rust_noreturn(const struct symbol *func)
 	       str_ends_with(func->name, "_4core9panicking18panic_nounwind_fmt")			||
 	       str_ends_with(func->name, "_4core9panicking19assert_failed_inner")			||
 	       str_ends_with(func->name, "_4core9panicking30panic_null_pointer_dereference")		||
+	       str_ends_with(func->name, "_4core9panicking32panic_null_reference_constructed")		||
 	       str_ends_with(func->name, "_4core9panicking36panic_misaligned_pointer_dereference")	||
 	       str_ends_with(func->name, "_7___rustc17rust_begin_unwind")				||
 	       strstr(func->name, "_4core9panicking13assert_failed")					||
@@ -4306,8 +4307,8 @@ static int validate_retpoline(struct objtool_file *file)
 	list_for_each_entry(insn, &file->retpoline_call_list, call_node) {
 		struct symbol *sym = insn->sym;
 
-		if (sym && (sym->type == STT_NOTYPE ||
-			    sym->type == STT_FUNC) && !sym->nocfi) {
+		if (sym && (is_notype_sym(sym) ||
+			    is_func_sym(sym)) && !sym->nocfi) {
 			struct instruction *prev =
 				prev_insn_same_sym(file, insn);
 

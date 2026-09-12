@@ -478,16 +478,16 @@ static int adm1275_read_byte_data(struct i2c_client *client, int page, int reg)
 }
 
 static const struct i2c_device_id adm1275_id[] = {
-	{ "adm1075", adm1075 },
-	{ "adm1272", adm1272 },
-	{ "adm1273", adm1273 },
-	{ "adm1275", adm1275 },
-	{ "adm1276", adm1276 },
-	{ "adm1278", adm1278 },
-	{ "adm1281", adm1281 },
-	{ "adm1293", adm1293 },
-	{ "adm1294", adm1294 },
-	{ "mc09c", sq24905c },
+	{ .name = "adm1075", .driver_data = adm1075 },
+	{ .name = "adm1272", .driver_data = adm1272 },
+	{ .name = "adm1273", .driver_data = adm1273 },
+	{ .name = "adm1275", .driver_data = adm1275 },
+	{ .name = "adm1276", .driver_data = adm1276 },
+	{ .name = "adm1278", .driver_data = adm1278 },
+	{ .name = "adm1281", .driver_data = adm1281 },
+	{ .name = "adm1293", .driver_data = adm1293 },
+	{ .name = "adm1294", .driver_data = adm1294 },
+	{ .name = "mc09c", .driver_data = sq24905c },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adm1275_id);
@@ -512,7 +512,7 @@ static int adm1275_enable_vout_temp(struct adm1275_data *data,
 static int adm1275_probe(struct i2c_client *client)
 {
 	s32 (*config_read_fn)(const struct i2c_client *client, u8 reg);
-	u8 block_buffer[I2C_SMBUS_BLOCK_MAX + 1];
+	u8 block_buffer[I2C_SMBUS_BLOCK_MAX + 1] = {0};
 	int config, device_config;
 	int ret;
 	struct pmbus_driver_info *info;

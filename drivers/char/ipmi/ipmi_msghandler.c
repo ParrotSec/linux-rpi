@@ -987,7 +987,7 @@ static int deliver_response(struct ipmi_smi *intf, struct ipmi_recv_msg *msg)
 		mutex_lock(&intf->user_msgs_mutex);
 		list_add_tail(&msg->link, &intf->user_msgs);
 		mutex_unlock(&intf->user_msgs_mutex);
-		queue_work(system_wq, &intf->smi_work);
+		queue_work(system_percpu_wq, &intf->smi_work);
 	}
 
 	return rv;
@@ -2347,6 +2347,10 @@ static int i_ipmi_request(struct ipmi_user     *user,
 		if (smi_msg == NULL) {
 			if (!supplied_recv)
 				ipmi_free_recv_msg(recv_msg);
+			else if (recv_msg->user) {
+				atomic_dec(&recv_msg->user->nr_msgs);
+				kref_put(&recv_msg->user->refcount, free_ipmi_user);
+			}
 			return -ENOMEM;
 		}
 	}
@@ -2420,6 +2424,10 @@ out_err:
 			ipmi_free_smi_msg(smi_msg);
 		if (!supplied_recv)
 			ipmi_free_recv_msg(recv_msg);
+		else if (recv_msg->user) {
+			atomic_dec(&recv_msg->user->nr_msgs);
+			kref_put(&recv_msg->user->refcount, free_ipmi_user);
+		}
 	}
 	return rv;
 }
@@ -4477,10 +4485,8 @@ static int handle_read_event_rsp(struct ipmi_smi *intf,
 			mutex_unlock(&intf->users_mutex);
 			list_for_each_entry_safe(recv_msg, recv_msg2, &msgs,
 						 link) {
-				user = recv_msg->user;
 				list_del(&recv_msg->link);
 				ipmi_free_recv_msg(recv_msg);
-				kref_put(&user->refcount, free_ipmi_user);
 			}
 			/*
 			 * We couldn't allocate memory for the
@@ -4977,7 +4983,7 @@ void ipmi_smi_msg_received(struct ipmi_smi *intf,
 	if (run_to_completion)
 		smi_work(&intf->smi_work);
 	else
-		queue_work(system_wq, &intf->smi_work);
+		queue_work(system_percpu_wq, &intf->smi_work);
 }
 EXPORT_SYMBOL(ipmi_smi_msg_received);
 
@@ -4987,7 +4993,7 @@ void ipmi_smi_watchdog_pretimeout(struct ipmi_smi *intf)
 		return;
 
 	atomic_set(&intf->watchdog_pretimeouts_to_deliver, 1);
-	queue_work(system_wq, &intf->smi_work);
+	queue_work(system_percpu_wq, &intf->smi_work);
 }
 EXPORT_SYMBOL(ipmi_smi_watchdog_pretimeout);
 
@@ -5162,7 +5168,7 @@ static bool ipmi_timeout_handler(struct ipmi_smi *intf,
 				       flags);
 	}
 
-	queue_work(system_wq, &intf->smi_work);
+	queue_work(system_percpu_wq, &intf->smi_work);
 
 	return need_timer;
 }
@@ -5218,7 +5224,7 @@ static void ipmi_timeout(struct timer_list *unused)
 	if (atomic_read(&stop_operation))
 		return;
 
-	queue_work(system_wq, &ipmi_timer_work);
+	queue_work(system_percpu_wq, &ipmi_timer_work);
 }
 
 static void need_waiter(struct ipmi_smi *intf)

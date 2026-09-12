@@ -105,6 +105,9 @@ static void liveupdate_test_init(void)
 			pr_err("liveupdate_flb_get_incoming for %s failed: %pe\n",
 			       flb->compatible, ERR_PTR(err));
 		}
+
+		if (!err)
+			liveupdate_flb_put_incoming(flb);
 	}
 	initialized = true;
 }
@@ -132,24 +135,6 @@ void liveupdate_test_register(struct liveupdate_file_handler *fh)
 	}
 
 	pr_info("Registered %d FLBs with file handler: [%s]\n",
-		TEST_NFLBS, fh->compatible);
-}
-
-void liveupdate_test_unregister(struct liveupdate_file_handler *fh)
-{
-	int err, i;
-
-	for (i = 0; i < TEST_NFLBS; i++) {
-		struct liveupdate_flb *flb = &test_flbs[i];
-
-		err = liveupdate_unregister_flb(fh, flb);
-		if (err) {
-			pr_err("Failed to unregister %s %pe\n",
-			       flb->compatible, ERR_PTR(err));
-		}
-	}
-
-	pr_info("Unregistered %d FLBs from file handler: [%s]\n",
 		TEST_NFLBS, fh->compatible);
 }
 

@@ -80,7 +80,7 @@ const struct fs_parameter_spec smb3_fs_parameters[] = {
 	fsparam_flag_no("forcegid", Opt_forcegid),
 	fsparam_flag("noblocksend", Opt_noblocksend),
 	fsparam_flag("noautotune", Opt_noautotune),
-	fsparam_flag("nolease", Opt_nolease),
+	fsparam_flag_no("lease", Opt_lease),
 	fsparam_flag_no("hard", Opt_hard),
 	fsparam_flag_no("soft", Opt_soft),
 	fsparam_flag_no("perm", Opt_perm),
@@ -420,7 +420,7 @@ static int parse_symlink_flavor(struct fs_context *fc, char *value,
 #define DUP_CTX_STR(field)						\
 do {									\
 	if (ctx->field) {						\
-		new_ctx->field = kstrdup(ctx->field, GFP_ATOMIC);	\
+		new_ctx->field = kstrdup(ctx->field, GFP_KERNEL);	\
 		if (new_ctx->field == NULL) {				\
 			smb3_cleanup_fs_context_contents(new_ctx);	\
 			return -ENOMEM;					\
@@ -536,37 +536,6 @@ cifs_parse_smb_version(struct fs_context *fc, char *value, struct smb3_fs_contex
 	return 0;
 }
 
-int smb3_parse_opt(const char *options, const char *key, char **val)
-{
-	int rc = -ENOENT;
-	char *opts, *orig, *p;
-
-	orig = opts = kstrdup(options, GFP_KERNEL);
-	if (!opts)
-		return -ENOMEM;
-
-	while ((p = strsep(&opts, ","))) {
-		char *nval;
-
-		if (!*p)
-			continue;
-		if (strncasecmp(p, key, strlen(key)))
-			continue;
-		nval = strchr(p, '=');
-		if (nval) {
-			if (nval == p)
-				continue;
-			*nval++ = 0;
-			*val = kstrdup(nval, GFP_KERNEL);
-			rc = !*val ? -ENOMEM : 0;
-			goto out;
-		}
-	}
-out:
-	kfree(orig);
-	return rc;
-}
-
 /*
  * Remove duplicate path delimiters. Windows is supposed to do that
  * but there are some bugs that prevent rename from working if there are
@@ -662,13 +631,17 @@ smb3_parse_devname(const char *devname, struct smb3_fs_context *ctx)
 
 	/* make sure we have a valid UNC double delimiter prefix */
 	len = strspn(devname, delims);
-	if (len != 2)
+	if (len != 2) {
+		cifs_dbg(VFS, "UNC: path must begin with // or \\\\\n");
 		return -EINVAL;
+	}
 
 	/* find delimiter between host and sharename */
 	pos = strpbrk(devname + 2, delims);
-	if (!pos)
+	if (!pos) {
+		cifs_dbg(VFS, "UNC: missing delimiter between hostname and share name\n");
 		return -EINVAL;
+	}
 
 	/* record the server hostname */
 	kfree(ctx->server_hostname);
@@ -681,8 +654,10 @@ smb3_parse_devname(const char *devname, struct smb3_fs_context *ctx)
 
 	/* now go until next delimiter or end of string */
 	len = strcspn(pos, delims);
-	if (!len)
+	if (!len) {
+		cifs_dbg(VFS, "UNC: missing share name\n");
 		return -EINVAL;
+	}
 
 	/* move "pos" up to delimiter or NULL */
 	pos += len;
@@ -718,6 +693,41 @@ static int smb3_handle_conflicting_options(struct fs_context *fc)
 {
 	struct smb3_fs_context *ctx = smb3_fc2context(fc);
 
+	if (ctx->rdma && ctx->vals->protocol_id < SMB30_PROT_ID) {
+		cifs_errorf(fc, "SMB Direct requires Version >=3.0\n");
+		return -EOPNOTSUPP;
+	}
+
+	if (ctx->multiuser && !IS_ENABLED(CONFIG_KEYS)) {
+		cifs_errorf(fc, "Multiuser mounts require kernels with CONFIG_KEYS enabled\n");
+		return -EOPNOTSUPP;
+	}
+
+	if (ctx->multiuser && ctx->upcall_target == UPTARGET_MOUNT) {
+		cifs_errorf(fc, "multiuser mount option not supported with upcalltarget set as 'mount'\n");
+		return -EINVAL;
+	}
+
+	if (ctx->uid_specified && !ctx->forceuid_specified) {
+		ctx->override_uid = 1;
+		pr_notice("enabling forceuid mount option implicitly because uid= option is specified\n");
+	}
+
+	if (ctx->gid_specified && !ctx->forcegid_specified) {
+		ctx->override_gid = 1;
+		pr_notice("enabling forcegid mount option implicitly because gid= option is specified\n");
+	}
+
+	if (ctx->override_uid && !ctx->uid_specified) {
+		ctx->override_uid = 0;
+		pr_notice("ignoring forceuid mount option specified with no uid= option\n");
+	}
+
+	if (ctx->override_gid && !ctx->gid_specified) {
+		ctx->override_gid = 0;
+		pr_notice("ignoring forcegid mount option specified with no gid= option\n");
+	}
+
 	if (ctx->multichannel_specified) {
 		if (ctx->multichannel) {
 			if (!ctx->max_channels_specified) {
@@ -736,19 +746,14 @@ static int smb3_handle_conflicting_options(struct fs_context *fc)
 				return -EINVAL;
 			}
 		}
-	} else {
-		if (ctx->max_channels_specified) {
-			if (ctx->max_channels > 1)
-				ctx->multichannel = true;
-			else
-				ctx->multichannel = false;
-		} else {
+	} else if (ctx->max_channels_specified) {
+		if (ctx->max_channels > 1)
+			ctx->multichannel = true;
+		else
 			ctx->multichannel = false;
-			ctx->max_channels = 1;
-		}
 	}
 
-	//resetting default values as remount doesn't initialize fs_context again
+	/* clear parse-time latches so they don't persist across remounts */
 	ctx->multichannel_specified = false;
 	ctx->max_channels_specified = false;
 
@@ -829,28 +834,23 @@ static int smb3_fs_context_parse_monolithic(struct fs_context *fc,
 		if (ret < 0)
 			break;
 	}
-	return ret ?: smb3_handle_conflicting_options(fc);
+	return ret;
 }
 
 /*
- * Validate the preparsed information in the config.
+ * smb3_fs_context_validate - check initial-mount-only constraints:
+ * UNC presence, address resolution, dialect warnings
+ *
+ * @fc: generic mount context
  */
 static int smb3_fs_context_validate(struct fs_context *fc)
 {
 	struct smb3_fs_context *ctx = smb3_fc2context(fc);
+	int rc;
 
-	if (ctx->rdma && ctx->vals->protocol_id < SMB30_PROT_ID) {
-		cifs_errorf(fc, "SMB Direct requires Version >=3.0\n");
-		return -EOPNOTSUPP;
-	}
-
-#ifndef CONFIG_KEYS
-	/* Muliuser mounts require CONFIG_KEYS support */
-	if (ctx->multiuser) {
-		cifs_errorf(fc, "Multiuser mounts require kernels with CONFIG_KEYS enabled\n");
-		return -1;
-	}
-#endif
+	rc = smb3_handle_conflicting_options(fc);
+	if (rc)
+		return rc;
 
 	if (ctx->got_version == false)
 		pr_warn_once("No dialect specified on mount. Default has changed to a more secure dialect, SMB2.1 or later (e.g. SMB3.1.1), from CIFS (SMB1). To use the less secure SMB1 dialect to access old servers which do not support SMB3.1.1 (or even SMB3 or SMB2.1) specify vers=1.0 on mount.\n");
@@ -884,26 +884,6 @@ static int smb3_fs_context_validate(struct fs_context *fc)
 
 	/* set the port that we got earlier */
 	cifs_set_port((struct sockaddr *)&ctx->dstaddr, ctx->port);
-
-	if (ctx->uid_specified && !ctx->forceuid_specified) {
-		ctx->override_uid = 1;
-		pr_notice("enabling forceuid mount option implicitly because uid= option is specified\n");
-	}
-
-	if (ctx->gid_specified && !ctx->forcegid_specified) {
-		ctx->override_gid = 1;
-		pr_notice("enabling forcegid mount option implicitly because gid= option is specified\n");
-	}
-
-	if (ctx->override_uid && !ctx->uid_specified) {
-		ctx->override_uid = 0;
-		pr_notice("ignoring forceuid mount option specified with no uid= option\n");
-	}
-
-	if (ctx->override_gid && !ctx->gid_specified) {
-		ctx->override_gid = 0;
-		pr_notice("ignoring forcegid mount option specified with no gid= option\n");
-	}
 
 	return 0;
 }
@@ -1100,6 +1080,10 @@ static int smb3_reconfigure(struct fs_context *fc)
 		need_recon = true;
 
 	rc = smb3_verify_reconfigure_ctx(fc, ctx, cifs_sb->ctx, need_recon);
+	if (rc)
+		return rc;
+
+	rc = smb3_handle_conflicting_options(fc);
 	if (rc)
 		return rc;
 
@@ -1389,8 +1373,8 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 	case Opt_noautotune:
 		ctx->noautotune = 1;
 		break;
-	case Opt_nolease:
-		ctx->no_lease = 1;
+	case Opt_lease:
+		ctx->no_lease = result.negated;
 		break;
 	case Opt_nosparse:
 		ctx->no_sparse = 1;
@@ -1957,11 +1941,6 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		break;
 	}
 	/* case Opt_ignore: - is ignored as expected ... */
-
-	if (ctx->multiuser && ctx->upcall_target == UPTARGET_MOUNT) {
-		cifs_errorf(fc, "multiuser mount option not supported with upcalltarget set as 'mount'\n");
-		goto cifs_parse_mount_err;
-	}
 
 	return 0;
 

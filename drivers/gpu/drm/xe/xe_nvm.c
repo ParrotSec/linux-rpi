@@ -6,7 +6,7 @@
 #include <linux/intel_dg_nvm_aux.h>
 #include <linux/pci.h>
 
-#include "xe_device_types.h"
+#include "xe_device.h"
 #include "xe_mmio.h"
 #include "xe_nvm.h"
 #include "xe_pcode_api.h"
@@ -60,35 +60,40 @@ static bool xe_nvm_writable_override(struct xe_device *xe)
 	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
 	bool writable_override;
 	struct xe_reg reg;
-	u32 test_bit;
+	u32 test_bit, test_val;
 
 	switch (xe->info.platform) {
 	case XE_CRESCENTISLAND:
 		reg = PCODE_SCRATCH(0);
 		test_bit = FDO_MODE;
+		test_val = FDO_MODE;
 		break;
 	case XE_BATTLEMAGE:
 		reg = HECI_FWSTS2(DG2_GSC_HECI2_BASE);
 		test_bit = HECI_FW_STATUS_2_NVM_ACCESS_MODE;
+		test_val = 0;
 		break;
 	case XE_PVC:
 		reg = HECI_FWSTS2(PVC_GSC_HECI2_BASE);
 		test_bit = HECI_FW_STATUS_2_NVM_ACCESS_MODE;
+		test_val = 0;
 		break;
 	case XE_DG2:
 		reg = HECI_FWSTS2(DG2_GSC_HECI2_BASE);
 		test_bit = HECI_FW_STATUS_2_NVM_ACCESS_MODE;
+		test_val = 0;
 		break;
 	case XE_DG1:
 		reg = HECI_FWSTS2(DG1_GSC_HECI2_BASE);
 		test_bit = HECI_FW_STATUS_2_NVM_ACCESS_MODE;
+		test_val = 0;
 		break;
 	default:
 		drm_err(&xe->drm, "Unknown platform\n");
 		return true;
 	}
 
-	writable_override = !(xe_mmio_read32(mmio, reg) & test_bit);
+	writable_override = (xe_mmio_read32(mmio, reg) & test_bit) == test_val;
 	if (writable_override)
 		drm_info(&xe->drm, "NVM access overridden by jumper\n");
 	return writable_override;
@@ -133,11 +138,9 @@ int xe_nvm_init(struct xe_device *xe)
 	if (WARN_ON(xe->nvm))
 		return -EFAULT;
 
-	xe->nvm = kzalloc_obj(*nvm);
-	if (!xe->nvm)
+	nvm = kzalloc_obj(*nvm);
+	if (!nvm)
 		return -ENOMEM;
-
-	nvm = xe->nvm;
 
 	nvm->writable_override = xe_nvm_writable_override(xe);
 	nvm->non_posted_erase = xe_nvm_non_posted_erase(xe);
@@ -165,7 +168,6 @@ int xe_nvm_init(struct xe_device *xe)
 	if (ret) {
 		drm_err(&xe->drm, "xe-nvm aux init failed %d\n", ret);
 		kfree(nvm);
-		xe->nvm = NULL;
 		return ret;
 	}
 
@@ -173,8 +175,9 @@ int xe_nvm_init(struct xe_device *xe)
 	if (ret) {
 		drm_err(&xe->drm, "xe-nvm aux add failed %d\n", ret);
 		auxiliary_device_uninit(aux_dev);
-		xe->nvm = NULL;
 		return ret;
 	}
+
+	xe->nvm = nvm;
 	return devm_add_action_or_reset(xe->drm.dev, xe_nvm_fini, xe);
 }

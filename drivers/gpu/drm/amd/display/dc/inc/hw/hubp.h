@@ -243,7 +243,6 @@ struct hubp_funcs {
 	void (*hubp_disable_control)(struct hubp *hubp, bool disable_hubp);
 	unsigned int (*hubp_get_underflow_status)(struct hubp *hubp);
 	void (*hubp_init)(struct hubp *hubp);
-
 	void (*dmdata_set_attributes)(
 			struct hubp *hubp,
 			const struct dc_dmdata_attributes *attr);

@@ -50,6 +50,8 @@ static bool bnxt_auxdev_is_active(struct bnxt *bp, int idx)
 
 static struct bnxt_aux_device bnxt_aux_devices[__BNXT_AUXDEV_MAX] = {{
 	.name		= "rdma",
+}, {
+	.name		= "fwctl",
 }};
 
 static void bnxt_fill_msix_vecs(struct bnxt *bp, struct bnxt_msix_entry *ent)
@@ -173,8 +175,14 @@ int bnxt_register_dev(struct bnxt_en_dev *edev,
 	ulp->handle = handle;
 	rcu_assign_pointer(ulp->ulp_ops, ulp_ops);
 
-	if (test_bit(BNXT_STATE_OPEN, &bp->state))
-		bnxt_hwrm_vnic_cfg(bp, &bp->vnic_info[BNXT_VNIC_DEFAULT]);
+	if (test_bit(BNXT_STATE_OPEN, &bp->state)) {
+		rc = bnxt_hwrm_vnic_cfg(bp, &bp->vnic_info[BNXT_VNIC_DEFAULT]);
+		if (rc) {
+			netdev_err(dev, "Failed to configure dual VNIC mode\n");
+			RCU_INIT_POINTER(ulp->ulp_ops, NULL);
+			goto exit;
+		}
+	}
 
 	edev->ulp_tbl->msix_requested = bnxt_get_ulp_msix_num(bp);
 
@@ -278,6 +286,11 @@ void bnxt_ulp_stop(struct bnxt *bp)
 		aux_priv = bp->aux_priv[i];
 		edev = bp->edev[i];
 		mutex_lock(&edev->en_dev_lock);
+		if (i == BNXT_AUXDEV_FWCTL) {
+			edev->flags |= BNXT_EN_FLAG_ULP_STOPPED;
+			mutex_unlock(&edev->en_dev_lock);
+			continue;
+		}
 		if (!bnxt_ulp_registered(edev) ||
 		    (edev->flags & BNXT_EN_FLAG_ULP_STOPPED)) {
 			mutex_unlock(&edev->en_dev_lock);
@@ -316,7 +329,7 @@ void bnxt_ulp_start(struct bnxt *bp)
 		aux_priv = bp->aux_priv[i];
 		edev = bp->edev[i];
 		mutex_lock(&edev->en_dev_lock);
-		if (!bnxt_ulp_registered(edev) ||
+		if (i == BNXT_AUXDEV_FWCTL || !bnxt_ulp_registered(edev) ||
 		    !(edev->flags & BNXT_EN_FLAG_ULP_STOPPED)) {
 			goto clear_flag_continue;
 		}
@@ -520,7 +533,8 @@ void bnxt_aux_devices_add(struct bnxt *bp)
 			aux_dev = &bp->aux_priv[idx]->aux_dev;
 			rc = auxiliary_device_add(aux_dev);
 			if (rc) {
-				netdev_warn(bp->dev, "Failed to add auxiliary device for ROCE\n");
+				netdev_warn(bp->dev, "Failed to add auxiliary device for auxdev type %d\n",
+					    idx);
 				auxiliary_device_uninit(aux_dev);
 				if (idx == BNXT_AUXDEV_RDMA)
 					bp->flags &= ~BNXT_FLAG_ROCE_CAP;
@@ -552,6 +566,18 @@ void bnxt_aux_devices_init(struct bnxt *bp)
 		if (!aux_priv)
 			goto next_auxdev;
 
+		edev = kzalloc_obj(*edev);
+		if (!edev)
+			goto aux_priv_free;
+		aux_priv->edev = edev;
+		bnxt_set_edev_info(edev, bp);
+
+		ulp = kzalloc_obj(*ulp);
+		if (!ulp)
+			goto edev_free;
+		edev->ulp_tbl = ulp;
+		aux_priv->id = idx;
+
 		aux_dev = &aux_priv->aux_dev;
 		aux_dev->id = bp->auxdev_id;
 		aux_dev->name = bnxt_aux_devices[idx].name;
@@ -559,37 +585,26 @@ void bnxt_aux_devices_init(struct bnxt *bp)
 		aux_dev->dev.release = bnxt_aux_dev_release;
 
 		rc = auxiliary_device_init(aux_dev);
-		if (rc) {
-			kfree(aux_priv);
-			goto next_auxdev;
-		}
+		if (rc)
+			goto ulp_free;
 		bp->aux_priv[idx] = aux_priv;
 
 		/* From this point, all cleanup will happen via the .release
 		 * callback & any error unwinding will need to include a call
 		 * to auxiliary_device_uninit.
 		 */
-		edev = kzalloc_obj(*edev);
-		if (!edev)
-			goto aux_dev_uninit;
-
-		aux_priv->edev = edev;
-		bnxt_set_edev_info(edev, bp);
-
-		ulp = kzalloc_obj(*ulp);
-		if (!ulp)
-			goto aux_dev_uninit;
-
-		edev->ulp_tbl = ulp;
 		bp->edev[idx] = edev;
 		if (idx == BNXT_AUXDEV_RDMA)
 			bp->ulp_num_msix_want = bnxt_set_dflt_ulp_msix(bp);
-		aux_priv->id = idx;
 		bnxt_auxdev_set_state(bp, idx, BNXT_ADEV_STATE_INIT);
 
 		continue;
-aux_dev_uninit:
-		auxiliary_device_uninit(aux_dev);
+ulp_free:
+		kfree(ulp);
+edev_free:
+		kfree(edev);
+aux_priv_free:
+		kfree(aux_priv);
 next_auxdev:
 		if (idx == BNXT_AUXDEV_RDMA)
 			bp->flags &= ~BNXT_FLAG_ROCE_CAP;

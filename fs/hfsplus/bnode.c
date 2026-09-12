@@ -25,6 +25,8 @@ void hfs_bnode_read(struct hfs_bnode *node, void *buf, u32 off, u32 len)
 	struct page **pagep;
 	u32 l;
 
+	memset(buf, 0, len);
+
 	if (!is_bnode_offset_valid(node, off))
 		return;
 
@@ -420,7 +422,10 @@ void hfs_bnode_unlink(struct hfs_bnode *node)
 		tree->root = 0;
 		tree->depth = 0;
 	}
+
+	spin_lock(&tree->hash_lock);
 	set_bit(HFS_BNODE_DELETED, &node->flags);
+	spin_unlock(&tree->hash_lock);
 }
 
 static inline int hfs_bnode_hash(u32 num)

@@ -126,6 +126,9 @@ struct xe_oa_gt {
 
 	/** @oa_unit: array of oa_units */
 	struct xe_oa_unit *oa_unit;
+
+	/** @whitelist_count: number of open streams for which oa registers are whitelisted */
+	u32 whitelist_count;
 };
 
 /**
@@ -238,9 +241,6 @@ struct xe_oa_stream {
 
 	/** @poll_period_ns: hrtimer period for checking OA buffer for available data */
 	u64 poll_period_ns;
-
-	/** @override_gucrc: GuC RC has been overridden for the OA stream */
-	bool override_gucrc;
 
 	/** @oa_status: temporary storage for oa_status register value */
 	u32 oa_status;

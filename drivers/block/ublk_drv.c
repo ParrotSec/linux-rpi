@@ -19,6 +19,7 @@
 #include <linux/errno.h>
 #include <linux/major.h>
 #include <linux/wait.h>
+#include <linux/wait_bit.h>
 #include <linux/blkdev.h>
 #include <linux/init.h>
 #include <linux/swap.h>
@@ -26,7 +27,6 @@
 #include <linux/compat.h>
 #include <linux/mutex.h>
 #include <linux/writeback.h>
-#include <linux/completion.h>
 #include <linux/highmem.h>
 #include <linux/sysfs.h>
 #include <linux/miscdevice.h>
@@ -46,6 +46,8 @@
 #include <linux/kref.h>
 #include <linux/kfifo.h>
 #include <linux/blk-integrity.h>
+#include <linux/maple_tree.h>
+#include <linux/xarray.h>
 #include <uapi/linux/fs.h>
 #include <uapi/linux/ublk_cmd.h>
 
@@ -58,6 +60,11 @@
 #define UBLK_CMD_UPDATE_SIZE	_IOC_NR(UBLK_U_CMD_UPDATE_SIZE)
 #define UBLK_CMD_QUIESCE_DEV	_IOC_NR(UBLK_U_CMD_QUIESCE_DEV)
 #define UBLK_CMD_TRY_STOP_DEV	_IOC_NR(UBLK_U_CMD_TRY_STOP_DEV)
+#define UBLK_CMD_REG_BUF	_IOC_NR(UBLK_U_CMD_REG_BUF)
+#define UBLK_CMD_UNREG_BUF	_IOC_NR(UBLK_U_CMD_UNREG_BUF)
+
+/* Default max shmem buffer size: 4GB (may be increased in future) */
+#define UBLK_SHMEM_BUF_SIZE_MAX	(1ULL << 32)
 
 #define UBLK_IO_REGISTER_IO_BUF		_IOC_NR(UBLK_U_IO_REGISTER_IO_BUF)
 #define UBLK_IO_UNREGISTER_IO_BUF	_IOC_NR(UBLK_U_IO_UNREGISTER_IO_BUF)
@@ -81,7 +88,8 @@
 		| (IS_ENABLED(CONFIG_BLK_DEV_INTEGRITY) ? UBLK_F_INTEGRITY : 0) \
 		| UBLK_F_SAFE_STOP_DEV \
 		| UBLK_F_BATCH_IO \
-		| UBLK_F_NO_AUTO_PART_SCAN)
+		| UBLK_F_NO_AUTO_PART_SCAN \
+		| UBLK_F_SHMEM_ZC)
 
 #define UBLK_F_ALL_RECOVERY_FLAGS (UBLK_F_USER_RECOVERY \
 		| UBLK_F_USER_RECOVERY_REISSUE \
@@ -289,6 +297,13 @@ struct ublk_queue {
 	struct ublk_io ios[] __counted_by(q_depth);
 };
 
+/* Maple tree value: maps a PFN range to buffer location */
+struct ublk_buf_range {
+	unsigned short buf_index;
+	unsigned short flags;
+	unsigned int base_offset;	/* byte offset within buffer */
+};
+
 struct ublk_device {
 	struct gendisk		*ub_disk;
 
@@ -312,7 +327,6 @@ struct ublk_device {
 
 	struct ublk_params	params;
 
-	struct completion	completion;
 	u32			nr_queue_ready;
 	bool 			unprivileged_daemons;
 	struct mutex cancel_mutex;
@@ -322,6 +336,10 @@ struct ublk_device {
 	struct work_struct	partition_scan_work;
 
 	bool			block_open; /* protected by open_mutex */
+
+	/* shared memory zero copy */
+	struct maple_tree	buf_tree;
+	struct ida		buf_ida;
 
 	struct ublk_queue       *queues[];
 };
@@ -334,6 +352,9 @@ struct ublk_params_header {
 
 static void ublk_io_release(void *priv);
 static void ublk_stop_dev_unlocked(struct ublk_device *ub);
+static bool ublk_try_buf_match(struct ublk_device *ub, struct request *rq,
+				  u32 *buf_idx, u32 *buf_off);
+static void ublk_buf_cleanup(struct ublk_device *ub);
 static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq);
 static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 		u16 q_id, u16 tag, struct ublk_io *io);
@@ -396,6 +417,22 @@ static inline bool ublk_support_zero_copy(const struct ublk_queue *ubq)
 static inline bool ublk_dev_support_zero_copy(const struct ublk_device *ub)
 {
 	return ub->dev_info.flags & UBLK_F_SUPPORT_ZERO_COPY;
+}
+
+static inline bool ublk_support_shmem_zc(const struct ublk_queue *ubq)
+{
+	return ubq->flags & UBLK_F_SHMEM_ZC;
+}
+
+static inline bool ublk_iod_is_shmem_zc(const struct ublk_queue *ubq,
+					unsigned int tag)
+{
+	return ublk_get_iod(ubq, tag)->op_flags & UBLK_IO_F_SHMEM_ZC;
+}
+
+static inline bool ublk_dev_support_shmem_zc(const struct ublk_device *ub)
+{
+	return ub->dev_info.flags & UBLK_F_SHMEM_ZC;
 }
 
 static inline bool ublk_support_auto_buf_reg(const struct ublk_queue *ubq)
@@ -808,7 +845,7 @@ static void ublk_dev_param_basic_apply(struct ublk_device *ub)
 
 static int ublk_integrity_flags(u32 flags)
 {
-	int ret_flags = 0;
+	int ret_flags = BLK_SPLIT_INTERVAL_CAPABLE;
 
 	if (flags & LBMD_PI_CAP_INTEGRITY) {
 		flags &= ~LBMD_PI_CAP_INTEGRITY;
@@ -860,6 +897,20 @@ static int ublk_validate_params(const struct ublk_device *ub)
 		const struct ublk_param_basic *p = &ub->params.basic;
 
 		if (p->logical_bs_shift > PAGE_SHIFT || p->logical_bs_shift < 9)
+			return -EINVAL;
+
+		/*
+		 * 256M is a reasonable upper bound for physical block size,
+		 * io_min and io_opt; it aligns with the maximum physical
+		 * block size possible in NVMe.
+		 */
+		if (p->physical_bs_shift > ilog2(SZ_256M))
+			return -EINVAL;
+
+		if (p->io_min_shift > ilog2(SZ_256M))
+			return -EINVAL;
+
+		if (p->io_opt_shift > ilog2(SZ_256M))
 			return -EINVAL;
 
 		if (p->logical_bs_shift > p->physical_bs_shift)
@@ -1284,10 +1335,18 @@ static bool ublk_copy_user_bvec(const struct bio_vec *bv, unsigned *offset,
 
 	len = bv->bv_len - *offset;
 	bv_buf = kmap_local_page(bv->bv_page) + bv->bv_offset + *offset;
+	/*
+	 * Bio pages may originate from slab caches without a usercopy region
+	 * (e.g. jbd2 frozen metadata buffers).  This is the same data that
+	 * the loop driver writes to its backing file — no exposure risk.
+	 * The bvec length is always trusted, so the size check in
+	 * check_copy_size() is not needed either.  Use the unchecked
+	 * helpers to avoid false positives on slab pages.
+	 */
 	if (dir == ITER_DEST)
-		copied = copy_to_iter(bv_buf, len, uiter);
+		copied = _copy_to_iter(bv_buf, len, uiter);
 	else
-		copied = copy_from_iter(bv_buf, len, uiter);
+		copied = _copy_from_iter(bv_buf, len, uiter);
 
 	kunmap_local(bv_buf);
 
@@ -1463,6 +1522,19 @@ static blk_status_t ublk_setup_iod(struct ublk_queue *ubq, struct request *req)
 	iod->op_flags = ublk_op | ublk_req_build_flags(req);
 	iod->nr_sectors = blk_rq_sectors(req);
 	iod->start_sector = blk_rq_pos(req);
+
+	/* Try shmem zero-copy match before setting addr */
+	if (ublk_support_shmem_zc(ubq) && ublk_rq_has_data(req)) {
+		u32 buf_idx, buf_off;
+
+		if (ublk_try_buf_match(ubq->dev, req,
+					  &buf_idx, &buf_off)) {
+			iod->op_flags |= UBLK_IO_F_SHMEM_ZC;
+			iod->addr = ublk_shmem_zc_addr(buf_idx, buf_off);
+			return BLK_STS_OK;
+		}
+	}
+
 	iod->addr = io->buf.addr;
 
 	return BLK_STS_OK;
@@ -1506,6 +1578,10 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 	 */
 	if (req_op(req) != REQ_OP_READ && req_op(req) != REQ_OP_WRITE &&
 	    req_op(req) != REQ_OP_DRV_IN)
+		goto exit;
+
+	/* shmem zero copy: no data to unmap, pages already shared */
+	if (ublk_iod_is_shmem_zc(req->mq_hctx->driver_data, req->tag))
 		goto exit;
 
 	/* for READ request, writing data in iod->addr to rq buffers */
@@ -1666,7 +1742,13 @@ static void ublk_auto_buf_dispatch(const struct ublk_queue *ubq,
 static bool ublk_start_io(const struct ublk_queue *ubq, struct request *req,
 			  struct ublk_io *io)
 {
-	unsigned mapped_bytes = ublk_map_io(ubq, req, io);
+	unsigned mapped_bytes;
+
+	/* shmem zero copy: skip data copy, pages already shared */
+	if (ublk_iod_is_shmem_zc(ubq, req->tag))
+		return true;
+
+	mapped_bytes = ublk_map_io(ubq, req, io);
 
 	/* partially mapped, update io descriptor */
 	if (unlikely(mapped_bytes != blk_rq_bytes(req))) {
@@ -1792,7 +1874,7 @@ static bool ublk_batch_prep_dispatch(struct ublk_queue *ubq,
  * Filter out UBLK_BATCH_IO_UNUSED_TAG entries from tag_buf.
  * Returns the new length after filtering.
  */
-static unsigned int ublk_filter_unused_tags(unsigned short *tag_buf,
+static noinline unsigned int ublk_filter_unused_tags(unsigned short *tag_buf,
 					    unsigned int len)
 {
 	unsigned int i, j;
@@ -1806,6 +1888,41 @@ static unsigned int ublk_filter_unused_tags(unsigned short *tag_buf,
 	}
 
 	return j;
+}
+
+static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
+		const struct ublk_batch_io_data *data,
+		unsigned short *tag_buf, size_t len, int ret)
+{
+	int i, res;
+
+	/*
+	 * Undo prep state for all IOs since userspace never received them.
+	 * This restores IOs to pre-prepared state so they can be cleanly
+	 * re-prepared when tags are pulled from FIFO again.
+	 */
+	for (i = 0; i < len; i++) {
+		struct ublk_io *io = &ubq->ios[tag_buf[i]];
+		int index = -1;
+
+		ublk_io_lock(io);
+		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG)
+			index = io->buf.auto_reg.index;
+		io->flags &= ~(UBLK_IO_FLAG_OWNED_BY_SRV | UBLK_IO_FLAG_AUTO_BUF_REG);
+		io->flags |= UBLK_IO_FLAG_ACTIVE;
+		ublk_io_unlock(io);
+
+		if (index != -1)
+			io_buffer_unregister_bvec(data->cmd, index,
+					data->issue_flags);
+	}
+
+	res = kfifo_in_spinlocked_noirqsave(&ubq->evts_fifo,
+		tag_buf, len, &ubq->evts_lock);
+
+	pr_warn_ratelimited("%s: copy tags or post CQE failure, move back "
+			"tags(%d %zu) ret %d\n", __func__, res, len,
+			ret);
 }
 
 #define MAX_NR_TAG 128
@@ -1851,37 +1968,8 @@ static int __ublk_batch_dispatch(struct ublk_queue *ubq,
 
 	sel.val = ublk_batch_copy_io_tags(fcmd, sel.addr, tag_buf, len * tag_sz);
 	ret = ublk_batch_fetch_post_cqe(fcmd, &sel, data->issue_flags);
-	if (unlikely(ret < 0)) {
-		int i, res;
-
-		/*
-		 * Undo prep state for all IOs since userspace never received them.
-		 * This restores IOs to pre-prepared state so they can be cleanly
-		 * re-prepared when tags are pulled from FIFO again.
-		 */
-		for (i = 0; i < len; i++) {
-			struct ublk_io *io = &ubq->ios[tag_buf[i]];
-			int index = -1;
-
-			ublk_io_lock(io);
-			if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG)
-				index = io->buf.auto_reg.index;
-			io->flags &= ~(UBLK_IO_FLAG_OWNED_BY_SRV | UBLK_IO_FLAG_AUTO_BUF_REG);
-			io->flags |= UBLK_IO_FLAG_ACTIVE;
-			ublk_io_unlock(io);
-
-			if (index != -1)
-				io_buffer_unregister_bvec(data->cmd, index,
-						data->issue_flags);
-		}
-
-		res = kfifo_in_spinlocked_noirqsave(&ubq->evts_fifo,
-			tag_buf, len, &ubq->evts_lock);
-
-		pr_warn_ratelimited("%s: copy tags or post CQE failure, move back "
-				"tags(%d %zu) ret %d\n", __func__, res, len,
-				ret);
-	}
+	if (unlikely(ret < 0))
+		ublk_batch_dispatch_fail(ubq, data, tag_buf, len, ret);
 	return ret;
 }
 
@@ -2325,8 +2413,14 @@ static void ublk_reset_ch_dev(struct ublk_device *ub)
 {
 	int i;
 
-	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
-		ublk_queue_reinit(ub, ublk_get_queue(ub, i));
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+
+		/* Sync with ublk_cancel_cmd() */
+		spin_lock(&ubq->cancel_lock);
+		ublk_queue_reinit(ub, ubq);
+		spin_unlock(&ubq->cancel_lock);
+	}
 
 	/* set to NULL, otherwise new tasks cannot mmap io_cmd_buf */
 	ub->mm = NULL;
@@ -2667,6 +2761,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, unsigned tag,
 {
 	struct ublk_io *io = &ubq->ios[tag];
 	struct ublk_device *ub = ubq->dev;
+	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
 	bool done;
 
@@ -2689,12 +2784,15 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, unsigned tag,
 
 	spin_lock(&ubq->cancel_lock);
 	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
-	if (!done)
+	if (!done) {
 		io->flags |= UBLK_IO_FLAG_CANCELED;
+		cmd = io->cmd;
+		io->cmd = NULL;
+	}
 	spin_unlock(&ubq->cancel_lock);
 
-	if (!done)
-		io_uring_cmd_done(io->cmd, UBLK_IO_RES_ABORT, issue_flags);
+	if (!done && cmd)
+		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
 }
 
 /*
@@ -2959,12 +3057,12 @@ static void ublk_mark_io_ready(struct ublk_device *ub, u16 q_id,
 	if (ublk_dev_ready(ub)) {
 		/*
 		 * All queues ready - clear device-level canceling flag
-		 * and complete the recovery/initialization.
+		 * and wake ublk_dev_ready() waiters.
 		 */
 		mutex_lock(&ub->cancel_mutex);
 		ub->canceling = false;
 		mutex_unlock(&ub->cancel_mutex);
-		complete_all(&ub->completion);
+		wake_up_var(&ub->nr_queue_ready);
 	}
 }
 
@@ -3424,8 +3522,10 @@ static void ublk_ch_uring_cmd_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 {
 	unsigned int issue_flags = IO_URING_CMD_TASK_WORK_ISSUE_FLAGS;
 	struct io_uring_cmd *cmd = io_uring_cmd_from_tw(tw_req);
-	int ret = ublk_ch_uring_cmd_local(cmd, issue_flags);
+	int ret = -ECANCELED;
 
+	if (!tw.cancel)
+		ret = ublk_ch_uring_cmd_local(cmd, issue_flags);
 	if (ret != -EIOCBQUEUED)
 		io_uring_cmd_done(cmd, ret, issue_flags);
 }
@@ -4165,7 +4265,6 @@ static int ublk_init_queues(struct ublk_device *ub)
 			goto fail;
 	}
 
-	init_completion(&ub->completion);
 	return 0;
 
  fail:
@@ -4208,6 +4307,7 @@ static void ublk_cdev_rel(struct device *dev)
 {
 	struct ublk_device *ub = container_of(dev, struct ublk_device, cdev_dev);
 
+	ublk_buf_cleanup(ub);
 	blk_mq_free_tag_set(&ub->tag_set);
 	ublk_deinit_queues(ub);
 	ublk_free_dev_number(ub);
@@ -4308,6 +4408,26 @@ static bool ublk_validate_user_pid(struct ublk_device *ub, pid_t ublksrv_pid)
 	return ub->ublksrv_tgid == ublksrv_pid;
 }
 
+/*
+ * Wait until all queues have fetched their I/O commands, and return with
+ * ub->mutex held and readiness guaranteed: then every queue's ->canceling
+ * is cleared. Ready may regress between wakeup and mutex_lock() (F_BATCH
+ * UNPREP, daemon death), so re-check it under the mutex and wait again.
+ */
+static int ublk_wait_dev_ready_and_lock(struct ublk_device *ub)
+{
+	while (true) {
+		if (wait_var_event_interruptible(&ub->nr_queue_ready,
+						 ublk_dev_ready(ub)))
+			return -EINTR;
+
+		mutex_lock(&ub->mutex);
+		if (ublk_dev_ready(ub))
+			return 0;
+		mutex_unlock(&ub->mutex);
+	}
+}
+
 static int ublk_ctrl_start_dev(struct ublk_device *ub,
 		const struct ublksrv_ctrl_cmd *header)
 {
@@ -4390,15 +4510,10 @@ static int ublk_ctrl_start_dev(struct ublk_device *ub,
 		};
 	}
 
-	if (wait_for_completion_interruptible(&ub->completion) != 0)
+	if (ublk_wait_dev_ready_and_lock(ub))
 		return -EINTR;
 
-	if (!ublk_validate_user_pid(ub, ublksrv_pid))
-		return -EINVAL;
-
-	mutex_lock(&ub->mutex);
-	/* device may become not ready in case of F_BATCH */
-	if (!ublk_dev_ready(ub)) {
+	if (!ublk_validate_user_pid(ub, ublksrv_pid)) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
@@ -4629,6 +4744,8 @@ static int ublk_ctrl_add_dev(const struct ublksrv_ctrl_cmd *header)
 	mutex_init(&ub->mutex);
 	spin_lock_init(&ub->lock);
 	mutex_init(&ub->cancel_mutex);
+	mt_init(&ub->buf_tree);
+	ida_init(&ub->buf_ida);
 	INIT_WORK(&ub->partition_scan_work, ublk_partition_scan_work);
 
 	ret = ublk_alloc_dev_number(ub, header->dev_id);
@@ -4639,6 +4756,15 @@ static int ublk_ctrl_add_dev(const struct ublksrv_ctrl_cmd *header)
 
 	/* update device id */
 	ub->dev_info.dev_id = ub->ub_number;
+
+	/*
+	 * ->state and ->ublksrv_pid are owned by the driver and only read back
+	 * by userspace, but they come from the copied-in dev_info, so reset
+	 * them. Otherwise a device added with ->state != DEAD looks live while
+	 * ->ub_disk is still NULL.
+	 */
+	ub->dev_info.state = UBLK_S_DEV_DEAD;
+	ub->dev_info.ublksrv_pid = -1;
 
 	/*
 	 * 64bit flags will be copied back to userspace as feature
@@ -4915,13 +5041,15 @@ static int ublk_ctrl_set_params(struct ublk_device *ub,
 		 */
 		ret = -EACCES;
 	} else if (copy_from_user(&ub->params, argp, ph.len)) {
+		/* zero out partial copy so no stale params survive */
+		memset(&ub->params, 0, sizeof(ub->params));
 		ret = -EFAULT;
 	} else {
 		/* clear all we don't support yet */
 		ub->params.types &= UBLK_PARAM_TYPE_ALL;
 		ret = ublk_validate_params(ub);
 		if (ret)
-			ub->params.types = 0;
+			memset(&ub->params, 0, sizeof(ub->params));
 	}
 	mutex_unlock(&ub->mutex);
 
@@ -4958,7 +5086,6 @@ static int ublk_ctrl_start_recovery(struct ublk_device *ub)
 		goto out_unlock;
 	}
 	pr_devel("%s: start recovery for dev id %d\n", __func__, ub->ub_number);
-	init_completion(&ub->completion);
 	ret = 0;
  out_unlock:
 	mutex_unlock(&ub->mutex);
@@ -4974,16 +5101,17 @@ static int ublk_ctrl_end_recovery(struct ublk_device *ub,
 	pr_devel("%s: Waiting for all FETCH_REQs, dev id %d...\n", __func__,
 		 header->dev_id);
 
-	if (wait_for_completion_interruptible(&ub->completion))
+	if (ublk_wait_dev_ready_and_lock(ub))
 		return -EINTR;
 
 	pr_devel("%s: All FETCH_REQs received, dev id %d\n", __func__,
 		 header->dev_id);
 
-	if (!ublk_validate_user_pid(ub, ublksrv_pid))
-		return -EINVAL;
+	if (!ublk_validate_user_pid(ub, ublksrv_pid)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
 
-	mutex_lock(&ub->mutex);
 	if (ublk_nosrv_should_stop_dev(ub))
 		goto out_unlock;
 
@@ -5179,6 +5307,343 @@ exit:
 	return err;
 }
 
+/*
+ * Lock for maple tree modification: acquire ub->mutex, then freeze queue
+ * if device is started. If device is not yet started, only mutex is
+ * needed since no I/O path can access the tree.
+ *
+ * This ordering (mutex -> freeze) is safe because ublk_stop_dev_unlocked()
+ * already holds ub->mutex when calling del_gendisk() which freezes the queue.
+*/
+static unsigned int ublk_lock_buf_tree(struct ublk_device *ub)
+{
+	unsigned int memflags = 0;
+
+	mutex_lock(&ub->mutex);
+	if (ub->ub_disk)
+		memflags = blk_mq_freeze_queue(ub->ub_disk->queue);
+
+	return memflags;
+}
+
+static void ublk_unlock_buf_tree(struct ublk_device *ub, unsigned int memflags)
+{
+	if (ub->ub_disk)
+		blk_mq_unfreeze_queue(ub->ub_disk->queue, memflags);
+	mutex_unlock(&ub->mutex);
+}
+
+/* Erase coalesced PFN ranges from the maple tree matching buf_index */
+static void ublk_buf_erase_ranges(struct ublk_device *ub, int buf_index)
+{
+	MA_STATE(mas, &ub->buf_tree, 0, ULONG_MAX);
+	struct ublk_buf_range *range;
+
+	mas_lock(&mas);
+	mas_for_each(&mas, range, ULONG_MAX) {
+		if (range->buf_index == buf_index) {
+			mas_erase(&mas);
+			kfree(range);
+		}
+	}
+	mas_unlock(&mas);
+}
+
+static int __ublk_ctrl_reg_buf(struct ublk_device *ub,
+			       struct page **pages, unsigned long nr_pages,
+			       int index, unsigned short flags)
+{
+	unsigned long i;
+	int ret;
+
+	for (i = 0; i < nr_pages; i++) {
+		unsigned long pfn = page_to_pfn(pages[i]);
+		unsigned long start = i;
+		struct ublk_buf_range *range;
+
+		/* Find run of consecutive PFNs */
+		while (i + 1 < nr_pages &&
+		       page_to_pfn(pages[i + 1]) == pfn + (i - start) + 1)
+			i++;
+
+		range = kzalloc(sizeof(*range), GFP_KERNEL);
+		if (!range) {
+			ret = -ENOMEM;
+			goto unwind;
+		}
+		range->buf_index = index;
+		range->flags = flags;
+		range->base_offset = start << PAGE_SHIFT;
+
+		ret = mtree_insert_range(&ub->buf_tree, pfn,
+					 pfn + (i - start),
+					 range, GFP_KERNEL);
+		if (ret) {
+			kfree(range);
+			goto unwind;
+		}
+	}
+	return 0;
+
+unwind:
+	ublk_buf_erase_ranges(ub, index);
+	return ret;
+}
+
+/*
+ * Register a shared memory buffer for zero-copy I/O.
+ * Pins pages, builds PFN maple tree, freezes/unfreezes the queue
+ * internally. Returns buffer index (>= 0) on success.
+ */
+static int ublk_ctrl_reg_buf(struct ublk_device *ub,
+			     struct ublksrv_ctrl_cmd *header)
+{
+	void __user *argp = (void __user *)(unsigned long)header->addr;
+	struct ublk_shmem_buf_reg buf_reg;
+	unsigned long nr_pages;
+	struct page **pages = NULL;
+	unsigned int gup_flags;
+	unsigned int memflags;
+	long pinned;
+	int index;
+	int ret;
+
+	if (!ublk_dev_support_shmem_zc(ub))
+		return -EOPNOTSUPP;
+
+	memset(&buf_reg, 0, sizeof(buf_reg));
+	if (copy_from_user(&buf_reg, argp,
+			   min_t(size_t, header->len, sizeof(buf_reg))))
+		return -EFAULT;
+
+	if (buf_reg.flags & ~UBLK_SHMEM_BUF_READ_ONLY)
+		return -EINVAL;
+
+	if (buf_reg.reserved)
+		return -EINVAL;
+
+	if (!buf_reg.len || buf_reg.len > UBLK_SHMEM_BUF_SIZE_MAX ||
+	    !PAGE_ALIGNED(buf_reg.len) || !PAGE_ALIGNED(buf_reg.addr))
+		return -EINVAL;
+
+	nr_pages = buf_reg.len >> PAGE_SHIFT;
+
+	/* Pin pages before any locks (may sleep) */
+	pages = kvmalloc_array(nr_pages, sizeof(*pages), GFP_KERNEL);
+	if (!pages)
+		return -ENOMEM;
+
+	gup_flags = FOLL_LONGTERM;
+	if (!(buf_reg.flags & UBLK_SHMEM_BUF_READ_ONLY))
+		gup_flags |= FOLL_WRITE;
+
+	pinned = pin_user_pages_fast(buf_reg.addr, nr_pages, gup_flags, pages);
+	if (pinned < 0) {
+		ret = pinned;
+		goto err_free_pages;
+	}
+	if (pinned != nr_pages) {
+		ret = -EFAULT;
+		goto err_unpin;
+	}
+
+	memflags = ublk_lock_buf_tree(ub);
+
+	index = ida_alloc_max(&ub->buf_ida, USHRT_MAX, GFP_KERNEL);
+	if (index < 0) {
+		ret = index;
+		goto err_unlock;
+	}
+
+	ret = __ublk_ctrl_reg_buf(ub, pages, nr_pages, index, buf_reg.flags);
+	if (ret) {
+		ida_free(&ub->buf_ida, index);
+		goto err_unlock;
+	}
+
+	ublk_unlock_buf_tree(ub, memflags);
+	kvfree(pages);
+	return index;
+
+err_unlock:
+	ublk_unlock_buf_tree(ub, memflags);
+err_unpin:
+	unpin_user_pages(pages, pinned);
+err_free_pages:
+	kvfree(pages);
+	return ret;
+}
+
+static void ublk_unpin_range_pages(unsigned long base_pfn,
+				   unsigned long nr_pages)
+{
+#define UBLK_UNPIN_BATCH	32
+	struct page *pages[UBLK_UNPIN_BATCH];
+	unsigned long off;
+
+	for (off = 0; off < nr_pages; ) {
+		unsigned int batch = min_t(unsigned long,
+					   nr_pages - off, UBLK_UNPIN_BATCH);
+		unsigned int j;
+
+		for (j = 0; j < batch; j++)
+			pages[j] = pfn_to_page(base_pfn + off + j);
+		unpin_user_pages(pages, batch);
+		off += batch;
+	}
+}
+
+/*
+ * Inner loop: erase up to UBLK_REMOVE_BATCH matching ranges under
+ * mas_lock, collecting them into an xarray. Then drop the lock and
+ * unpin pages + free ranges outside spinlock context.
+ *
+ * Returns true if the tree walk completed, false if more ranges remain.
+ * Xarray key is the base PFN, value encodes nr_pages via xa_mk_value().
+ */
+#define UBLK_REMOVE_BATCH	64
+
+static bool __ublk_shmem_remove_ranges(struct ublk_device *ub,
+					int buf_index, int *ret)
+{
+	MA_STATE(mas, &ub->buf_tree, 0, ULONG_MAX);
+	struct ublk_buf_range *range;
+	struct xarray to_unpin;
+	unsigned long idx;
+	unsigned int count = 0;
+	bool done = false;
+	void *entry;
+
+	xa_init(&to_unpin);
+
+	mas_lock(&mas);
+	mas_for_each(&mas, range, ULONG_MAX) {
+		unsigned long nr;
+
+		if (buf_index >= 0 && range->buf_index != buf_index)
+			continue;
+
+		*ret = 0;
+		nr = mas.last - mas.index + 1;
+		if (xa_err(xa_store(&to_unpin, mas.index,
+				    xa_mk_value(nr), GFP_ATOMIC)))
+			goto unlock;
+		mas_erase(&mas);
+		kfree(range);
+		if (++count >= UBLK_REMOVE_BATCH)
+			goto unlock;
+	}
+	done = true;
+unlock:
+	mas_unlock(&mas);
+
+	xa_for_each(&to_unpin, idx, entry)
+		ublk_unpin_range_pages(idx, xa_to_value(entry));
+	xa_destroy(&to_unpin);
+
+	return done;
+}
+
+/*
+ * Remove ranges from the maple tree matching buf_index, unpin pages
+ * and free range structs. If buf_index < 0, remove all ranges.
+ * Processes ranges in batches to avoid holding the maple tree spinlock
+ * across potentially expensive page unpinning.
+ */
+static int ublk_shmem_remove_ranges(struct ublk_device *ub, int buf_index)
+{
+	int ret = -ENOENT;
+
+	while (!__ublk_shmem_remove_ranges(ub, buf_index, &ret))
+		cond_resched();
+	return ret;
+}
+
+static int ublk_ctrl_unreg_buf(struct ublk_device *ub,
+			       struct ublksrv_ctrl_cmd *header)
+{
+	int index = (int)header->data[0];
+	unsigned int memflags;
+	int ret;
+
+	if (!ublk_dev_support_shmem_zc(ub))
+		return -EOPNOTSUPP;
+
+	if (index < 0 || index > USHRT_MAX)
+		return -EINVAL;
+
+	memflags = ublk_lock_buf_tree(ub);
+
+	ret = ublk_shmem_remove_ranges(ub, index);
+	if (!ret)
+		ida_free(&ub->buf_ida, index);
+
+	ublk_unlock_buf_tree(ub, memflags);
+	return ret;
+}
+
+static void ublk_buf_cleanup(struct ublk_device *ub)
+{
+	ublk_shmem_remove_ranges(ub, -1);
+	mtree_destroy(&ub->buf_tree);
+	ida_destroy(&ub->buf_ida);
+}
+
+/* Check if request pages match a registered shared memory buffer */
+static bool ublk_try_buf_match(struct ublk_device *ub,
+				   struct request *rq,
+				   u32 *buf_idx, u32 *buf_off)
+{
+	struct req_iterator iter;
+	struct bio_vec bv;
+	int index = -1;
+	unsigned long expected_offset = 0;
+	bool first = true;
+
+	rq_for_each_bvec(bv, rq, iter) {
+		unsigned long pfn = page_to_pfn(bv.bv_page);
+		unsigned long end_pfn = pfn +
+			((bv.bv_offset + bv.bv_len - 1) >> PAGE_SHIFT);
+		struct ublk_buf_range *range;
+		unsigned long off;
+		MA_STATE(mas, &ub->buf_tree, pfn, pfn);
+
+		range = mas_walk(&mas);
+		if (!range)
+			return false;
+
+		/* verify all pages in this bvec fall within the range */
+		if (end_pfn > mas.last)
+			return false;
+
+		off = range->base_offset +
+			(pfn - mas.index) * PAGE_SIZE + bv.bv_offset;
+
+		if (first) {
+			/* Read-only buffer can't serve READ (kernel writes) */
+			if ((range->flags & UBLK_SHMEM_BUF_READ_ONLY) &&
+			    req_op(rq) != REQ_OP_WRITE)
+				return false;
+			index = range->buf_index;
+			expected_offset = off;
+			*buf_off = off;
+			first = false;
+		} else {
+			if (range->buf_index != index)
+				return false;
+			if (off != expected_offset)
+				return false;
+		}
+		expected_offset += bv.bv_len;
+	}
+
+	if (first)
+		return false;
+
+	*buf_idx = index;
+	return true;
+}
+
 static int ublk_ctrl_uring_cmd_permission(struct ublk_device *ub,
 		u32 cmd_op, struct ublksrv_ctrl_cmd *header)
 {
@@ -5236,6 +5701,8 @@ static int ublk_ctrl_uring_cmd_permission(struct ublk_device *ub,
 	case UBLK_CMD_UPDATE_SIZE:
 	case UBLK_CMD_QUIESCE_DEV:
 	case UBLK_CMD_TRY_STOP_DEV:
+	case UBLK_CMD_REG_BUF:
+	case UBLK_CMD_UNREG_BUF:
 		mask = MAY_READ | MAY_WRITE;
 		break;
 	default:
@@ -5359,6 +5826,12 @@ static int ublk_ctrl_uring_cmd(struct io_uring_cmd *cmd,
 		break;
 	case UBLK_CMD_TRY_STOP_DEV:
 		ret = ublk_ctrl_try_stop_dev(ub);
+		break;
+	case UBLK_CMD_REG_BUF:
+		ret = ublk_ctrl_reg_buf(ub, &header);
+		break;
+	case UBLK_CMD_UNREG_BUF:
+		ret = ublk_ctrl_unreg_buf(ub, &header);
 		break;
 	default:
 		ret = -EOPNOTSUPP;

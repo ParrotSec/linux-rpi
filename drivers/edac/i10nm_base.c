@@ -79,6 +79,7 @@ static struct res_config *res_cfg;
 static int retry_rd_err_log;
 static int decoding_via_mca;
 static bool mem_cfg_2lm;
+static bool no_adxl;
 
 static struct reg_rrl icx_reg_rrl_ddr = {
 	.set_num = 2,
@@ -196,7 +197,7 @@ static u64 read_imc_reg(struct skx_imc *imc, int chan, u32 offset, u8 width)
 	case 8:
 		return I10NM_GET_REG64(imc, chan, offset);
 	default:
-		i10nm_printk(KERN_ERR, "Invalid readd RRL 0x%x width %d\n", offset, width);
+		i10nm_printk(KERN_ERR, "Invalid read RRL 0x%x width %d\n", offset, width);
 		return 0;
 	}
 }
@@ -580,6 +581,10 @@ static bool i10nm_mc_decode_available(struct mce *mce)
 		if (bank < 13 || bank > 20)
 			return false;
 		break;
+	case GNR:
+		if (bank < 13 || bank > 24)
+			return false;
+		break;
 	default:
 		return false;
 	}
@@ -636,6 +641,16 @@ static bool i10nm_mc_decode(struct decoded_addr *res)
 		res->bank_group  |= GET_BITFIELD(m->misc, 41, 41) << 2;
 		res->rank         = GET_BITFIELD(m->misc, 57, 57);
 		res->dimm         = GET_BITFIELD(m->misc, 58, 58);
+		break;
+	case GNR:
+		res->imc          = m->bank - 13;
+		res->channel      = 0;
+		res->column       = GET_BITFIELD(m->misc, 9, 18) << 2;
+		res->row          = GET_BITFIELD(m->misc, 19, 36);
+		res->bank_group   = GET_BITFIELD(m->misc, 39, 41);
+		res->bank_address = GET_BITFIELD(m->misc, 37, 38);
+		res->rank         = GET_BITFIELD(m->misc, 55, 56);
+		res->dimm         = GET_BITFIELD(m->misc, 57, 57);
 		break;
 	default:
 		return false;
@@ -1208,8 +1223,14 @@ static int __init i10nm_init(void)
 	}
 
 	rc = skx_adxl_get();
-	if (rc)
-		goto fail;
+	if (rc) {
+		/* Decoding errors via MCA banks for 2LM isn't supported yet */
+		if (rc != -ENODEV || mem_cfg_2lm)
+			goto fail;
+		i10nm_printk(KERN_INFO, "ADXL not found, falling back to MCA-based decoding.\n");
+		no_adxl = true;
+		decoding_via_mca = true;
+	}
 
 	opstate_init();
 	mce_register_decode_chain(&i10nm_mce_dec);
@@ -1243,7 +1264,8 @@ static void __exit i10nm_exit(void)
 
 	skx_teardown_debug();
 	mce_unregister_decode_chain(&i10nm_mce_dec);
-	skx_adxl_put();
+	if (!no_adxl)
+		skx_adxl_put();
 	skx_remove();
 }
 

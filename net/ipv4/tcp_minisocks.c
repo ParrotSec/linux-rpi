@@ -287,7 +287,6 @@ out_put:
 	inet_twsk_put(tw);
 	return TCP_TW_SUCCESS;
 }
-EXPORT_IPV6_MOD(tcp_timewait_state_process);
 
 static void tcp_time_wait_init(struct sock *sk, struct tcp_timewait_sock *tcptw)
 {
@@ -442,7 +441,7 @@ void tcp_openreq_init_rwin(struct request_sock *req,
 	u32 rcv_wnd;
 	int mss;
 
-	mss = tcp_mss_clamp(tp, dst_metric_advmss(dst));
+	mss = tcp_mss_clamp(tp, tcp_dst_advmss(dst));
 	window_clamp = READ_ONCE(tp->window_clamp);
 	/* Set this up on the first call only */
 	req->rsk_window_clamp = window_clamp ? : dst_metric(dst, RTAX_WINDOW);
@@ -523,7 +522,6 @@ void tcp_ca_openreq_child(struct sock *sk, const struct dst_entry *dst)
 
 	tcp_set_ca_state(sk, TCP_CA_Open);
 }
-EXPORT_IPV6_MOD_GPL(tcp_ca_openreq_child);
 
 static void smc_check_reset_syn_req(const struct tcp_sock *oldtp,
 				    struct request_sock *req,
@@ -604,6 +602,7 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 	newtp->window_clamp = req->rsk_window_clamp;
 	newtp->rcv_ssthresh = req->rsk_rcv_wnd;
 	newtp->rcv_wnd = req->rsk_rcv_wnd;
+	newtp->rcv_mwnd_seq = newtp->rcv_wup + req->rsk_rcv_wnd;
 	newtp->rx_opt.wscale_ok = ireq->wscale_ok;
 	if (newtp->rx_opt.wscale_ok) {
 		newtp->rx_opt.snd_wscale = ireq->snd_wscale;
@@ -836,7 +835,7 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 	 * elsewhere and is checked directly against the child socket rather
 	 * than req because user data may have been sent out.
 	 */
-	if ((flg & TCP_FLAG_ACK) && !fastopen &&
+	if ((flg & TCP_FLAG_ACK) && !(flg & TCP_FLAG_RST) && !fastopen &&
 	    (TCP_SKB_CB(skb)->ack_seq !=
 	     tcp_rsk(req)->snt_isn + 1))
 		return sk;
@@ -873,6 +872,16 @@ struct sock *tcp_check_req(struct sock *sk, struct sk_buff *skb,
 		/* Truncate SYN, it is out of window starting
 		   at tcp_rsk(req)->rcv_isn + 1. */
 		flg &= ~TCP_FLAG_SYN;
+	}
+
+	/* RFC 5961 section 3.2, as clarified by RFC 9293 section
+	 * 3.10.7.4, requires a challenge ACK for a non-exact
+	 * in-window RST in SYN-RECEIVED.
+	 */
+	if ((flg & TCP_FLAG_RST) &&
+	    TCP_SKB_CB(skb)->seq != tcp_rsk(req)->rcv_nxt) {
+		tcp_reqsk_send_challenge_ack(sk, skb, req);
+		return NULL;
 	}
 
 	/* RFC793: "second check the RST bit" and
@@ -975,7 +984,6 @@ embryonic_reset:
 	}
 	return NULL;
 }
-EXPORT_IPV6_MOD(tcp_check_req);
 
 /*
  * Queue segment on the new socket if the new socket is active,
@@ -1014,7 +1022,6 @@ enum skb_drop_reason tcp_child_process(struct sock *parent, struct sock *child,
 	}
 
 	bh_unlock_sock(child);
-	sock_put(child);
+
 	return reason;
 }
-EXPORT_IPV6_MOD(tcp_child_process);

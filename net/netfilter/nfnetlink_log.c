@@ -401,7 +401,7 @@ nfulnl_timer(struct timer_list *t)
 
 static u32 nfulnl_get_bridge_size(const struct sk_buff *skb)
 {
-	u32 size = 0;
+	u32 mac_len, size = 0;
 
 	if (!skb_mac_header_was_set(skb))
 		return 0;
@@ -412,14 +412,17 @@ static u32 nfulnl_get_bridge_size(const struct sk_buff *skb)
 		size += nla_total_size(sizeof(u16)); /* tag */
 	}
 
-	if (skb->network_header > skb->mac_header)
-		size += nla_total_size(skb->network_header - skb->mac_header);
+	mac_len = skb_mac_header_len(skb);
+	if (mac_len > 0)
+		size += nla_total_size(mac_len);
 
 	return size;
 }
 
 static int nfulnl_put_bridge(struct nfulnl_instance *inst, const struct sk_buff *skb)
 {
+	u32 mac_len;
+
 	if (!skb_mac_header_was_set(skb))
 		return 0;
 
@@ -437,12 +440,10 @@ static int nfulnl_put_bridge(struct nfulnl_instance *inst, const struct sk_buff 
 		nla_nest_end(inst->skb, nest);
 	}
 
-	if (skb->mac_header < skb->network_header) {
-		int len = (int)(skb->network_header - skb->mac_header);
-
-		if (nla_put(inst->skb, NFULA_L2HDR, len, skb_mac_header(skb)))
-			goto nla_put_failure;
-	}
+	mac_len = skb_mac_header_len(skb);
+	if (mac_len > 0 &&
+	    nla_put(inst->skb, NFULA_L2HDR, mac_len, skb_mac_header(skb)))
+		goto nla_put_failure;
 
 	return 0;
 
@@ -626,19 +627,26 @@ __build_packet_message(struct nfnl_log_net *log,
 	/* UID */
 	sk = skb->sk;
 	if (sk && sk_fullsock(sk)) {
-		read_lock_bh(&sk->sk_callback_lock);
-		if (sk->sk_socket && sk->sk_socket->file) {
-			struct file *file = sk->sk_socket->file;
+		const struct socket *sock;
+		const struct file *file;
+
+		/* The sk pointer remains valid as long as the skb is.
+		 * The sk_socket and file pointer may become NULL
+		 * if the socket is closed.
+		 * Both structures (including file->cred) are RCU freed
+		 * which means they can be accessed within a RCU read section.
+		 */
+		sock = READ_ONCE(sk->sk_socket);
+		file = sock ? READ_ONCE(sock->file) : NULL;
+		if (file) {
 			const struct cred *cred = file->f_cred;
 			struct user_namespace *user_ns = inst->peer_user_ns;
 			__be32 uid = htonl(from_kuid_munged(user_ns, cred->fsuid));
 			__be32 gid = htonl(from_kgid_munged(user_ns, cred->fsgid));
-			read_unlock_bh(&sk->sk_callback_lock);
 			if (nla_put_be32(inst->skb, NFULA_UID, uid) ||
 			    nla_put_be32(inst->skb, NFULA_GID, gid))
 				goto nla_put_failure;
-		} else
-			read_unlock_bh(&sk->sk_callback_lock);
+		}
 	}
 
 	/* local sequence number */
@@ -668,7 +676,7 @@ __build_packet_message(struct nfnl_log_net *log,
 			goto nla_put_failure;
 
 		if (skb_copy_bits(skb, 0, nla_data(nla), data_len))
-			BUG();
+			goto nla_put_failure;
 	}
 
 	nlh->nlmsg_len = inst->skb->tail - old_tail;
@@ -689,6 +697,21 @@ static const struct nf_loginfo default_loginfo = {
 		},
 	},
 };
+
+static unsigned int nfulnl_get_copy_len(const struct nf_loginfo *li,
+					const struct sk_buff *skb,
+					unsigned int copy_len)
+{
+	unsigned int len = skb->len;
+
+	if ((li->u.ulog.flags & NF_LOG_F_COPY_LEN) &&
+	    li->u.ulog.copy_len < copy_len)
+		copy_len = li->u.ulog.copy_len;
+	if (!skb_frags_readable(skb))
+		len = skb_headlen(skb);
+
+	return min(len, copy_len);
+}
 
 /* log handler for internal netfilter logging api */
 static void
@@ -782,14 +805,7 @@ nfulnl_log_packet(struct net *net,
 		break;
 
 	case NFULNL_COPY_PACKET:
-		data_len = inst->copy_range;
-		if ((li->u.ulog.flags & NF_LOG_F_COPY_LEN) &&
-		    (li->u.ulog.copy_len < data_len))
-			data_len = li->u.ulog.copy_len;
-
-		if (data_len > skb->len)
-			data_len = skb->len;
-
+		data_len = nfulnl_get_copy_len(li, skb, inst->copy_range);
 		size += nla_total_size(data_len);
 		break;
 
@@ -887,7 +903,9 @@ static const struct nla_policy nfula_cfg_policy[NFULA_CFG_MAX+1] = {
 	[NFULA_CFG_TIMEOUT]	= { .type = NLA_U32 },
 	[NFULA_CFG_QTHRESH]	= { .type = NLA_U32 },
 	[NFULA_CFG_NLBUFSIZ]	= { .type = NLA_U32 },
-	[NFULA_CFG_FLAGS]	= { .type = NLA_U16 },
+	[NFULA_CFG_FLAGS]	= NLA_POLICY_MASK(NLA_BE16, NFULNL_CFG_F_SEQ |
+						  NFULNL_CFG_F_SEQ_GLOBAL |
+						  NFULNL_CFG_F_CONNTRACK),
 };
 
 static int nfulnl_recv_config(struct sk_buff *skb, const struct nfnl_info *info,

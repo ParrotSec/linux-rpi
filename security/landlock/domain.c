@@ -34,7 +34,7 @@
  * @exe_size: Returned size of @exe_str (including the trailing null
  *            character), if any.
  *
- * Returns: A pointer to an allocated buffer where @exe_str point to, %NULL if
+ * Return: A pointer to an allocated buffer where @exe_str point to, %NULL if
  * there is no executable path, or an error otherwise.
  */
 static const void *get_current_exe(const char **const exe_str,
@@ -73,7 +73,7 @@ static const void *get_current_exe(const char **const exe_str,
 }
 
 /*
- * Returns: A newly allocated object describing a domain, or an error
+ * Return: A newly allocated object describing a domain, or an error
  * otherwise.
  */
 static struct landlock_details *get_current_details(void)
@@ -90,11 +90,12 @@ static struct landlock_details *get_current_details(void)
 		return ERR_CAST(buffer);
 
 	/*
-	 * Create the new details according to the path's length.  Do not
-	 * allocate with GFP_KERNEL_ACCOUNT because it is independent from the
-	 * caller.
+	 * Create the new details according to the path's length.  Account to
+	 * the calling task's memcg, like the other Landlock per-domain
+	 * allocations, even if it may not control the related size.
 	 */
-	details = kzalloc_flex(*details, exe_path, path_size);
+	details =
+		kzalloc_flex(*details, exe_path, path_size, GFP_KERNEL_ACCOUNT);
 	if (!details)
 		return ERR_PTR(-ENOMEM);
 
@@ -114,6 +115,8 @@ static struct landlock_details *get_current_details(void)
  * restriction.  The subjective credentials must not be in an overridden state.
  *
  * @hierarchy->parent and @hierarchy->usage should already be set.
+ *
+ * Return: 0 on success, -errno on failure.
  */
 int landlock_init_hierarchy_log(struct landlock_hierarchy *const hierarchy)
 {

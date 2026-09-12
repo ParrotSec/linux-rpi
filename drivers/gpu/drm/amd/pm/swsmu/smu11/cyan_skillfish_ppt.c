@@ -158,12 +158,10 @@ cyan_skillfish_get_smu_metrics_data(struct smu_context *smu,
 		*value = metrics->Current.MemclkFrequency;
 		break;
 	case METRICS_CURR_SOCKETPOWER:
-		*value = (metrics->Current.CurrentSocketPower << 8) /
-				1000;
+		*value = metrics->Current.CurrentSocketPower;
 		break;
 	case METRICS_AVERAGE_SOCKETPOWER:
-		*value = (metrics->Average.CurrentSocketPower << 8) /
-				1000;
+		*value = metrics->Average.CurrentSocketPower;
 		break;
 	case METRICS_TEMPERATURE_EDGE:
 		*value = metrics->Current.GfxTemperature / 100 *
@@ -582,7 +580,7 @@ cyan_skillfish_get_enabled_mask(struct smu_context *smu,
 static const struct pptable_funcs cyan_skillfish_ppt_funcs = {
 
 	.check_fw_status = smu_v11_0_check_fw_status,
-	.check_fw_version = smu_v11_0_check_fw_version,
+	.check_fw_version = smu_cmn_check_fw_version,
 	.init_power = smu_v11_0_init_power,
 	.fini_power = smu_v11_0_fini_power,
 	.init_smc_tables = cyan_skillfish_init_smc_tables,
@@ -605,5 +603,6 @@ void cyan_skillfish_set_ppt_funcs(struct smu_context *smu)
 	smu->ppt_funcs = &cyan_skillfish_ppt_funcs;
 	smu->table_map = cyan_skillfish_table_map;
 	smu->is_apu = true;
+	smu->smc_driver_if_version = MP1_DRIVER_IF_VERSION;
 	smu_v11_0_init_msg_ctl(smu, cyan_skillfish_message_map);
 }

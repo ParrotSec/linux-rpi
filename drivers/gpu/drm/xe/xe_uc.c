@@ -13,7 +13,9 @@
 #include "xe_gt_sriov_vf.h"
 #include "xe_guc.h"
 #include "xe_guc_pc.h"
+#include "xe_guc_rc.h"
 #include "xe_guc_engine_activity.h"
+#include "xe_guc_submit.h"
 #include "xe_huc.h"
 #include "xe_sriov.h"
 #include "xe_wopcm.h"
@@ -156,23 +158,21 @@ static int vf_uc_load_hw(struct xe_uc *uc)
 
 	err = xe_gt_sriov_vf_connect(uc_to_gt(uc));
 	if (err)
-		goto err_out;
-
-	uc->guc.submission_state.enabled = true;
+		return err;
 
 	err = xe_guc_opt_in_features_enable(&uc->guc);
 	if (err)
-		goto err_out;
+		return err;
+
+	err = xe_guc_submit_enable(&uc->guc);
+	if (err)
+		return err;
 
 	err = xe_gt_record_default_lrcs(uc_to_gt(uc));
 	if (err)
-		goto err_out;
+		return err;
 
 	return 0;
-
-err_out:
-	xe_guc_sanitize(&uc->guc);
-	return err;
 }
 
 /*
@@ -204,15 +204,19 @@ int xe_uc_load_hw(struct xe_uc *uc)
 
 	ret = xe_gt_record_default_lrcs(uc_to_gt(uc));
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = xe_guc_post_load_init(&uc->guc);
 	if (ret)
-		goto err_out;
+		return ret;
 
 	ret = xe_guc_pc_start(&uc->guc.pc);
 	if (ret)
-		goto err_out;
+		return ret;
+
+	ret = xe_guc_rc_enable(&uc->guc);
+	if (ret)
+		return ret;
 
 	xe_guc_engine_activity_enable_stats(&uc->guc);
 
@@ -227,10 +231,6 @@ int xe_uc_load_hw(struct xe_uc *uc)
 	xe_gsc_load_start(&uc->gsc);
 
 	return 0;
-
-err_out:
-	xe_guc_sanitize(&uc->guc);
-	return ret;
 }
 
 int xe_uc_reset_prepare(struct xe_uc *uc)
@@ -240,11 +240,6 @@ int xe_uc_reset_prepare(struct xe_uc *uc)
 		return 0;
 
 	return xe_guc_reset_prepare(&uc->guc);
-}
-
-void xe_uc_gucrc_disable(struct xe_uc *uc)
-{
-	XE_WARN_ON(xe_guc_pc_gucrc_disable(&uc->guc.pc));
 }
 
 void xe_uc_stop_prepare(struct xe_uc *uc)

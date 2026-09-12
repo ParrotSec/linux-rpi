@@ -367,17 +367,8 @@ int tipc_aead_key_validate(struct tipc_aead_key *ukey, struct genl_info *info)
  */
 static int tipc_aead_key_generate(struct tipc_aead_key *skey)
 {
-	int rc = 0;
-
-	/* Fill the key's content with a random value via RNG cipher */
-	rc = crypto_get_default_rng();
-	if (likely(!rc)) {
-		rc = crypto_rng_get_bytes(crypto_default_rng, skey->key,
-					  skey->keylen);
-		crypto_put_default_rng();
-	}
-
-	return rc;
+	/* Fill the key's content with a random value via stdrng */
+	return crypto_stdrng_get_bytes(skey->key, skey->keylen);
 }
 
 static struct tipc_aead *tipc_aead_get(struct tipc_aead __rcu *aead)
@@ -950,12 +941,20 @@ static int tipc_aead_decrypt(struct net *net, struct tipc_aead *aead,
 		goto exit;
 	}
 
+	/* Get net to avoid freed tipc_crypto when delete namespace */
+	if (!maybe_get_net(net)) {
+		tipc_bearer_put(b);
+		rc = -ENODEV;
+		goto exit;
+	}
+
 	/* Now, do decrypt */
 	rc = crypto_aead_decrypt(req);
 	if (rc == -EINPROGRESS || rc == -EBUSY)
 		return rc;
 
 	tipc_bearer_put(b);
+	put_net(net);
 
 exit:
 	kfree(ctx);
@@ -993,6 +992,7 @@ static void tipc_aead_decrypt_done(void *data, int err)
 	}
 
 	tipc_bearer_put(b);
+	put_net(net);
 }
 
 static inline int tipc_ehdr_size(struct tipc_ehdr *ehdr)

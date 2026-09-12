@@ -69,6 +69,10 @@ static int dt_remember_or_free_map(struct pinctrl *p, const char *statename,
 	int i;
 	struct pinctrl_dt_map *dt_map;
 
+	/* Initialize dev_name before any allocation can fail */
+	for (i = 0; i < num_maps; i++)
+		map[i].dev_name = NULL;
+
 	/* Initialize common mapping table entry fields */
 	for (i = 0; i < num_maps; i++) {
 		const char *devname;
@@ -175,7 +179,7 @@ static int dt_to_map_one_config(struct pinctrl *p,
 		 * return.
 		 */
 		dev_info(p->dev,
-			 "there is not valid maps for state %s\n", statename);
+			 "there are no valid maps for state %s\n", statename);
 		return 0;
 	}
 

@@ -44,6 +44,7 @@
 #include <uapi/rdma/rdma_user_ioctl.h>
 #include <uapi/rdma/ib_user_ioctl_verbs.h>
 #include <linux/pci-tph.h>
+#include <rdma/frmr_pools.h>
 #include <linux/dma-buf.h>
 
 #define IB_FW_VERSION_NAME_MAX	ETHTOOL_FWVERS_LEN
@@ -1576,6 +1577,93 @@ struct ib_uobject {
 	const struct uverbs_api_object *uapi_object;
 };
 
+/**
+ * struct ib_udata - Driver request/response data from userspace
+ * @inbuf: Pointer to request data from userspace
+ * @outbuf: Pointer to response buffer in userspace
+ * @inlen: Length of request data
+ * @outlen: Length of response buffer
+ *
+ * struct ib_udata is used to hold the driver data request and response
+ * structures defined in the uapi. They follow these rules for forwards and
+ * backwards compatibility:
+ *
+ * 1) Userspace can provide a longer request so long as the trailing part the
+ *    kernel doesn't understand is all zeros.
+ *
+ *    This provides a degree of safety if userspace wrongly tries to use a new
+ *    feature the kernel does not understand with some non-zero value.
+ *
+ *    It allows a simpler rdma-core implementation because the library can
+ *    simply always use the latest structs for the request, even if they are
+ *    bigger. It simply has to avoid using the new members if they are not
+ *    supported/required.
+ *
+ * 2) Userspace can provide a shorter request; the kernel will zero-pad it out
+ *    to fill the storage. The newer kernel should understand that older
+ *    userspace will provide 0 to new fields. The kernel has three options to
+ *    enable new request fields:
+ *
+ *    - Input comp_mask that says the field is supported
+ *    - Look for non-zero values
+ *    - Check if the udata->inlen size covers the field
+ *
+ *    This also corrects any bugs related to not filling in request structures
+ *    as the new helper always fully writes to the struct.
+ *
+ * 3) Userspace can provide a shorter or longer response struct. If shorter,
+ *    the kernel reply is truncated. The kernel should be designed to not write
+ *    to new reply fields unless userspace has affirmatively requested them.
+ *
+ *    If the user buffer is longer, the kernel will zero-fill it.
+ *
+ *    Userspace has three options to enable new response fields:
+ *
+ *    - Output comp_mask that says the field is supported
+ *    - Look for non-zero values
+ *    - Infer the output must be valid because the request contents demand it
+ *      and old kernels will fail the request
+ *
+ * The following helper functions implement these semantics:
+ *
+ * ib_copy_validate_udata_in() - Checks the minimum length, and zero trailing::
+ *
+ *     struct driver_create_cq_req req;
+ *     int err;
+ *
+ *     err = ib_copy_validate_udata_in(udata, req, end_member);
+ *     if (err)
+ *         return err;
+ *
+ * The third argument specifies the last member of the struct in the first
+ * kernel version that introduced it, establishing the minimum required size.
+ *
+ * ib_copy_validate_udata_in_cm() - The above but also validate a
+ * comp_mask member only has supported bits set::
+ *
+ *     err = ib_copy_validate_udata_in_cm(udata, req, first_version_last_member,
+ *                                        DRIVER_CREATE_CQ_MASK_FEATURE_A |
+ *                                        DRIVER_CREATE_CQ_MASK_FEATURE_B);
+ *
+ * ib_respond_udata() - Implements the response rules::
+ *
+ *     struct driver_create_cq_resp resp = {};
+ *
+ *     resp.some_field = value;
+ *     return ib_respond_udata(udata, resp);
+ *
+ * ib_is_udata_in_empty() - Used instead of ib_copy_validate_udata_in() if the
+ * driver does not have a request structure::
+ *
+ *     ret = ib_is_udata_in_empty(udata);
+ *     if (ret)
+ *         return ret;
+ *
+ * Similarly ib_respond_empty_udata() is used instead of ib_respond_udata() if
+ * the driver does not have a response structure::
+ *
+ *    return ib_respond_empty_udata(udata);
+ */
 struct ib_udata {
 	const void __user *inbuf;
 	void __user *outbuf;
@@ -1650,6 +1738,7 @@ struct ib_cq {
 	u8 interrupt:1;
 	u8 shared:1;
 	unsigned int comp_vector;
+	struct ib_umem *umem;
 
 	/*
 	 * Implementation details of the RDMA core, don't use in drivers:
@@ -1888,6 +1977,11 @@ struct ib_dmah {
 
 struct ib_mr {
 	struct ib_device  *device;
+	/*
+	 * Due to IB_MR_REREG_PD pd is not a fixed pointer and can change. For a
+	 * user MR, this value should only be read from a system call that holds
+	 * the uobject lock, or the driver should disable in-place REREG_PD.
+	 */
 	struct ib_pd	  *pd;
 	u32		   lkey;
 	u32		   rkey;
@@ -1904,6 +1998,11 @@ struct ib_mr {
 	struct ib_dm      *dm;
 	struct ib_sig_attrs *sig_attrs; /* only for IB_MR_TYPE_INTEGRITY MRs */
 	struct ib_dmah *dmah;
+	struct {
+		struct ib_frmr_pool *pool;
+		struct ib_frmr_key key;
+		u32 handle;
+	} frmr;
 	/*
 	 * Implementation details of the RDMA core, don't use in drivers:
 	 */
@@ -2267,7 +2366,6 @@ struct ib_port_data {
 
 /* rdma netdev type - specifies protocol type */
 enum rdma_netdev_t {
-	RDMA_NETDEV_OPA_VNIC,
 	RDMA_NETDEV_IPOIB,
 };
 
@@ -2281,11 +2379,6 @@ struct rdma_netdev {
 	u32		   port_num;
 	int                mtu;
 
-	/*
-	 * cleanup function must be specified.
-	 * FIXME: This is only used for OPA_VNIC and that usage should be
-	 * removed too.
-	 */
 	void (*free_rdma_netdev)(struct net_device *netdev);
 
 	/* control functions */
@@ -2387,6 +2480,12 @@ struct ib_device_ops {
 	enum rdma_driver_id driver_id;
 	u32 uverbs_abi_ver;
 	unsigned int uverbs_no_driver_id_binding:1;
+	/*
+	 * Indicates the driver checks every op accepting a udata for the
+	 * correct size on input and always handles the output using the udata
+	 * helpers.
+	 */
+	unsigned int uverbs_robust_udata:1;
 
 	/*
 	 * NOTE: New drivers should not make use of device_group; instead new
@@ -2419,8 +2518,6 @@ struct ib_device_ops {
 	int (*modify_device)(struct ib_device *device, int device_modify_mask,
 			     struct ib_device_modify *device_modify);
 	void (*get_dev_fw_str)(struct ib_device *device, char *str);
-	const struct cpumask *(*get_vector_affinity)(struct ib_device *ibdev,
-						     int comp_vector);
 	int (*query_port)(struct ib_device *device, u32 port_num,
 			  struct ib_port_attr *port_attr);
 	int (*query_port_speed)(struct ib_device *device, u32 port_num,
@@ -2537,13 +2634,13 @@ struct ib_device_ops {
 	int (*destroy_qp)(struct ib_qp *qp, struct ib_udata *udata);
 	int (*create_cq)(struct ib_cq *cq, const struct ib_cq_init_attr *attr,
 			 struct uverbs_attr_bundle *attrs);
-	int (*create_cq_umem)(struct ib_cq *cq,
+	int (*create_user_cq)(struct ib_cq *cq,
 			      const struct ib_cq_init_attr *attr,
-			      struct ib_umem *umem,
 			      struct uverbs_attr_bundle *attrs);
 	int (*modify_cq)(struct ib_cq *cq, u16 cq_count, u16 cq_period);
 	int (*destroy_cq)(struct ib_cq *cq, struct ib_udata *udata);
-	int (*resize_cq)(struct ib_cq *cq, int cqe, struct ib_udata *udata);
+	int (*resize_user_cq)(struct ib_cq *cq, unsigned int cqe,
+			      struct ib_udata *udata);
 	/*
 	 * pre_destroy_cq - Prevent a cq from generating any new work
 	 * completions, but not free any kernel resources
@@ -2907,6 +3004,8 @@ struct ib_device {
 	struct list_head subdev_list;
 
 	enum rdma_nl_name_assign_type name_assign_type;
+
+	struct ib_frmr_pools *frmr_pools;
 };
 
 static inline void *rdma_zalloc_obj(struct ib_device *dev, size_t size,
@@ -4011,15 +4110,6 @@ struct ib_cq *__ib_create_cq(struct ib_device *device,
 	__ib_create_cq((device), (cmp_hndlr), (evt_hndlr), (cq_ctxt), (cq_attr), KBUILD_MODNAME)
 
 /**
- * ib_resize_cq - Modifies the capacity of the CQ.
- * @cq: The CQ to resize.
- * @cqe: The minimum size of the CQ.
- *
- * Users can examine the cq structure to determine the actual CQ size.
- */
-int ib_resize_cq(struct ib_cq *cq, int cqe);
-
-/**
  * rdma_set_cq_moderation - Modifies moderation params of the CQ
  * @cq: The CQ to modify.
  * @cq_count: number of CQEs that will trigger an event
@@ -4824,27 +4914,6 @@ static inline __be16 ib_lid_be16(u32 lid)
 {
 	WARN_ON_ONCE(lid & 0xFFFF0000);
 	return cpu_to_be16((u16)lid);
-}
-
-/**
- * ib_get_vector_affinity - Get the affinity mappings of a given completion
- *   vector
- * @device:         the rdma device
- * @comp_vector:    index of completion vector
- *
- * Returns NULL on failure, otherwise a corresponding cpu map of the
- * completion vector (returns all-cpus map if the device driver doesn't
- * implement get_vector_affinity).
- */
-static inline const struct cpumask *
-ib_get_vector_affinity(struct ib_device *device, int comp_vector)
-{
-	if (comp_vector < 0 || comp_vector >= device->num_comp_vectors ||
-	    !device->ops.get_vector_affinity)
-		return NULL;
-
-	return device->ops.get_vector_affinity(device, comp_vector);
-
 }
 
 /**

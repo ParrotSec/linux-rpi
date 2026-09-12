@@ -459,7 +459,11 @@ static int ads1119_triggered_buffer_preenable(struct iio_dev *indio_dev)
 	if (ret)
 		return ret;
 
-	return i2c_smbus_write_byte(st->client, ADS1119_CMD_START_SYNC);
+	ret = i2c_smbus_write_byte(st->client, ADS1119_CMD_START_SYNC);
+	if (ret)
+		pm_runtime_put_autosuspend(dev);
+
+	return ret;
 }
 
 static int ads1119_triggered_buffer_postdisable(struct iio_dev *indio_dev)
@@ -741,8 +745,7 @@ static int ads1119_probe(struct i2c_client *client)
 		ret = devm_request_irq(dev, client->irq, ads1119_irq_handler,
 				       IRQF_NO_THREAD, "ads1119", indio_dev);
 		if (ret)
-			return dev_err_probe(dev, ret,
-					     "Failed to allocate irq\n");
+			return ret;
 
 		st->trig = devm_iio_trigger_alloc(dev, "%s-dev%d",
 						  indio_dev->name,

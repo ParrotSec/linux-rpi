@@ -46,6 +46,38 @@
  * 4.  Retrieval: A userspace agent in the new kernel can then call
  *     `luo_session_retrieve()` with a session name to get a new file
  *     descriptor and access the preserved state.
+ *
+ * Locking:
+ *
+ * The LUO session subsystem uses a three-tier locking hierarchy to ensure thread
+ * safety and prevent deadlocks during concurrent session mutations and kexec
+ * serialization:
+ *
+ * 1. `luo_session_serialize_rwsem` (global rwsem):
+ *    Protects session mutations (creation, retrieval, release, and ioctls)
+ *    against the serialization process during reboot.
+ *
+ *    - Readers: Taken by any path modifying or accessing session state (e.g.,
+ *      `luo_session_create()`, `luo_session_retrieve()`, `luo_session_release()`,
+ *      and `luo_session_ioctl()`).
+ *    - Writer: Taken by the serialization process (`luo_session_serialize()`)
+ *      during reboot. On success, the write lock is held indefinitely to freeze
+ *      the subsystem. On failure, it is released to allow recovery.
+ *
+ * 2. `luo_session_header->rwsem` (per-list rwsem):
+ *    Synchronizes list-level operations for the incoming and outgoing session headers.
+ *
+ *    - Writer: Taken during list mutation operations (inserting or removing a
+ *      session from the list).
+ *    - Reader: Taken when traversing the list (e.g., retrieving a session by name).
+ *
+ * 3. `luo_session->mutex` (per-session mutex):
+ *    Protects the internal state and file sets of an individual session. It is
+ *    acquired during per-session operations such as preserving, retrieving,
+ *    or freezing files.
+ *
+ * Lock Hierarchy:
+ *   `luo_session_serialize_rwsem` -> `luo_session_header->rwsem` -> `luo_session->mutex`
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -74,6 +106,8 @@
 #define LUO_SESSION_MAX		(((LUO_SESSION_PGCNT << PAGE_SHIFT) -	\
 		sizeof(struct luo_session_header_ser)) /		\
 		sizeof(struct luo_session_ser))
+
+static DECLARE_RWSEM(luo_session_serialize_rwsem);
 
 /**
  * struct luo_session_header - Header struct for managing LUO sessions.
@@ -205,6 +239,7 @@ static int luo_session_release(struct inode *inodep, struct file *filep)
 	struct luo_session *session = filep->private_data;
 	struct luo_session_header *sh;
 
+	guard(rwsem_read)(&luo_session_serialize_rwsem);
 	/* If retrieved is set, it means this session is from incoming list */
 	if (session->retrieved) {
 		int err = luo_session_finish_one(session);
@@ -295,31 +330,57 @@ union ucmd_buffer {
 	struct liveupdate_session_retrieve_fd retrieve;
 };
 
+/* Type of sessions the ioctl applies to. */
+enum luo_ioctl_type {
+	LUO_IOCTL_INCOMING,
+	LUO_IOCTL_OUTGOING,
+	LUO_IOCTL_ALL,
+};
+
 struct luo_ioctl_op {
 	unsigned int size;
 	unsigned int min_size;
 	unsigned int ioctl_num;
+	enum luo_ioctl_type type;
 	int (*execute)(struct luo_session *session, struct luo_ucmd *ucmd);
 };
 
-#define IOCTL_OP(_ioctl, _fn, _struct, _last)                                  \
+#define IOCTL_OP(_ioctl, _fn, _struct, _last, _type)                           \
 	[_IOC_NR(_ioctl) - LIVEUPDATE_CMD_SESSION_BASE] = {                    \
 		.size = sizeof(_struct) +                                      \
 			BUILD_BUG_ON_ZERO(sizeof(union ucmd_buffer) <          \
 					  sizeof(_struct)),                    \
 		.min_size = offsetofend(_struct, _last),                       \
 		.ioctl_num = _ioctl,                                           \
+		.type = _type,                                                 \
 		.execute = _fn,                                                \
 	}
 
 static const struct luo_ioctl_op luo_session_ioctl_ops[] = {
 	IOCTL_OP(LIVEUPDATE_SESSION_FINISH, luo_session_finish,
-		 struct liveupdate_session_finish, reserved),
+		 struct liveupdate_session_finish, reserved, LUO_IOCTL_INCOMING),
 	IOCTL_OP(LIVEUPDATE_SESSION_PRESERVE_FD, luo_session_preserve_fd,
-		 struct liveupdate_session_preserve_fd, token),
+		 struct liveupdate_session_preserve_fd, token, LUO_IOCTL_OUTGOING),
 	IOCTL_OP(LIVEUPDATE_SESSION_RETRIEVE_FD, luo_session_retrieve_fd,
-		 struct liveupdate_session_retrieve_fd, token),
+		 struct liveupdate_session_retrieve_fd, token, LUO_IOCTL_INCOMING),
 };
+
+static bool luo_ioctl_type_valid(struct luo_session *session,
+				 const struct luo_ioctl_op *op)
+{
+	switch (op->type) {
+	case LUO_IOCTL_INCOMING:
+		/* Retrieved is only set on incoming sessions */
+		return session->retrieved;
+	case LUO_IOCTL_OUTGOING:
+		return !session->retrieved;
+	case LUO_IOCTL_ALL:
+		return true;
+	}
+
+	/* Catch-all. */
+	return false;
+}
 
 static long luo_session_ioctl(struct file *filep, unsigned int cmd,
 			      unsigned long arg)
@@ -345,6 +406,8 @@ static long luo_session_ioctl(struct file *filep, unsigned int cmd,
 	op = &luo_session_ioctl_ops[nr - LIVEUPDATE_CMD_SESSION_BASE];
 	if (op->ioctl_num != cmd)
 		return -ENOIOCTLCMD;
+	if (!luo_ioctl_type_valid(session, op))
+		return -EINVAL;
 	if (ucmd.user_size < op->min_size)
 		return -EINVAL;
 
@@ -354,6 +417,7 @@ static long luo_session_ioctl(struct file *filep, unsigned int cmd,
 	if (ret)
 		return ret;
 
+	guard(rwsem_read)(&luo_session_serialize_rwsem);
 	return op->execute(session, &ucmd);
 }
 
@@ -382,21 +446,28 @@ static int luo_session_getfile(struct luo_session *session, struct file **filep)
 
 int luo_session_create(const char *name, struct file **filep)
 {
+	size_t len = strnlen(name, LIVEUPDATE_SESSION_NAME_LENGTH);
 	struct luo_session *session;
 	int err;
+
+	if (len == 0 || len > LIVEUPDATE_SESSION_NAME_LENGTH - 1)
+		return -EINVAL;
 
 	session = luo_session_alloc(name);
 	if (IS_ERR(session))
 		return PTR_ERR(session);
 
+	down_read(&luo_session_serialize_rwsem);
 	err = luo_session_insert(&luo_session_global.outgoing, session);
 	if (err)
 		goto err_free;
 
-	scoped_guard(mutex, &session->mutex)
-		err = luo_session_getfile(session, filep);
+	mutex_lock(&session->mutex);
+	err = luo_session_getfile(session, filep);
+	mutex_unlock(&session->mutex);
 	if (err)
 		goto err_remove;
+	up_read(&luo_session_serialize_rwsem);
 
 	return 0;
 
@@ -404,6 +475,7 @@ err_remove:
 	luo_session_remove(&luo_session_global.outgoing, session);
 err_free:
 	luo_session_free(session);
+	up_read(&luo_session_serialize_rwsem);
 
 	return err;
 }
@@ -415,12 +487,12 @@ int luo_session_retrieve(const char *name, struct file **filep)
 	struct luo_session *it;
 	int err;
 
-	scoped_guard(rwsem_read, &sh->rwsem) {
-		list_for_each_entry(it, &sh->list, list) {
-			if (!strncmp(it->name, name, sizeof(it->name))) {
-				session = it;
-				break;
-			}
+	guard(rwsem_read)(&luo_session_serialize_rwsem);
+	guard(rwsem_read)(&sh->rwsem);
+	list_for_each_entry(it, &sh->list, list) {
+		if (!strncmp(it->name, name, sizeof(it->name))) {
+			session = it;
+			break;
 		}
 	}
 
@@ -514,11 +586,12 @@ int luo_session_deserialize(void)
 {
 	struct luo_session_header *sh = &luo_session_global.incoming;
 	static bool is_deserialized;
-	static int err;
+	static int saved_err;
+	int err;
 
 	/* If has been deserialized, always return the same error code */
 	if (is_deserialized)
-		return err;
+		return saved_err;
 
 	is_deserialized = true;
 	if (!sh->active)
@@ -544,9 +617,11 @@ int luo_session_deserialize(void)
 
 		session = luo_session_alloc(sh->ser[i].name);
 		if (IS_ERR(session)) {
-			pr_warn("Failed to allocate session [%s] during deserialization %pe\n",
+			pr_warn("Failed to allocate session [%.*s] during deserialization %pe\n",
+				(int)sizeof(sh->ser[i].name),
 				sh->ser[i].name, session);
-			return PTR_ERR(session);
+			err = PTR_ERR(session);
+			goto save_err;
 		}
 
 		err = luo_session_insert(sh, session);
@@ -554,7 +629,7 @@ int luo_session_deserialize(void)
 			pr_warn("Failed to insert session [%s] %pe\n",
 				session->name, ERR_PTR(err));
 			luo_session_free(session);
-			return err;
+			goto save_err;
 		}
 
 		scoped_guard(mutex, &session->mutex) {
@@ -564,7 +639,7 @@ int luo_session_deserialize(void)
 		if (err) {
 			pr_warn("Failed to deserialize files for session [%s] %pe\n",
 				session->name, ERR_PTR(err));
-			return err;
+			goto save_err;
 		}
 	}
 
@@ -573,6 +648,9 @@ int luo_session_deserialize(void)
 	sh->ser = NULL;
 
 	return 0;
+save_err:
+	saved_err = err;
+	return err;
 }
 
 int luo_session_serialize(void)
@@ -582,7 +660,8 @@ int luo_session_serialize(void)
 	int i = 0;
 	int err;
 
-	guard(rwsem_write)(&sh->rwsem);
+	down_write(&luo_session_serialize_rwsem);
+	down_write(&sh->rwsem);
 	list_for_each_entry(session, &sh->list, list) {
 		err = luo_session_freeze_one(session, &sh->ser[i]);
 		if (err)
@@ -593,6 +672,7 @@ int luo_session_serialize(void)
 		i++;
 	}
 	sh->header_ser->count = sh->count;
+	up_write(&sh->rwsem);
 
 	return 0;
 
@@ -602,50 +682,8 @@ err_undo:
 		luo_session_unfreeze_one(session, &sh->ser[i]);
 		memset(sh->ser[i].name, 0, sizeof(sh->ser[i].name));
 	}
+	up_write(&sh->rwsem);
+	up_write(&luo_session_serialize_rwsem);
 
 	return err;
-}
-
-/**
- * luo_session_quiesce - Ensure no active sessions exist and lock session lists.
- *
- * Acquires exclusive write locks on both incoming and outgoing session lists.
- * It then validates no sessions exist in either list.
- *
- * This mechanism is used during file handler un/registration to ensure that no
- * sessions are currently using the handler, and no new sessions can be created
- * while un/registration is in progress.
- *
- * This prevents registering new handlers while sessions are active or
- * while deserialization is in progress.
- *
- * Return:
- * true  - System is quiescent (0 sessions) and locked.
- * false - Active sessions exist. The locks are released internally.
- */
-bool luo_session_quiesce(void)
-{
-	down_write(&luo_session_global.incoming.rwsem);
-	down_write(&luo_session_global.outgoing.rwsem);
-
-	if (luo_session_global.incoming.count ||
-	    luo_session_global.outgoing.count) {
-		up_write(&luo_session_global.outgoing.rwsem);
-		up_write(&luo_session_global.incoming.rwsem);
-		return false;
-	}
-
-	return true;
-}
-
-/**
- * luo_session_resume - Unlock session lists and resume normal activity.
- *
- * Releases the exclusive locks acquired by a successful call to
- * luo_session_quiesce().
- */
-void luo_session_resume(void)
-{
-	up_write(&luo_session_global.outgoing.rwsem);
-	up_write(&luo_session_global.incoming.rwsem);
 }

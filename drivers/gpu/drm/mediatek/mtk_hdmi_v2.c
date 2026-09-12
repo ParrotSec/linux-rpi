@@ -747,12 +747,12 @@ static void mtk_hdmi_v2_change_video_resolution(struct mtk_hdmi *hdmi,
 
 	switch (conn_state->hdmi.output_format) {
 	default:
-	case HDMI_COLORSPACE_RGB:
-	case HDMI_COLORSPACE_YUV444:
+	case DRM_OUTPUT_COLOR_FORMAT_RGB444:
+	case DRM_OUTPUT_COLOR_FORMAT_YCBCR444:
 		/* Disable YUV420 downsampling for RGB and YUV444 */
 		mtk_hdmi_yuv420_downsampling(hdmi, false);
 		break;
-	case HDMI_COLORSPACE_YUV422:
+	case DRM_OUTPUT_COLOR_FORMAT_YCBCR422:
 		/*
 		 * YUV420 downsampling is special and needs a bit of setup
 		 * so we disable everything there before doing anything else.
@@ -763,7 +763,7 @@ static void mtk_hdmi_v2_change_video_resolution(struct mtk_hdmi *hdmi,
 		regmap_set_bits(hdmi->regs, VID_DOWNSAMPLE_CONFIG,
 				C444_C422_CONFIG_ENABLE);
 		break;
-	case HDMI_COLORSPACE_YUV420:
+	case DRM_OUTPUT_COLOR_FORMAT_YCBCR420:
 		mtk_hdmi_yuv420_downsampling(hdmi, true);
 		break;
 	}
@@ -1499,13 +1499,6 @@ static int mtk_hdmi_v2_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void mtk_hdmi_v2_remove(struct platform_device *pdev)
-{
-	struct mtk_hdmi *hdmi = platform_get_drvdata(pdev);
-
-	i2c_put_adapter(hdmi->ddc_adpt);
-}
-
 static const struct of_device_id mtk_drm_hdmi_v2_of_ids[] = {
 	{ .compatible = "mediatek,mt8188-hdmi-tx", .data = &mtk_hdmi_conf_mt8188 },
 	{ .compatible = "mediatek,mt8195-hdmi-tx", .data = &mtk_hdmi_conf_mt8195 },
@@ -1515,7 +1508,6 @@ MODULE_DEVICE_TABLE(of, mtk_drm_hdmi_v2_of_ids);
 
 static struct platform_driver mtk_hdmi_v2_driver = {
 	.probe = mtk_hdmi_v2_probe,
-	.remove = mtk_hdmi_v2_remove,
 	.driver = {
 		.name = "mediatek-drm-hdmi-v2",
 		.of_match_table = mtk_drm_hdmi_v2_of_ids,

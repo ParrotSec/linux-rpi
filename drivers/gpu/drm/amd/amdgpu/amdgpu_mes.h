@@ -159,9 +159,9 @@ struct amdgpu_mes {
 
 	int				hung_queue_db_array_size;
 	int				hung_queue_hqd_info_offset;
-	struct amdgpu_bo		*hung_queue_db_array_gpu_obj[AMDGPU_MAX_MES_PIPES];
-	uint64_t			hung_queue_db_array_gpu_addr[AMDGPU_MAX_MES_PIPES];
-	void				*hung_queue_db_array_cpu_addr[AMDGPU_MAX_MES_PIPES];
+	struct amdgpu_bo		*hung_queue_db_array_gpu_obj[AMDGPU_MAX_MES_INST_PIPES];
+	uint64_t			hung_queue_db_array_gpu_addr[AMDGPU_MAX_MES_INST_PIPES];
+	void				*hung_queue_db_array_cpu_addr[AMDGPU_MAX_MES_INST_PIPES];
 
 	/* cooperative dispatch */
 	bool                enable_coop_mode;
@@ -288,12 +288,14 @@ struct mes_suspend_gang_input {
 	uint64_t	gang_context_addr;
 	uint64_t	suspend_fence_addr;
 	uint32_t	suspend_fence_value;
+	uint32_t	doorbell_offset;
 };
 
 struct mes_resume_gang_input {
 	uint32_t	xcc_id;
 	bool		resume_all_gangs;
 	uint64_t	gang_context_addr;
+	uint32_t	doorbell_offset;
 };
 
 struct mes_reset_queue_input {

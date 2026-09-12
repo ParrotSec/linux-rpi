@@ -464,8 +464,13 @@ static int stm32f7_i2c_compute_timing(struct stm32f7_i2c_dev *i2c_dev,
 {
 	struct stm32f7_i2c_spec *specs;
 	u32 p_prev = STM32F7_PRESC_MAX;
-	u32 i2cclk = DIV_ROUND_CLOSEST(NSEC_PER_SEC,
-				       setup->clock_src);
+	/*
+	 * Truncate instead of rounding to closest: if the clock period is
+	 * overestimated, the computed SCL timings will come out shorter on
+	 * the wire, which can push the bus above the target rate and below
+	 * the spec's tLOW/tHIGH minimums.
+	 */
+	u32 i2cclk = NSEC_PER_SEC / setup->clock_src;
 	u32 i2cbus = DIV_ROUND_CLOSEST(NSEC_PER_SEC,
 				       setup->speed_freq);
 	u32 clk_error_prev = i2cbus;
@@ -894,8 +899,6 @@ static void stm32f7_i2c_xfer_msg(struct stm32f7_i2c_dev *i2c_dev,
 	f7_msg->count = msg->len;
 	f7_msg->result = 0;
 	f7_msg->stop = (i2c_dev->msg_id >= i2c_dev->msg_num - 1);
-
-	reinit_completion(&i2c_dev->complete);
 
 	cr1 = readl_relaxed(base + STM32F7_I2C_CR1);
 	cr2 = readl_relaxed(base + STM32F7_I2C_CR2);
@@ -1728,6 +1731,8 @@ static int stm32f7_i2c_xfer_core(struct i2c_adapter *i2c_adap,
 	if (ret)
 		goto pm_free;
 
+	reinit_completion(&i2c_dev->complete);
+
 	stm32f7_i2c_xfer_msg(i2c_dev, msgs);
 
 	if (!i2c_dev->atomic)
@@ -2253,7 +2258,7 @@ static int stm32f7_i2c_probe(struct platform_device *pdev)
 	snprintf(adap->name, sizeof(adap->name), "STM32F7 I2C(%pa)",
 		 &res->start);
 	adap->owner = THIS_MODULE;
-	adap->timeout = 2 * HZ;
+	adap->timeout = 8 * HZ;
 	adap->retries = 3;
 	adap->algo = &stm32f7_i2c_algo;
 	adap->dev.parent = &pdev->dev;

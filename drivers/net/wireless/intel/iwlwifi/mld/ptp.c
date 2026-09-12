@@ -301,10 +301,12 @@ void iwl_mld_ptp_init(struct iwl_mld *mld)
 	mld->ptp_data.ptp_clock =
 		ptp_clock_register(&mld->ptp_data.ptp_clock_info, mld->dev);
 
-	if (IS_ERR_OR_NULL(mld->ptp_data.ptp_clock)) {
+	if (IS_ERR(mld->ptp_data.ptp_clock)) {
 		IWL_ERR(mld, "Failed to register PHC clock (%ld)\n",
 			PTR_ERR(mld->ptp_data.ptp_clock));
 		mld->ptp_data.ptp_clock = NULL;
+	} else if (!mld->ptp_data.ptp_clock) {
+		IWL_DEBUG_INFO(mld, "PTP module unavailable on this kernel\n");
 	} else {
 		IWL_DEBUG_INFO(mld, "Registered PHC clock: %s, with index: %d\n",
 			       mld->ptp_data.ptp_clock_info.name,
@@ -319,10 +321,10 @@ void iwl_mld_ptp_remove(struct iwl_mld *mld)
 			       mld->ptp_data.ptp_clock_info.name,
 			       ptp_clock_index(mld->ptp_data.ptp_clock));
 
+		cancel_delayed_work_sync(&mld->ptp_data.dwork);
 		ptp_clock_unregister(mld->ptp_data.ptp_clock);
 		mld->ptp_data.ptp_clock = NULL;
 		mld->ptp_data.last_gp2 = 0;
 		mld->ptp_data.wrap_counter = 0;
-		cancel_delayed_work_sync(&mld->ptp_data.dwork);
 	}
 }

@@ -1573,7 +1573,7 @@ core_scsi3_decode_spec_i_port(
 
 			iport_ptr = NULL;
 			tid_found = target_parse_pr_out_transport_id(tmp_tpg,
-					ptr, &tid_len, &iport_ptr, i_str);
+					ptr, tpdl, &tid_len, &iport_ptr, i_str);
 			if (!tid_found)
 				continue;
 			/*
@@ -2809,7 +2809,7 @@ static void core_scsi3_release_preempt_and_abort(
 }
 
 static sense_reason_t
-core_scsi3_pro_preempt(struct se_cmd *cmd, int type, int scope, u64 res_key,
+core_scsi3_emulate_pro_preempt(struct se_cmd *cmd, int type, int scope, u64 res_key,
 		u64 sa_res_key, enum preempt_type preempt_type)
 {
 	struct se_device *dev = cmd->se_dev;
@@ -2838,11 +2838,6 @@ core_scsi3_pro_preempt(struct se_cmd *cmd, int type, int scope, u64 res_key,
 		core_scsi3_put_pr_reg(pr_reg_n);
 		return TCM_RESERVATION_CONFLICT;
 	}
-	if (scope != PR_SCOPE_LU_SCOPE) {
-		pr_err("SPC-3 PR: Illegal SCOPE: 0x%02x\n", scope);
-		core_scsi3_put_pr_reg(pr_reg_n);
-		return TCM_INVALID_PARAMETER_LIST;
-	}
 
 	spin_lock(&dev->dev_reservation_lock);
 	pr_res_holder = dev->dev_pr_res_holder;
@@ -2856,6 +2851,37 @@ core_scsi3_pro_preempt(struct se_cmd *cmd, int type, int scope, u64 res_key,
 		core_scsi3_put_pr_reg(pr_reg_n);
 		return TCM_INVALID_PARAMETER_LIST;
 	}
+
+	/* Validate TYPE and SCOPE fields if they will be used */
+	if (pr_res_holder &&
+	    (pr_res_holder->pr_res_key == sa_res_key ||
+	     (all_reg && !sa_res_key))) {
+		switch (type) {
+		case PR_TYPE_WRITE_EXCLUSIVE:
+		case PR_TYPE_EXCLUSIVE_ACCESS:
+		case PR_TYPE_WRITE_EXCLUSIVE_REGONLY:
+		case PR_TYPE_EXCLUSIVE_ACCESS_REGONLY:
+		case PR_TYPE_WRITE_EXCLUSIVE_ALLREG:
+		case PR_TYPE_EXCLUSIVE_ACCESS_ALLREG:
+			break;
+		default:
+			pr_err("SPC-3 PR: Unknown Service Action PREEMPT%s"
+				" Type: 0x%02x\n",
+				(preempt_type == PREEMPT_AND_ABORT) ?
+				"_AND_ABORT" : "", type);
+			spin_unlock(&dev->dev_reservation_lock);
+			core_scsi3_put_pr_reg(pr_reg_n);
+			return TCM_INVALID_CDB_FIELD;
+		}
+
+		if (scope != PR_SCOPE_LU_SCOPE) {
+			pr_err("SPC-3 PR: Illegal SCOPE: 0x%02x\n", scope);
+			spin_unlock(&dev->dev_reservation_lock);
+			core_scsi3_put_pr_reg(pr_reg_n);
+			return TCM_INVALID_PARAMETER_LIST;
+		}
+	}
+
 	/*
 	 * From spc4r17, section 5.7.11.4.4 Removing Registrations:
 	 *
@@ -3119,27 +3145,6 @@ core_scsi3_pro_preempt(struct se_cmd *cmd, int type, int scope, u64 res_key,
 }
 
 static sense_reason_t
-core_scsi3_emulate_pro_preempt(struct se_cmd *cmd, int type, int scope,
-		u64 res_key, u64 sa_res_key, enum preempt_type preempt_type)
-{
-	switch (type) {
-	case PR_TYPE_WRITE_EXCLUSIVE:
-	case PR_TYPE_EXCLUSIVE_ACCESS:
-	case PR_TYPE_WRITE_EXCLUSIVE_REGONLY:
-	case PR_TYPE_EXCLUSIVE_ACCESS_REGONLY:
-	case PR_TYPE_WRITE_EXCLUSIVE_ALLREG:
-	case PR_TYPE_EXCLUSIVE_ACCESS_ALLREG:
-		return core_scsi3_pro_preempt(cmd, type, scope, res_key,
-					      sa_res_key, preempt_type);
-	default:
-		pr_err("SPC-3 PR: Unknown Service Action PREEMPT%s"
-			" Type: 0x%02x\n", (preempt_type == PREEMPT_AND_ABORT) ? "_AND_ABORT" : "", type);
-		return TCM_INVALID_CDB_FIELD;
-	}
-}
-
-
-static sense_reason_t
 core_scsi3_emulate_pro_register_and_move(struct se_cmd *cmd, u64 res_key,
 		u64 sa_res_key, int aptpl, int unreg)
 {
@@ -3280,16 +3285,13 @@ core_scsi3_emulate_pro_register_and_move(struct se_cmd *cmd, u64 res_key,
 		goto out;
 	}
 	tid_found = target_parse_pr_out_transport_id(dest_se_tpg,
-			&buf[24], &tmp_tid_len, &iport_ptr, initiator_str);
+			&buf[24], tid_len, &tmp_tid_len, &iport_ptr, initiator_str);
 	if (!tid_found) {
 		pr_err("SPC-3 PR REGISTER_AND_MOVE: Unable to locate"
 			" initiator_str from Transport ID\n");
 		ret = TCM_INVALID_PARAMETER_LIST;
 		goto out;
 	}
-
-	transport_kunmap_data_sg(cmd);
-	buf = NULL;
 
 	pr_debug("SPC-3 PR [%s] Extracted initiator %s identifier: %s"
 		" %s\n", dest_tf_ops->fabric_name, (iport_ptr != NULL) ?
@@ -3527,6 +3529,11 @@ after_iport_check:
 	core_scsi3_update_and_write_aptpl(cmd->se_dev, aptpl);
 
 	core_scsi3_put_pr_reg(dest_pr_reg);
+	/*
+	 * iport_ptr aliases the PR-OUT parameter list mapped above, so the
+	 * buffer is unmapped only here on success (and at out: on error).
+	 */
+	transport_kunmap_data_sg(cmd);
 	return 0;
 out:
 	if (buf)

@@ -121,7 +121,7 @@ static int gmc_v12_1_process_interrupt(struct amdgpu_device *adev,
 
 	if (entry->src_id == UTCL2_1_0__SRCID__RETRY) {
 		retry_fault = true;
-		write_fault = !!(entry->src_data[1] & 0x200000);
+		write_fault = !!(entry->src_data[1] & AMDGPU_GMC121_FAULT_SOURCE_DATA_WRITE);
 	}
 
 	if (entry->client_id == SOC_V1_0_IH_CLIENTID_VMC) {
@@ -254,9 +254,24 @@ static bool gmc_v12_1_get_vmid_pasid_mapping_info(struct amdgpu_device *adev,
  * by the amdgpu vm/hsa code.
  */
 
+/**
+ * gmc_v12_1_use_invalidate_semaphore - judge whether to use semaphore
+ *
+ * @adev: amdgpu_device pointer
+ * @vmhub: vmhub type
+ *
+ */
+static bool gmc_v12_1_use_invalidate_semaphore(struct amdgpu_device *adev,
+				       uint32_t vmhub)
+{
+	return ((!AMDGPU_IS_GFXHUB(vmhub)) &&
+		(!amdgpu_sriov_vf(adev)));
+}
+
 static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 				   unsigned int vmhub, uint32_t flush_type)
 {
+	bool use_semaphore = gmc_v12_1_use_invalidate_semaphore(adev, vmhub);
 	struct amdgpu_vmhub *hub = &adev->vmhub[vmhub];
 	u32 inv_req = hub->vmhub_funcs->get_invalidate_req(vmid, flush_type);
 	u32 tmp;
@@ -270,6 +285,19 @@ static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 
 	spin_lock(&adev->gmc.invalidate_lock);
 
+	if (use_semaphore) {
+		for (i = 0; i < adev->usec_timeout; i++) {
+			/* a read return value of 1 means semaphore acuqire */
+			tmp = RREG32_RLC_NO_KIQ(hub->vm_inv_eng0_sem + hub->eng_distance * eng, hub_ip);
+			if (tmp & 0x1)
+				break;
+			udelay(1);
+		}
+
+		if (i >= adev->usec_timeout)
+			DRM_ERROR("Timeout waiting for sem acquire in VM flush!\n");
+	}
+
 	WREG32_RLC_NO_KIQ(hub->vm_inv_eng0_req + hub->eng_distance * eng, inv_req, hub_ip);
 
 	/* Wait for ACK with a delay.*/
@@ -282,6 +310,9 @@ static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 
 		udelay(1);
 	}
+
+	if (use_semaphore)
+		WREG32_RLC_NO_KIQ(hub->vm_inv_eng0_sem + hub->eng_distance * eng, 0, hub_ip);
 
 	/* Issue additional private vm invalidation to MMHUB */
 	if (!AMDGPU_IS_GFXHUB(vmhub) &&
@@ -345,9 +376,7 @@ static void gmc_v12_1_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
 		return;
 	}
 
-	mutex_lock(&adev->mman.gtt_window_lock);
 	gmc_v12_1_flush_vm_hub(adev, vmid, vmhub, 0);
-	mutex_unlock(&adev->mman.gtt_window_lock);
 	return;
 }
 
@@ -385,7 +414,7 @@ static void gmc_v12_1_flush_gpu_tlb_pasid(struct amdgpu_device *adev,
 
 		if (all_hub) {
 			/* invalidate mm_hub */
-			if (test_bit(AMDGPU_MMHUB1(0), adev->vmhubs_mask)) {
+			if (test_bit(AMDGPU_MMHUB0(0), adev->vmhubs_mask)) {
 				input.hub_id = AMDGPU_MMHUB0(0);
 				adev->mes.funcs->invalidate_tlbs_pasid(&adev->mes, &input);
 			}
@@ -420,9 +449,16 @@ static void gmc_v12_1_flush_gpu_tlb_pasid(struct amdgpu_device *adev,
 static uint64_t gmc_v12_1_emit_flush_gpu_tlb(struct amdgpu_ring *ring,
 					     unsigned vmid, uint64_t pd_addr)
 {
+	bool use_semaphore = gmc_v12_1_use_invalidate_semaphore(ring->adev, ring->vm_hub);
 	struct amdgpu_vmhub *hub = &ring->adev->vmhub[ring->vm_hub];
 	uint32_t req = hub->vmhub_funcs->get_invalidate_req(vmid, 0);
 	unsigned eng = ring->vm_inv_eng;
+
+	if (use_semaphore)
+		/* a read return value of 1 means semaphore acuqire */
+		amdgpu_ring_emit_reg_wait(ring,
+					  hub->vm_inv_eng0_sem +
+					  hub->eng_distance * eng, 0x1, 0x1);
 
 	amdgpu_ring_emit_wreg(ring, hub->ctx0_ptb_addr_lo32 +
 			      (hub->ctx_addr_distance * vmid),
@@ -437,6 +473,14 @@ static uint64_t gmc_v12_1_emit_flush_gpu_tlb(struct amdgpu_ring *ring,
 					    hub->vm_inv_eng0_ack +
 					    hub->eng_distance * eng,
 					    req, 1 << vmid);
+
+	if (use_semaphore)
+		/*
+		 * add semaphore release after invalidation,
+		 * write with 0 means semaphore release
+		 */
+		amdgpu_ring_emit_wreg(ring, hub->vm_inv_eng0_sem +
+				      hub->eng_distance * eng, 0);
 
 	return pd_addr;
 }
@@ -526,20 +570,27 @@ static void gmc_v12_1_get_coherence_flags(struct amdgpu_device *adev,
 	bool ext_coherent = bo->flags & AMDGPU_GEM_CREATE_EXT_COHERENT;
 	uint32_t gc_ip_version = amdgpu_ip_version(adev, GC_HWIP, 0);
 	bool uncached = bo->flags & AMDGPU_GEM_CREATE_UNCACHED;
-	unsigned int mtype, mtype_local;
+	unsigned int mtype, mtype_local, mtype_remote;
 	bool snoop = false;
 	bool is_local = false;
+	bool is_aid_a1;
 
 	switch (gc_ip_version) {
 	case IP_VERSION(12, 1, 0):
-		mtype_local = MTYPE_RW;
-		if (amdgpu_mtype_local == 1) {
+		is_aid_a1 = (adev->rev_id & 0x10);
+
+		mtype_local = is_aid_a1 ? MTYPE_RW : MTYPE_NC;
+		mtype_remote = is_aid_a1 ? MTYPE_NC : MTYPE_UC;
+		if (amdgpu_mtype_local == 0) {
+			DRM_INFO_ONCE("Using MTYPE_RW for local memory\n");
+			mtype_local = MTYPE_RW;
+		} else if (amdgpu_mtype_local == 1) {
 			DRM_INFO_ONCE("Using MTYPE_NC for local memory\n");
 			mtype_local = MTYPE_NC;
 		} else if (amdgpu_mtype_local == 2) {
-			DRM_INFO_ONCE("MTYPE_CC not supported, using MTYPE_RW instead for local memory\n");
+			DRM_INFO_ONCE("MTYPE_CC not supported, using %s for local memory\n", is_aid_a1 ? "MTYPE_RW" : "MTYPE_NC");
 		} else {
-			DRM_INFO_ONCE("Using MTYPE_RW for local memory\n");
+			DRM_INFO_ONCE("Using %s for local memory\n", is_aid_a1 ? "MTYPE_RW" : "MTYPE_NC");
 		}
 
 		is_local = (is_vram && adev == bo_adev);
@@ -549,10 +600,7 @@ static void gmc_v12_1_get_coherence_flags(struct amdgpu_device *adev,
 		} else if (ext_coherent) {
 			mtype = is_local ? mtype_local : MTYPE_UC;
 		} else {
-			if (is_local)
-				mtype = mtype_local;
-			else
-				mtype = MTYPE_NC;
+			mtype = is_local ? mtype_local : mtype_remote;
 		}
 		break;
 	default:
@@ -623,10 +671,17 @@ static const struct amdgpu_irq_src_funcs gmc_v12_1_irq_funcs = {
 	.process = gmc_v12_1_process_interrupt,
 };
 
+static const struct amdgpu_irq_src_funcs gmc_v12_1_ecc_funcs = {
+	.process = amdgpu_umc_uniras_process_ecc_irq,
+};
+
 void gmc_v12_1_set_irq_funcs(struct amdgpu_device *adev)
 {
 	adev->gmc.vm_fault.num_types = 1;
 	adev->gmc.vm_fault.funcs = &gmc_v12_1_irq_funcs;
+
+	adev->gmc.ecc_irq.num_types = 1;
+	adev->gmc.ecc_irq.funcs = &gmc_v12_1_ecc_funcs;
 }
 
 void gmc_v12_1_init_vram_info(struct amdgpu_device *adev)

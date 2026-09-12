@@ -5,7 +5,7 @@
 #define __PANTHOR_HW_H__
 
 #include "panthor_device.h"
-#include "panthor_regs.h"
+#include "panthor_gpu_regs.h"
 
 /**
  * struct panthor_hw_ops - HW operations that are specific to a GPU
@@ -19,6 +19,12 @@ struct panthor_hw_ops {
 
 	/** @l2_power_on: L2 power on function pointer */
 	int (*l2_power_on)(struct panthor_device *ptdev);
+
+	/** @power_changed_on: Start listening to power change IRQs */
+	int (*power_changed_on)(struct panthor_device *ptdev);
+
+	/** @power_changed_off: Stop listening to power change IRQs */
+	void (*power_changed_off)(struct panthor_device *ptdev);
 };
 
 /**
@@ -32,6 +38,8 @@ struct panthor_hw {
 };
 
 int panthor_hw_init(struct panthor_device *ptdev);
+int panthor_hw_power_status_register(void);
+void panthor_hw_power_status_unregister(void);
 
 static inline int panthor_hw_soft_reset(struct panthor_device *ptdev)
 {

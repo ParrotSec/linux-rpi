@@ -42,6 +42,13 @@
 #define MAX(x, y) ((x > y) ? x : y)
 #endif
 
+#include "dc_fpu.h"
+
+#if !defined(DC_RUN_WITH_PREEMPTION_ENABLED)
+#define DC_RUN_WITH_PREEMPTION_ENABLED(code) code
+#endif // !DC_RUN_WITH_PREEMPTION_ENABLED
+
+
 /*******************************************************************************
  * Private functions
  ******************************************************************************/
@@ -170,11 +177,15 @@ struct dc_stream_state *dc_create_stream_for_sink(
 	if (sink == NULL)
 		goto fail;
 
-	stream = kzalloc_obj(struct dc_stream_state, GFP_ATOMIC);
+	DC_RUN_WITH_PREEMPTION_ENABLED(stream = kzalloc_obj(struct dc_stream_state, GFP_ATOMIC));
+
 	if (stream == NULL)
 		goto fail;
 
-	stream->update_scratch = kzalloc((int32_t) dc_update_scratch_space_size(), GFP_ATOMIC);
+	DC_RUN_WITH_PREEMPTION_ENABLED(stream->update_scratch =
+					kzalloc((int32_t) dc_update_scratch_space_size(),
+						GFP_ATOMIC));
+
 	if (stream->update_scratch == NULL)
 		goto fail;
 
@@ -245,7 +256,6 @@ const struct dc_stream_status *dc_stream_get_status_const(
 	const struct dc_stream_state *stream)
 {
 	struct dc *dc = stream->ctx->dc;
-
 	return dc_state_get_stream_status(dc->current_state, stream);
 }
 
@@ -523,8 +533,10 @@ bool dc_stream_program_cursor_position(
 				struct pipe_ctx *pipe_ctx = &dc->current_state->res_ctx.pipe_ctx[i];
 
 				/* trigger event on first pipe with current stream */
-				if (stream == pipe_ctx->stream) {
-					pipe_ctx->stream_res.tg->funcs->program_manual_trigger(pipe_ctx->stream_res.tg);
+				if (stream == pipe_ctx->stream &&
+				pipe_ctx->stream_res.tg->funcs->program_manual_trigger) {
+					pipe_ctx->stream_res.tg->funcs->program_manual_trigger(
+					pipe_ctx->stream_res.tg);
 					break;
 				}
 			}

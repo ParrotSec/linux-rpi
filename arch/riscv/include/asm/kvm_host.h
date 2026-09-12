@@ -18,6 +18,7 @@
 #include <asm/ptrace.h>
 #include <asm/kvm_tlb.h>
 #include <asm/kvm_vmid.h>
+#include <asm/kvm_vcpu_config.h>
 #include <asm/kvm_vcpu_fp.h>
 #include <asm/kvm_vcpu_insn.h>
 #include <asm/kvm_vcpu_sbi.h>
@@ -46,18 +47,6 @@
 #define KVM_REQ_STEAL_UPDATE		KVM_ARCH_REQ(6)
 
 #define __KVM_HAVE_ARCH_FLUSH_REMOTE_TLBS_RANGE
-
-#define KVM_HEDELEG_DEFAULT		(BIT(EXC_INST_MISALIGNED) | \
-					 BIT(EXC_INST_ILLEGAL)     | \
-					 BIT(EXC_BREAKPOINT)      | \
-					 BIT(EXC_SYSCALL)         | \
-					 BIT(EXC_INST_PAGE_FAULT) | \
-					 BIT(EXC_LOAD_PAGE_FAULT) | \
-					 BIT(EXC_STORE_PAGE_FAULT))
-
-#define KVM_HIDELEG_DEFAULT		(BIT(IRQ_VS_SOFT)  | \
-					 BIT(IRQ_VS_TIMER) | \
-					 BIT(IRQ_VS_EXT))
 
 #define KVM_DIRTY_LOG_MANUAL_CAPS	(KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE | \
 					 KVM_DIRTY_LOG_INITIALLY_SET)
@@ -94,6 +83,7 @@ struct kvm_arch {
 	/* G-stage page table */
 	pgd_t *pgd;
 	phys_addr_t pgd_phys;
+	unsigned long pgd_levels;
 
 	/* Guest Timer */
 	struct kvm_guest_timer timer;
@@ -167,12 +157,6 @@ struct kvm_vcpu_csr {
 	unsigned long senvcfg;
 };
 
-struct kvm_vcpu_config {
-	u64 henvcfg;
-	u64 hstateen0;
-	unsigned long hedeleg;
-};
-
 struct kvm_vcpu_smstateen_csr {
 	unsigned long sstateen0;
 };
@@ -223,13 +207,13 @@ struct kvm_vcpu_arch {
 	/*
 	 * VCPU interrupts
 	 *
-	 * We have a lockless approach for tracking pending VCPU interrupts
-	 * implemented using atomic bitops. The irqs_pending bitmap represent
-	 * pending interrupts whereas irqs_pending_mask represent bits changed
-	 * in irqs_pending. Our approach is modeled around multiple producer
-	 * and single consumer problem where the consumer is the VCPU itself.
+	 * The irqs_pending bitmap represents pending interrupts whereas
+	 * irqs_pending_mask represents bits changed in irqs_pending. Updates
+	 * to these bitmaps are serialized so vcpu interrupt sync/flush cannot
+	 * drop a newly injected interrupt while syncing guest-visible HVIP.
 	 */
 #define KVM_RISCV_VCPU_NR_IRQS	64
+	raw_spinlock_t irqs_pending_lock;
 	DECLARE_BITMAP(irqs_pending, KVM_RISCV_VCPU_NR_IRQS);
 	DECLARE_BITMAP(irqs_pending_mask, KVM_RISCV_VCPU_NR_IRQS);
 
@@ -272,6 +256,9 @@ struct kvm_vcpu_arch {
 
 	/* 'static' configurations which are set only once */
 	struct kvm_vcpu_config cfg;
+
+	/* Indicates modified guest CSRs */
+	bool csr_dirty;
 
 	/* SBI steal-time accounting */
 	struct {

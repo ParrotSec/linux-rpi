@@ -807,6 +807,11 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj)
 	bpf_task_work_cancel_and_free(obj + rec->task_work_off);
 }
 
+void bpf_obj_cancel_fields(struct bpf_map *map, void *obj)
+{
+	bpf_map_free_internal_structs(map, obj);
+}
+
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
 	const struct btf_field *fields;
@@ -941,14 +946,6 @@ static void bpf_map_free_rcu_gp(struct rcu_head *rcu)
 	bpf_map_free_in_work(container_of(rcu, struct bpf_map, rcu));
 }
 
-static void bpf_map_free_mult_rcu_gp(struct rcu_head *rcu)
-{
-	if (rcu_trace_implies_rcu_gp())
-		bpf_map_free_rcu_gp(rcu);
-	else
-		call_rcu(rcu, bpf_map_free_rcu_gp);
-}
-
 /* decrement map refcnt and schedule it for freeing via workqueue
  * (underlying map implementation ops->map_free() might sleep)
  */
@@ -959,8 +956,9 @@ void bpf_map_put(struct bpf_map *map)
 		bpf_map_free_id(map);
 
 		WARN_ON_ONCE(atomic64_read(&map->sleepable_refcnt));
+		/* RCU tasks trace grace period implies RCU grace period. */
 		if (READ_ONCE(map->free_after_mult_rcu_gp))
-			call_rcu_tasks_trace(&map->rcu, bpf_map_free_mult_rcu_gp);
+			call_rcu_tasks_trace(&map->rcu, bpf_map_free_rcu_gp);
 		else if (READ_ONCE(map->free_after_rcu_gp))
 			call_rcu(&map->rcu, bpf_map_free_rcu_gp);
 		else
@@ -1579,6 +1577,13 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr)
 			err = -EFAULT;
 			goto free_map;
 		}
+
+		/* See libbpf: emit_signature_match() */
+		BUILD_BUG_ON(offsetof(struct bpf_map, excl) != SHA256_DIGEST_SIZE);
+		BUILD_BUG_ON(!__same_type(map->excl, u32));
+		BUILD_BUG_ON(offsetof(struct bpf_map, sha)  != 0);
+		BUILD_BUG_ON(!__same_type(map->sha, u8[SHA256_DIGEST_SIZE]));
+		map->excl = 1;
 	} else if (attr->excl_prog_hash_size) {
 		err = -EINVAL;
 		goto free_map;
@@ -2832,7 +2837,7 @@ static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr
 	sig = kvmemdup_bpfptr(usig, attr->signature_size);
 	if (IS_ERR(sig)) {
 		bpf_key_put(key);
-		return -ENOMEM;
+		return PTR_ERR(sig);
 	}
 
 	bpf_dynptr_init(&sig_ptr, sig, BPF_DYNPTR_TYPE_LOCAL, 0,
@@ -3090,10 +3095,6 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	if (err < 0)
 		goto free_used_maps;
 
-	prog = bpf_prog_select_runtime(prog, &err);
-	if (err < 0)
-		goto free_used_maps;
-
 	err = bpf_prog_mark_insn_arrays_ready(prog);
 	if (err < 0)
 		goto free_used_maps;
@@ -3273,14 +3274,6 @@ static bool bpf_link_is_tracepoint(struct bpf_link *link)
 	       (link->type == BPF_LINK_TYPE_TRACING && link->attach_type == BPF_TRACE_RAW_TP);
 }
 
-static void bpf_link_defer_dealloc_mult_rcu_gp(struct rcu_head *rcu)
-{
-	if (rcu_trace_implies_rcu_gp())
-		bpf_link_defer_dealloc_rcu_gp(rcu);
-	else
-		call_rcu(rcu, bpf_link_defer_dealloc_rcu_gp);
-}
-
 /* bpf_link_free is guaranteed to be called from process context */
 static void bpf_link_free(struct bpf_link *link)
 {
@@ -3306,7 +3299,8 @@ static void bpf_link_free(struct bpf_link *link)
 		 * faultable case, since it exclusively uses RCU Tasks Trace.
 		 */
 		if (link->sleepable || (link->prog && link->prog->sleepable))
-			call_rcu_tasks_trace(&link->rcu, bpf_link_defer_dealloc_mult_rcu_gp);
+			/* RCU Tasks Trace grace period implies RCU grace period. */
+			call_rcu_tasks_trace(&link->rcu, bpf_link_defer_dealloc_rcu_gp);
 		/* We need to do a SRCU grace period wait for non-faultable tracepoint BPF links. */
 		else if (bpf_link_is_tracepoint(link))
 			call_tracepoint_unregister_atomic(&link->rcu, bpf_link_defer_dealloc_rcu_gp);
@@ -4299,6 +4293,11 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 	if (!btp)
 		return -ENOENT;
 
+	if (prog->sleepable && !tracepoint_is_faultable(btp->tp)) {
+		bpf_put_raw_tracepoint(btp);
+		return -EINVAL;
+	}
+
 	link = kzalloc_obj(*link, GFP_USER);
 	if (!link) {
 		err = -ENOMEM;
@@ -4672,7 +4671,7 @@ static int bpf_prog_detach(const union bpf_attr *attr)
 #define BPF_PROG_QUERY_LAST_FIELD query.revision
 
 static int bpf_prog_query(const union bpf_attr *attr,
-			  union bpf_attr __user *uattr)
+			  union bpf_attr __user *uattr, u32 uattr_size)
 {
 	if (!bpf_net_capable())
 		return -EPERM;
@@ -4711,7 +4710,7 @@ static int bpf_prog_query(const union bpf_attr *attr,
 	case BPF_CGROUP_GETSOCKOPT:
 	case BPF_CGROUP_SETSOCKOPT:
 	case BPF_LSM_CGROUP:
-		return cgroup_bpf_prog_query(attr, uattr);
+		return cgroup_bpf_prog_query(attr, uattr, uattr_size);
 	case BPF_LIRC_MODE2:
 		return lirc_prog_query(attr, uattr);
 	case BPF_FLOW_DISSECTOR:
@@ -4937,6 +4936,29 @@ out:
 	return map;
 }
 
+static void prepare_dump_pseudo_call(struct bpf_insn *insn)
+{
+	s32 call_off = insn->imm;
+
+	/*
+	 * BPF_CALL_ARGS only exists for interpreter fallback.
+	 * 1. For interpreter (BPF_CALL_ARGS): insn->off is the index of
+	 *    interpreters_args array, so here using bpf_call_args_imm()
+	 *    to get the real address offset.
+	 * 2. For JIT (BPF_CALL): insn->off is the subprog id.
+	 */
+	if (insn->code == (BPF_JMP | BPF_CALL_ARGS))
+		insn->imm = bpf_call_args_imm(insn->off);
+	else
+		insn->imm = insn->off;
+
+	/* Avoid dumping a truncated and misleading pc-relative offset. */
+	if (call_off > S16_MAX || call_off < S16_MIN)
+		insn->off = 0;
+	else
+		insn->off = call_off;
+}
+
 static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 					      const struct cred *f_cred)
 {
@@ -4962,6 +4984,9 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 		}
 		if (code == (BPF_JMP | BPF_CALL) ||
 		    code == (BPF_JMP | BPF_CALL_ARGS)) {
+			/* Restore the legacy xlated dump layout. */
+			if (insns[i].src_reg == BPF_PSEUDO_CALL)
+				prepare_dump_pseudo_call(&insns[i]);
 			if (code == (BPF_JMP | BPF_CALL_ARGS))
 				insns[i].code = BPF_JMP | BPF_CALL;
 			if (!bpf_dump_raw_ok(f_cred))
@@ -5037,10 +5062,11 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 	u32 info_len = attr->info.info_len;
 	struct bpf_prog_kstats stats;
 	char __user *uinsns;
-	u32 ulen;
+	u32 ulen, len;
 	int err;
 
-	err = bpf_check_uarg_tail_zero(USER_BPFPTR(uinfo), sizeof(info), info_len);
+	len = offsetofend(struct bpf_prog_info, attach_btf_id);
+	err = bpf_check_uarg_tail_zero(USER_BPFPTR(uinfo), len, info_len);
 	if (err)
 		return err;
 	info_len = min_t(u32, sizeof(info), info_len);
@@ -5322,10 +5348,11 @@ static int bpf_map_get_info_by_fd(struct file *file,
 {
 	struct bpf_map_info __user *uinfo = u64_to_user_ptr(attr->info.info);
 	struct bpf_map_info info;
-	u32 info_len = attr->info.info_len;
+	u32 info_len = attr->info.info_len, len;
 	int err;
 
-	err = bpf_check_uarg_tail_zero(USER_BPFPTR(uinfo), sizeof(info), info_len);
+	len = offsetofend(struct bpf_map_info, hash_size);
+	err = bpf_check_uarg_tail_zero(USER_BPFPTR(uinfo), len, info_len);
 	if (err)
 		return err;
 	info_len = min_t(u32, sizeof(info), info_len);
@@ -6181,7 +6208,7 @@ static int prog_stream_read(union bpf_attr *attr)
 	return ret;
 }
 
-#define BPF_PROG_ASSOC_STRUCT_OPS_LAST_FIELD prog_assoc_struct_ops.prog_fd
+#define BPF_PROG_ASSOC_STRUCT_OPS_LAST_FIELD prog_assoc_struct_ops.flags
 
 static int prog_assoc_struct_ops(union bpf_attr *attr)
 {
@@ -6278,7 +6305,7 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		err = bpf_prog_detach(&attr);
 		break;
 	case BPF_PROG_QUERY:
-		err = bpf_prog_query(&attr, uattr.user);
+		err = bpf_prog_query(&attr, uattr.user, size);
 		break;
 	case BPF_PROG_TEST_RUN:
 		err = bpf_prog_test_run(&attr, uattr.user);
@@ -6386,8 +6413,7 @@ static bool syscall_prog_is_valid_access(int off, int size,
 {
 	if (off < 0 || off >= U16_MAX)
 		return false;
-	if (off % size != 0)
-		return false;
+	/* No alignment requirements for syscall ctx accesses. */
 	return true;
 }
 

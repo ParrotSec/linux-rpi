@@ -27,7 +27,7 @@
 #include "regs/xe_i2c_regs.h"
 #include "regs/xe_irq_regs.h"
 
-#include "xe_device_types.h"
+#include "xe_device.h"
 #include "xe_i2c.h"
 #include "xe_mmio.h"
 #include "xe_sriov.h"
@@ -95,10 +95,13 @@ static int xe_i2c_register_adapter(struct xe_i2c *i2c)
 	struct platform_device *pdev;
 	struct fwnode_handle *fwnode;
 	int ret;
+	u32 id;
 
 	fwnode = fwnode_create_software_node(xe_i2c_adapter_properties, NULL);
 	if (IS_ERR(fwnode))
 		return PTR_ERR(fwnode);
+
+	id = (pci_domain_nr(pci->bus) << 16) | pci_dev_id(pci);
 
 	/*
 	 * Not using platform_device_register_full() here because we don't have
@@ -106,7 +109,7 @@ static int xe_i2c_register_adapter(struct xe_i2c *i2c)
 	 * uses that handle, but it may be called before
 	 * platform_device_register_full() is done.
 	 */
-	pdev = platform_device_alloc(adapter_name, pci_dev_id(pci));
+	pdev = platform_device_alloc(adapter_name, id);
 	if (!pdev) {
 		ret = -ENOMEM;
 		goto err_fwnode_remove;
@@ -176,11 +179,18 @@ static bool xe_i2c_irq_present(struct xe_device *xe)
  */
 void xe_i2c_irq_handler(struct xe_device *xe, u32 master_ctl)
 {
-	if (!xe_i2c_irq_present(xe))
+	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
+
+	if (!(master_ctl & I2C_IRQ) || !xe_i2c_irq_present(xe))
 		return;
 
-	if (master_ctl & I2C_IRQ)
-		generic_handle_irq_safe(xe->i2c->adapter_irq);
+	/* Forward interrupt to I2C adapter */
+	generic_handle_irq_safe(xe->i2c->adapter_irq);
+
+	/* Deassert after I2C adapter clears the interrupt */
+	xe_mmio_rmw32(mmio, I2C_CONFIG_CMD, 0, PCI_COMMAND_INTX_DISABLE);
+	/* Reassert to allow subsequent interrupt generation */
+	xe_mmio_rmw32(mmio, I2C_CONFIG_CMD, PCI_COMMAND_INTX_DISABLE, 0);
 }
 
 void xe_i2c_irq_reset(struct xe_device *xe)
@@ -190,6 +200,7 @@ void xe_i2c_irq_reset(struct xe_device *xe)
 	if (!xe_i2c_irq_present(xe))
 		return;
 
+	xe_mmio_rmw32(mmio, I2C_CONFIG_CMD, 0, PCI_COMMAND_INTX_DISABLE);
 	xe_mmio_rmw32(mmio, I2C_BRIDGE_PCICFGCTL, ACPI_INTR_EN, 0);
 }
 
@@ -201,6 +212,7 @@ void xe_i2c_irq_postinstall(struct xe_device *xe)
 		return;
 
 	xe_mmio_rmw32(mmio, I2C_BRIDGE_PCICFGCTL, 0, ACPI_INTR_EN);
+	xe_mmio_rmw32(mmio, I2C_CONFIG_CMD, PCI_COMMAND_INTX_DISABLE, 0);
 }
 
 static int xe_i2c_irq_map(struct irq_domain *h, unsigned int virq,

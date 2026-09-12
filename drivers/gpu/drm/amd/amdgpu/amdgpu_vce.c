@@ -451,24 +451,6 @@ void amdgpu_vce_free_handles(struct amdgpu_device *adev, struct drm_file *filp)
 }
 
 /**
- * amdgpu_vce_required_gart_pages() - gets number of GART pages required by VCE
- *
- * @adev: amdgpu_device pointer
- *
- * Returns how many GART pages we need before GTT for the VCE IP block.
- * For VCE1, see vce_v1_0_ensure_vcpu_bo_32bit_addr for details.
- * For VCE2+, this is not needed so return zero.
- */
-u32 amdgpu_vce_required_gart_pages(struct amdgpu_device *adev)
-{
-	/* VCE IP block not added yet, so can't use amdgpu_ip_version */
-	if (adev->family == AMDGPU_FAMILY_SI)
-		return 512;
-
-	return 0;
-}
-
-/**
  * amdgpu_vce_get_create_msg - generate a VCE create msg
  *
  * @ring: ring we should submit the msg to
@@ -895,9 +877,20 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
 				goto out;
 			}
 
-			*size = amdgpu_ib_get_value(ib, idx + 8) *
-				amdgpu_ib_get_value(ib, idx + 10) *
-				8 * 3 / 2;
+			uint32_t width, height;
+			width = amdgpu_ib_get_value(ib, idx + 8);
+			height = amdgpu_ib_get_value(ib, idx + 10);
+
+			if (width == 0 || height == 0 ||
+			    width > 4096 || height > 2304) {
+				DRM_ERROR("invalid VCE image size: %ux%u\n",
+					  width, height);
+				r = -EINVAL;
+				goto out;
+			}
+
+			*size = width * height * 8 * 3 / 2;
+
 			break;
 
 		case 0x04000001: /* config extension */

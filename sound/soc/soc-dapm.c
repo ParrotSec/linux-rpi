@@ -89,6 +89,7 @@ static int dapm_up_seq[] = {
 	[snd_soc_dapm_input] = 6,
 	[snd_soc_dapm_output] = 6,
 	[snd_soc_dapm_mux] = 7,
+	[snd_soc_dapm_mux_named_ctl] = 7,
 	[snd_soc_dapm_demux] = 7,
 	[snd_soc_dapm_dac] = 8,
 	[snd_soc_dapm_switch] = 9,
@@ -140,6 +141,7 @@ static int dapm_down_seq[] = {
 	[snd_soc_dapm_micbias] = 10,
 	[snd_soc_dapm_vmid] = 10,
 	[snd_soc_dapm_mux] = 11,
+	[snd_soc_dapm_mux_named_ctl] = 11,
 	[snd_soc_dapm_demux] = 11,
 	[snd_soc_dapm_aif_in] = 12,
 	[snd_soc_dapm_aif_out] = 12,
@@ -577,6 +579,7 @@ static int dapm_check_dynamic_path(
 
 	switch (sink->id) {
 	case snd_soc_dapm_mux:
+	case snd_soc_dapm_mux_named_ctl:
 	case snd_soc_dapm_switch:
 	case snd_soc_dapm_mixer:
 	case snd_soc_dapm_mixer_named_ctl:
@@ -668,6 +671,7 @@ static int dapm_add_path(
 
 		switch (wsink->id) {
 		case snd_soc_dapm_mux:
+		case snd_soc_dapm_mux_named_ctl:
 			ret = dapm_connect_mux(dapm, path, control, wsink);
 			if (ret != 0)
 				goto err;
@@ -766,6 +770,7 @@ static int dapm_kcontrol_data_alloc(struct snd_soc_dapm_widget *widget,
 		break;
 	case snd_soc_dapm_demux:
 	case snd_soc_dapm_mux:
+	case snd_soc_dapm_mux_named_ctl:
 		e = (struct soc_enum *)kcontrol->private_value;
 
 		if (e->autodisable) {
@@ -915,6 +920,7 @@ static bool dapm_kcontrol_set_value(const struct snd_kcontrol *kcontrol,
 			break;
 		case snd_soc_dapm_demux:
 		case snd_soc_dapm_mux:
+		case snd_soc_dapm_mux_named_ctl:
 			data->widget->on_val = value >> data->widget->shift;
 			break;
 		default:
@@ -1198,6 +1204,7 @@ static int dapm_create_or_share_kcontrol(struct snd_soc_dapm_widget *w,
 				wname_in_long_name = true;
 				kcname_in_long_name = true;
 				break;
+			case snd_soc_dapm_mux_named_ctl:
 			case snd_soc_dapm_mixer_named_ctl:
 				wname_in_long_name = false;
 				kcname_in_long_name = true;
@@ -1317,6 +1324,7 @@ static int dapm_new_mux(struct snd_soc_dapm_widget *w)
 
 	switch (w->id) {
 	case snd_soc_dapm_mux:
+	case snd_soc_dapm_mux_named_ctl:
 		dir = SND_SOC_DAPM_DIR_OUT;
 		type = "mux";
 		break;
@@ -2399,6 +2407,7 @@ static const char * const dapm_type_name[] = {
 	[snd_soc_dapm_input]            = "input",
 	[snd_soc_dapm_output]           = "output",
 	[snd_soc_dapm_mux]              = "mux",
+	[snd_soc_dapm_mux_named_ctl]    = "mux_named_ctl",
 	[snd_soc_dapm_demux]            = "demux",
 	[snd_soc_dapm_mixer]            = "mixer",
 	[snd_soc_dapm_mixer_named_ctl]  = "mixer_named_ctl",
@@ -2897,20 +2906,18 @@ static struct snd_soc_dapm_widget *dapm_find_widget(
 {
 	struct snd_soc_dapm_widget *w;
 	struct snd_soc_dapm_widget *fallback = NULL;
-	char prefixed_pin[80];
-	const char *pin_name;
-	const char *prefix = dapm_prefix(dapm);
-
-	if (prefix) {
-		snprintf(prefixed_pin, sizeof(prefixed_pin), "%s %s",
-			 prefix, pin);
-		pin_name = prefixed_pin;
-	} else {
-		pin_name = pin;
-	}
+	bool pin_has_prefix = snd_soc_dapm_pin_has_prefix(dapm->card, pin);
+	bool match;
 
 	for_each_card_widgets(dapm->card, w) {
-		if (!strcmp(w->name, pin_name)) {
+		match = false;
+
+		if (!strcmp(pin, w->name))
+			match = true;
+		else if (!pin_has_prefix && !snd_soc_dapm_widget_name_cmp(w, pin))
+			match = true;
+
+		if (match) {
 			if (w->dapm == dapm)
 				return w;
 			else
@@ -3347,6 +3354,7 @@ int snd_soc_dapm_new_widgets(struct snd_soc_card *card)
 			dapm_new_mixer(w);
 			break;
 		case snd_soc_dapm_mux:
+		case snd_soc_dapm_mux_named_ctl:
 		case snd_soc_dapm_demux:
 			dapm_new_mux(w);
 			break;
@@ -3834,6 +3842,7 @@ snd_soc_dapm_new_control_unlocked(struct snd_soc_dapm_context *dapm,
 		break;
 
 	case snd_soc_dapm_mux:
+	case snd_soc_dapm_mux_named_ctl:
 	case snd_soc_dapm_demux:
 	case snd_soc_dapm_switch:
 	case snd_soc_dapm_mixer:
@@ -4860,6 +4869,33 @@ int snd_soc_dapm_ignore_suspend(struct snd_soc_dapm_context *dapm,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(snd_soc_dapm_ignore_suspend);
+
+/**
+ * snd_soc_dapm_pin_has_prefix - check if given pin has a known prefix
+ * @card: card to be checked
+ * @pin: pin name
+ *
+ * Returns true if given pin has a known prefix
+ */
+bool snd_soc_dapm_pin_has_prefix(struct snd_soc_card *card, const char *pin)
+{
+	struct snd_soc_component *component;
+	const char *prefix;
+	size_t prefix_len;
+
+	for_each_card_components(card, component) {
+		prefix = component->name_prefix;
+		if (!prefix)
+			continue;
+
+		prefix_len = strlen(prefix);
+		if (!strncmp(pin, prefix, prefix_len) && pin[prefix_len] == ' ')
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(snd_soc_dapm_pin_has_prefix);
 
 /**
  * snd_soc_dapm_free - free dapm resources

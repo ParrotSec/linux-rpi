@@ -581,6 +581,7 @@ sof_ipc4_update_card_components_string(struct snd_sof_widget *swidget,
 	struct snd_soc_component *scomp = spcm->scomp;
 	struct snd_soc_card *card = scomp->card;
 	const char *pt_marker = "iec61937-pcm";
+	unsigned pcm_id = le32_to_cpu(spcm->pcm.pcm_id);
 
 	/*
 	 * Update the card's components list with iec61937-pcm and a list of PCM
@@ -595,21 +596,21 @@ sof_ipc4_update_card_components_string(struct snd_sof_widget *swidget,
 
 		if (strstr(card->components, pt_marker))
 			card->components = devm_kasprintf(card->dev, GFP_KERNEL,
-							  "%s,%d",
+							  "%s,%u",
 							  card->components,
-							  spcm->pcm.pcm_id);
+							  pcm_id);
 		else
 			card->components = devm_kasprintf(card->dev, GFP_KERNEL,
-							  "%s %s:%d",
+							  "%s %s:%u",
 							  card->components,
 							  pt_marker,
-							  spcm->pcm.pcm_id);
+							  pcm_id);
 
 		devm_kfree(card->dev, tmp);
 	} else {
 		card->components = devm_kasprintf(card->dev, GFP_KERNEL,
-						  "%s:%d", pt_marker,
-						  spcm->pcm.pcm_id);
+						  "%s:%u", pt_marker,
+						  pcm_id);
 	}
 
 	if (!card->components)
@@ -3150,6 +3151,15 @@ static int sof_ipc4_widget_setup(struct snd_sof_dev *sdev, struct snd_sof_widget
 		ipc_size = ipc4_copier->ipc_config_size;
 		ipc_data = ipc4_copier->ipc_config_data;
 
+		/*
+		 * Refresh copier_data in ipc_config_data for host copiers.
+		 * The node_id may have been updated by host_config after
+		 * ipc_prepare, e.g. when host stream tags change after a
+		 * suspend/resume cycle.
+		 */
+		if (swidget->id != snd_soc_dapm_buffer)
+			memcpy(ipc_data, &ipc4_copier->data, sizeof(ipc4_copier->data));
+
 		msg = &ipc4_copier->msg;
 		break;
 	}
@@ -3158,6 +3168,9 @@ static int sof_ipc4_widget_setup(struct snd_sof_dev *sdev, struct snd_sof_widget
 	{
 		struct snd_sof_dai *dai = swidget->private;
 		struct sof_ipc4_copier *ipc4_copier = dai->private;
+		struct sof_ipc4_copier_data *copier_data;
+		u32 gtw_cfg_config_length;
+		u32 tlv_size;
 
 		pipeline = pipe_widget->private;
 		if (pipeline->use_chain_dma)
@@ -3165,6 +3178,27 @@ static int sof_ipc4_widget_setup(struct snd_sof_dev *sdev, struct snd_sof_widget
 
 		ipc_size = ipc4_copier->ipc_config_size;
 		ipc_data = ipc4_copier->ipc_config_data;
+
+		/*
+		 * Refresh copier_data and dma_config_tlv in ipc_config_data.
+		 * These may have been updated after ipc_prepare, e.g. when
+		 * link DMA stream tags change after a suspend/resume cycle.
+		 *
+		 * copier_data->gtw_cfg.config_length does not include the
+		 * TLV size (it was restored after sof_ipc4_prepare_copier_module),
+		 * so temporarily inflate it to match the ipc_config_data layout.
+		 */
+		copier_data = &ipc4_copier->data;
+		gtw_cfg_config_length = copier_data->gtw_cfg.config_length * 4;
+		tlv_size = ipc_size - sizeof(*copier_data) - gtw_cfg_config_length;
+
+		copier_data->gtw_cfg.config_length += tlv_size / 4;
+		memcpy(ipc_data, copier_data, sizeof(*copier_data));
+		copier_data->gtw_cfg.config_length = gtw_cfg_config_length / 4;
+
+		if (tlv_size)
+			memcpy(ipc_data + sizeof(*copier_data) + gtw_cfg_config_length,
+			       &ipc4_copier->dma_config_tlv, tlv_size);
 
 		msg = &ipc4_copier->msg;
 		break;

@@ -581,7 +581,7 @@ static int dmirror_allocate_chunk(struct dmirror_device *mdevice,
 		devmem->pagemap.type = MEMORY_DEVICE_PRIVATE;
 		break;
 	case HMM_DMIRROR_MEMORY_DEVICE_COHERENT:
-		devmem->pagemap.range.start = (MINOR(mdevice->cdevice.dev) - 2) ?
+		devmem->pagemap.range.start = (MINOR(mdevice->device.devt) - 2) ?
 							spm_addr_dev0 :
 							spm_addr_dev1;
 		devmem->pagemap.range.end = devmem->pagemap.range.start +
@@ -1111,9 +1111,6 @@ static int dmirror_migrate_to_system(struct dmirror *dmirror,
 	unsigned long *src_pfns;
 	unsigned long *dst_pfns;
 
-	src_pfns = kvcalloc(PTRS_PER_PTE, sizeof(*src_pfns), GFP_KERNEL | __GFP_NOFAIL);
-	dst_pfns = kvcalloc(PTRS_PER_PTE, sizeof(*dst_pfns), GFP_KERNEL | __GFP_NOFAIL);
-
 	start = cmd->addr;
 	end = start + size;
 	if (end < start)
@@ -1122,6 +1119,9 @@ static int dmirror_migrate_to_system(struct dmirror *dmirror,
 	/* Since the mm is for the mirrored process, get a reference first. */
 	if (!mmget_not_zero(mm))
 		return -EINVAL;
+
+	src_pfns = kvcalloc(PTRS_PER_PTE, sizeof(*src_pfns), GFP_KERNEL | __GFP_NOFAIL);
+	dst_pfns = kvcalloc(PTRS_PER_PTE, sizeof(*dst_pfns), GFP_KERNEL | __GFP_NOFAIL);
 
 	cmd->cpages = 0;
 	mmap_read_lock(mm);
@@ -1253,8 +1253,8 @@ out:
 	mmap_read_unlock(mm);
 	mmput(mm);
 free_mem:
-	kfree(src_pfns);
-	kfree(dst_pfns);
+	kvfree(src_pfns);
+	kvfree(dst_pfns);
 	return ret;
 }
 
@@ -1738,6 +1738,13 @@ static const struct dev_pagemap_ops dmirror_devmem_ops = {
 	.folio_split	= dmirror_devmem_folio_split,
 };
 
+static void dmirror_device_release(struct device *dev)
+{
+	struct dmirror_device *mdevice = container_of(dev, struct dmirror_device, device);
+
+	dmirror_device_remove_chunks(mdevice);
+}
+
 static int dmirror_device_init(struct dmirror_device *mdevice, int id)
 {
 	dev_t dev;
@@ -1749,6 +1756,8 @@ static int dmirror_device_init(struct dmirror_device *mdevice, int id)
 
 	cdev_init(&mdevice->cdevice, &dmirror_fops);
 	mdevice->cdevice.owner = THIS_MODULE;
+	mdevice->device.release = dmirror_device_release;
+
 	device_initialize(&mdevice->device);
 	mdevice->device.devt = dev;
 
@@ -1756,12 +1765,16 @@ static int dmirror_device_init(struct dmirror_device *mdevice, int id)
 	if (ret)
 		goto put_device;
 
+	/* Build a list of free ZONE_DEVICE struct pages */
+	ret = dmirror_allocate_chunk(mdevice, NULL, false);
+	if (ret)
+		goto put_device;
+
 	ret = cdev_device_add(&mdevice->cdevice, &mdevice->device);
 	if (ret)
 		goto put_device;
 
-	/* Build a list of free ZONE_DEVICE struct pages */
-	return dmirror_allocate_chunk(mdevice, NULL, false);
+	return 0;
 
 put_device:
 	put_device(&mdevice->device);
@@ -1770,7 +1783,6 @@ put_device:
 
 static void dmirror_device_remove(struct dmirror_device *mdevice)
 {
-	dmirror_device_remove_chunks(mdevice);
 	cdev_device_del(&mdevice->cdevice, &mdevice->device);
 	put_device(&mdevice->device);
 }

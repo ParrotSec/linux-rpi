@@ -51,7 +51,7 @@ int mshv_update_routing_table(struct mshv_partition *partition,
 		/*
 		 * Allow only one to one mapping between GSI and MSI routing.
 		 */
-		if (girq->guest_irq_num != 0) {
+		if (girq->girq_entry_valid) {
 			r = -EINVAL;
 			goto out;
 		}
@@ -71,6 +71,10 @@ swap_routes:
 	mutex_unlock(&partition->pt_irq_lock);
 
 	synchronize_srcu_expedited(&partition->pt_irq_srcu);
+
+	trace_mshv_update_routing_table(partition->pt_id,
+					old, new, numents);
+
 	new = old;
 
 out:

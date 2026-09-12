@@ -169,7 +169,14 @@ static int mshv_try_assert_irq_fast(struct mshv_irqfd *irqfd)
 		return -EOPNOTSUPP;
 #endif
 
-	vp = partition->pt_vp_array[irq->lapic_apic_id];
+	/*
+	 * Pairs with smp_store_release() in mshv_partition_ioctl_create_vp().
+	 * MSHV_IRQFD does not require the target lapic_apic_id to refer to an
+	 * existing VP, so this read can race a concurrent VP creation; the
+	 * acquire ensures that a non-NULL pointer implies the VP's
+	 * initialising stores are visible.
+	 */
+	vp = smp_load_acquire(&partition->pt_vp_array[irq->lapic_apic_id]);
 
 	if (!vp->vp_register_page)
 		return -EOPNOTSUPP;
@@ -284,7 +291,7 @@ static void mshv_irqfd_deactivate(struct mshv_irqfd *irqfd)
 	if (!mshv_irqfd_is_active(irqfd))
 		return;
 
-	hlist_del(&irqfd->irqfd_hnode);
+	hlist_del_init(&irqfd->irqfd_hnode);
 
 	queue_work(irqfd_cleanup_wq, &irqfd->irqfd_shutdown);
 }
@@ -473,18 +480,6 @@ static int mshv_irqfd_assign(struct mshv_partition *pt,
 	init_poll_funcptr(&irqfd->irqfd_polltbl, mshv_irqfd_queue_proc);
 
 	spin_lock_irq(&pt->pt_irqfds_lock);
-#if IS_ENABLED(CONFIG_X86)
-	if (args->flags & BIT(MSHV_IRQFD_BIT_RESAMPLE) &&
-	    !irqfd->irqfd_lapic_irq.lapic_control.level_triggered) {
-		/*
-		 * Resample Fd must be for level triggered interrupt
-		 * Otherwise return with failure
-		 */
-		spin_unlock_irq(&pt->pt_irqfds_lock);
-		ret = -EINVAL;
-		goto fail;
-	}
-#endif
 	ret = 0;
 	hlist_for_each_entry(tmp, &pt->pt_irqfds_list, irqfd_hnode) {
 		if (irqfd->irqfd_eventfd_ctx != tmp->irqfd_eventfd_ctx)
@@ -497,6 +492,21 @@ static int mshv_irqfd_assign(struct mshv_partition *pt,
 
 	idx = srcu_read_lock(&pt->pt_irq_srcu);
 	mshv_irqfd_update(pt, irqfd);
+
+#if IS_ENABLED(CONFIG_X86)
+	if (args->flags & BIT(MSHV_IRQFD_BIT_RESAMPLE) &&
+	    !irqfd->irqfd_lapic_irq.lapic_control.level_triggered) {
+		/*
+		 * Resample Fd must be for level triggered interrupt
+		 * Otherwise return with failure
+		 */
+		spin_unlock_irq(&pt->pt_irqfds_lock);
+		srcu_read_unlock(&pt->pt_irq_srcu, idx);
+		ret = -EINVAL;
+		goto fail;
+	}
+#endif
+
 	hlist_add_head(&irqfd->irqfd_hnode, &pt->pt_irqfds_list);
 	spin_unlock_irq(&pt->pt_irqfds_lock);
 
@@ -541,13 +551,14 @@ static int mshv_irqfd_deassign(struct mshv_partition *pt,
 	if (IS_ERR(eventfd))
 		return PTR_ERR(eventfd);
 
+	spin_lock_irq(&pt->pt_irqfds_lock);
 	hlist_for_each_entry_safe(irqfd, n, &pt->pt_irqfds_list,
 				  irqfd_hnode) {
 		if (irqfd->irqfd_eventfd_ctx == eventfd &&
 		    irqfd->irqfd_irqnum == args->gsi)
-
 			mshv_irqfd_deactivate(irqfd);
 	}
+	spin_unlock_irq(&pt->pt_irqfds_lock);
 
 	eventfd_ctx_put(eventfd);
 
@@ -733,6 +744,14 @@ static int mshv_assign_ioeventfd(struct mshv_partition *pt,
 	ret = mshv_register_doorbell(pt->pt_id, ioeventfd_mmio_write,
 				     (void *)pt, p->iovntfd_addr,
 				     p->iovntfd_datamatch, doorbell_flags);
+
+	trace_mshv_assign_ioeventfd(pt->pt_id, p->iovntfd_addr,
+				    p->iovntfd_length,
+				    p->iovntfd_datamatch,
+				    p->iovntfd_wildcard,
+				    p->iovntfd_eventfd,
+				    ret);
+
 	if (ret < 0)
 		goto unlock_fail;
 
@@ -779,6 +798,12 @@ static int mshv_deassign_ioeventfd(struct mshv_partition *pt,
 		if (!p->iovntfd_wildcard &&
 		    p->iovntfd_datamatch != args->datamatch)
 			continue;
+
+		trace_mshv_deassign_ioeventfd(pt->pt_id, p->iovntfd_addr,
+					      p->iovntfd_length,
+					      p->iovntfd_datamatch,
+					      p->iovntfd_wildcard,
+					      p->iovntfd_eventfd);
 
 		hlist_del_rcu(&p->iovntfd_hnode);
 		synchronize_rcu();

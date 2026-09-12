@@ -260,7 +260,7 @@ static bool sfb_classify(struct sk_buff *skb, struct tcf_proto *fl,
 	struct tcf_result res;
 	int result;
 
-	result = tcf_classify(skb, NULL, fl, &res, false);
+	result = tcf_classify_qdisc(skb, fl, &res, false);
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
@@ -283,7 +283,7 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		       struct sk_buff **to_free)
 {
 
-	enum skb_drop_reason reason = SKB_DROP_REASON_QDISC_OVERLIMIT;
+	enum qdisc_drop_reason reason = QDISC_DROP_OVERLIMIT;
 	struct sfb_sched_data *q = qdisc_priv(sch);
 	unsigned int len = qdisc_pkt_len(skb);
 	struct Qdisc *child = q->qdisc;
@@ -387,7 +387,7 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 
 	r = get_random_u16() & SFB_MAX_PROB;
-	reason = SKB_DROP_REASON_QDISC_CONGESTED;
+	reason = QDISC_DROP_CONGESTED;
 
 	if (unlikely(r < p_min)) {
 		if (unlikely(p_min > SFB_MAX_PROB / 2)) {
@@ -416,7 +416,7 @@ enqueue:
 	ret = qdisc_enqueue(skb, child, to_free);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
 		sch->qstats.backlog += len;
-		sch->q.qlen++;
+		qdisc_qlen_inc(sch);
 		increment_qlen(&cb, q);
 	} else if (net_xmit_drop_count(ret)) {
 		WRITE_ONCE(q->stats.childdrop,
@@ -446,7 +446,7 @@ static struct sk_buff *sfb_dequeue(struct Qdisc *sch)
 	if (skb) {
 		qdisc_bstats_update(sch, skb);
 		qdisc_qstats_backlog_dec(sch, skb);
-		sch->q.qlen--;
+		qdisc_qlen_dec(sch);
 		decrement_qlen(skb, q);
 	}
 

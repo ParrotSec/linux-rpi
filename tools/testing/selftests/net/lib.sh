@@ -70,12 +70,33 @@ ksft_exit_status_merge()
 		$ksft_xfail $ksft_pass $ksft_skip $ksft_fail
 }
 
+timestamp_ms()
+{
+	local now
+	local seconds
+	local nanoseconds
+
+	now=$(date -u +%s:%N) || return
+	seconds=${now%:*}
+	nanoseconds=${now#*:}
+
+	if [[ $nanoseconds =~ ^[0-9]+$ ]]; then
+		nanoseconds=${nanoseconds:0:9}
+	else
+		nanoseconds=0
+	fi
+
+	echo $((seconds * 1000 + 10#$nanoseconds / 1000000))
+}
+
 loopy_wait()
 {
 	local sleep_cmd=$1; shift
 	local timeout_ms=$1; shift
+	local start_time
+	local current_time
 
-	local start_time="$(date -u +%s%3N)"
+	start_time=$(timestamp_ms) || return
 	while true
 	do
 		local out
@@ -84,7 +105,7 @@ loopy_wait()
 			return 0
 		fi
 
-		local current_time="$(date -u +%s%3N)"
+		current_time=$(timestamp_ms) || return
 		if ((current_time - start_time > timeout_ms)); then
 			echo -n "$out"
 			return 1
@@ -222,6 +243,19 @@ setup_ns()
 		ns_list+=("${!ns_name}")
 	done
 	NS_LIST+=("${ns_list[@]}")
+}
+
+in_all_ns()
+{
+	local ret=0
+	local ns_list=("${NS_LIST[@]}")
+
+	for ns in "${ns_list[@]}"; do
+		ip netns exec "${ns}" "$@"
+		(( ret = ret || $? ))
+	done
+
+	return "${ret}"
 }
 
 # Create netdevsim with given id and net namespace.
@@ -514,7 +548,8 @@ mac_get()
 {
 	local if_name=$1
 
-	ip -j link show dev $if_name | jq -r '.[]["address"]'
+	run_on "$if_name" \
+		ip -j link show dev "$if_name" | jq -r '.[]["address"]'
 }
 
 kill_process()
@@ -669,4 +704,9 @@ cmd_jq()
 	echo $output
 	# return success only in case of non-empty output
 	[ ! -z "$output" ]
+}
+
+run_on()
+{
+	shift; "$@"
 }

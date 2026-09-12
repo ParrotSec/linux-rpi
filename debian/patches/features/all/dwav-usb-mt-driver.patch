@@ -16,7 +16,7 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
 
 --- a/drivers/hid/hid-ids.h
 +++ b/drivers/hid/hid-ids.h
-@@ -1546,4 +1546,10 @@
+@@ -1621,6 +1621,12 @@
  #define USB_VENDOR_ID_JIELI_SDK_DEFAULT		0x4c4a
  #define USB_DEVICE_ID_JIELI_SDK_4155		0x4155
  
@@ -26,7 +26,9 @@ Change-Id: Ia1c8c29d3f69c6ba5d630279c4cc98119b68ab71
 +#define USB_DEVICE_ID_VU5	0x0704
 +#define USB_DEVICE_ID_VU7PLUS	0x0705
 +
- #endif
+ #define USB_VENDOR_ID_HUAWEI			0x12d1
+ #define USB_DEVICE_ID_HUAWEI_CD30KBD		0x109b
+ 
 --- a/drivers/hid/hid-quirks.c
 +++ b/drivers/hid/hid-quirks.c
 @@ -915,6 +915,9 @@ static const struct hid_device_id hid_ig

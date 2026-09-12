@@ -74,7 +74,8 @@ void pr_debug_type_name(Dwarf_Die *die, enum type_state_kind kind)
 		break;
 	}
 
-	dwarf_aggregate_size(die, &size);
+	if (dwarf_aggregate_size(die, &size) != 0)
+		size = 0;
 
 	strbuf_init(&sb, 32);
 	die_get_typename_from_type(die, &sb);
@@ -146,9 +147,9 @@ static void pr_debug_scope(Dwarf_Die *scope_die)
 
 	tag = dwarf_tag(scope_die);
 	if (tag == DW_TAG_subprogram)
-		pr_info("[function] %s\n", dwarf_diename(scope_die));
+		pr_info("[function] %s\n", die_name(scope_die));
 	else if (tag == DW_TAG_inlined_subroutine)
-		pr_info("[inlined] %s\n", dwarf_diename(scope_die));
+		pr_info("[inlined] %s\n", die_name(scope_die));
 	else if (tag == DW_TAG_lexical_block)
 		pr_info("[block]\n");
 	else
@@ -250,9 +251,12 @@ static int __add_member_cb(Dwarf_Die *die, void *arg)
 	if (dwarf_aggregate_size(&die_mem, &size) < 0)
 		size = 0;
 
-	if (dwarf_attr_integrate(die, DW_AT_data_member_location, &attr))
-		dwarf_formudata(&attr, &loc);
-	else {
+	if (dwarf_attr_integrate(die, DW_AT_data_member_location, &attr)) {
+		if (dwarf_formudata(&attr, &loc) != 0) {
+			if (die_get_data_member_location(die, &loc) != 0)
+				loc = 0;
+		}
+	} else {
 		/* bitfield member */
 		if (dwarf_attr_integrate(die, DW_AT_data_bit_offset, &attr) &&
 		    dwarf_formudata(&attr, &loc) == 0)
@@ -273,7 +277,9 @@ static int __add_member_cb(Dwarf_Die *die, void *arg)
 				     dwarf_diename(die), (long)bit_size) < 0)
 				member->var_name = NULL;
 		} else {
-			member->var_name = strdup(dwarf_diename(die));
+			const char *name = dwarf_diename(die);
+
+			member->var_name = name ? strdup(name) : NULL;
 		}
 
 		if (member->var_name == NULL) {
@@ -370,7 +376,8 @@ static struct annotated_data_type *dso__findnew_data_type(struct dso *dso,
 	if (dwarf_tag(type_die) == DW_TAG_typedef)
 		die_get_real_type(type_die, type_die);
 
-	dwarf_aggregate_size(type_die, &size);
+	if (dwarf_aggregate_size(type_die, &size) != 0)
+		size = 0;
 
 	/* Check existing nodes in dso->data_types tree */
 	key.self.type_name = type_name;
@@ -455,13 +462,6 @@ static const char *match_result_str(enum type_match_result tmr)
 	}
 }
 
-static bool is_pointer_type(Dwarf_Die *type_die)
-{
-	int tag = dwarf_tag(type_die);
-
-	return tag == DW_TAG_pointer_type || tag == DW_TAG_array_type;
-}
-
 static bool is_compound_type(Dwarf_Die *type_die)
 {
 	int tag = dwarf_tag(type_die);
@@ -474,19 +474,24 @@ static bool is_better_type(Dwarf_Die *type_a, Dwarf_Die *type_b)
 {
 	Dwarf_Word size_a, size_b;
 	Dwarf_Die die_a, die_b;
+	Dwarf_Die ptr_a, ptr_b;
+	Dwarf_Die *ptr_type_a, *ptr_type_b;
+
+	ptr_type_a = die_get_pointer_type(type_a, &ptr_a);
+	ptr_type_b = die_get_pointer_type(type_b, &ptr_b);
 
 	/* pointer type is preferred */
-	if (is_pointer_type(type_a) != is_pointer_type(type_b))
-		return is_pointer_type(type_b);
+	if ((ptr_type_a != NULL) != (ptr_type_b != NULL))
+		return ptr_type_b != NULL;
 
-	if (is_pointer_type(type_b)) {
+	if (ptr_type_b) {
 		/*
 		 * We want to compare the target type, but 'void *' can fail to
 		 * get the target type.
 		 */
-		if (die_get_real_type(type_a, &die_a) == NULL)
+		if (die_get_real_type(ptr_type_a, &die_a) == NULL)
 			return true;
-		if (die_get_real_type(type_b, &die_b) == NULL)
+		if (die_get_real_type(ptr_type_b, &die_b) == NULL)
 			return false;
 
 		type_a = &die_a;
@@ -539,7 +544,7 @@ static enum type_match_result check_variable(struct data_loc_info *dloc,
 	 * and local variables are accessed directly without a pointer.
 	 */
 	if (needs_pointer) {
-		if (!is_pointer_type(type_die) ||
+		if (die_get_pointer_type(type_die, type_die) == NULL ||
 		    __die_get_real_type(type_die, type_die) == NULL)
 			return PERF_TMR_NO_POINTER;
 	}
@@ -776,12 +781,7 @@ static void global_var__collect(struct data_loc_info *dloc)
 			if (!dwarf_offdie(dwarf, pos->die_off, &type_die))
 				continue;
 
-			if (!get_global_var_info(dloc, pos->addr, &var_name,
-						 &var_offset))
-				continue;
-
-			if (var_offset != 0)
-				continue;
+			get_global_var_info(dloc, pos->addr, &var_name, &var_offset);
 
 			global_var__add(dloc, pos->addr, var_name, &type_die);
 		}
@@ -816,9 +816,8 @@ bool get_global_var_type(Dwarf_Die *cu_die, struct data_loc_info *dloc,
 	}
 
 	/* Try to get the variable by address first */
-	if (die_find_variable_by_addr(cu_die, var_addr, &var_die, &offset) &&
-	    check_variable(dloc, &var_die, type_die, DWARF_REG_PC, offset,
-			   /*is_fbreg=*/false) == PERF_TMR_OK) {
+	if (die_find_variable_by_addr(cu_die, var_addr, &var_die, type_die,
+				      &offset)) {
 		var_name = dwarf_diename(&var_die);
 		*var_offset = offset;
 		goto ok;
@@ -848,6 +847,18 @@ static bool die_is_same(Dwarf_Die *die_a, Dwarf_Die *die_b)
 	return (die_a->cu == die_b->cu) && (die_a->addr == die_b->addr);
 }
 
+static void tsr_set_lifetime(struct type_state_reg *tsr,
+			     const struct die_var_type *var)
+{
+	if (var && var->has_range && var->end > var->addr) {
+		tsr->lifetime_active = true;
+		tsr->lifetime_end = var->end;
+	} else {
+		tsr->lifetime_active = false;
+		tsr->lifetime_end = 0;
+	}
+}
+
 /**
  * update_var_state - Update type state using given variables
  * @state: type state table
@@ -873,19 +884,29 @@ static void update_var_state(struct type_state *state, struct data_loc_info *dlo
 	}
 
 	for (var = var_types; var != NULL; var = var->next) {
-		if (var->addr != addr)
-			continue;
+		/* Check if addr falls within the variable's valid range */
+		if (var->has_range) {
+			if (addr < var->addr || (var->end && addr >= var->end))
+				continue;
+		} else {
+			if (addr != var->addr)
+				continue;
+		}
 		/* Get the type DIE using the offset */
 		if (!dwarf_offdie(dloc->di->dbg, var->die_off, &mem_die))
 			continue;
 
 		if (var->reg == DWARF_REG_FB || var->reg == fbreg || var->reg == state->stack_reg) {
+			Dwarf_Die ptr_die;
+			Dwarf_Die *ptr_type;
 			int offset = var->offset;
 			struct type_state_stack *stack;
 
+			ptr_type = die_get_pointer_type(&mem_die, &ptr_die);
+
 			/* If the reg location holds the pointer value, dereference the type */
-			if (!var->is_reg_var_addr && is_pointer_type(&mem_die) &&
-				__die_get_real_type(&mem_die, &mem_die) == NULL)
+			if (!var->is_reg_var_addr && ptr_type &&
+			    __die_get_real_type(ptr_type, &mem_die) == NULL)
 				continue;
 
 			if (var->reg != DWARF_REG_FB)
@@ -927,6 +948,7 @@ static void update_var_state(struct type_state *state, struct data_loc_info *dlo
 				reg->type = mem_die;
 				reg->kind = TSR_KIND_POINTER;
 				reg->ok = true;
+				tsr_set_lifetime(reg, var);
 
 				pr_debug_dtp("var [%"PRIx64"] reg%d addr offset %x",
 					     insn_offset, var->reg, var->offset);
@@ -943,6 +965,7 @@ static void update_var_state(struct type_state *state, struct data_loc_info *dlo
 			reg->type = mem_die;
 			reg->kind = TSR_KIND_TYPE;
 			reg->ok = true;
+			tsr_set_lifetime(reg, var);
 
 			pr_debug_dtp("var [%"PRIx64"] reg%d offset %x",
 				     insn_offset, var->reg, var->offset);
@@ -1110,7 +1133,9 @@ again:
 		goto check_non_register;
 
 	if (state->regs[reg].kind == TSR_KIND_TYPE) {
+		Dwarf_Die ptr_die;
 		Dwarf_Die sized_type;
+		Dwarf_Die *ptr_type;
 		struct strbuf sb;
 
 		strbuf_init(&sb, 32);
@@ -1122,7 +1147,8 @@ again:
 		 * Normal registers should hold a pointer (or array) to
 		 * dereference a memory location.
 		 */
-		if (!is_pointer_type(&state->regs[reg].type)) {
+		ptr_type = die_get_pointer_type(&state->regs[reg].type, &ptr_die);
+		if (!ptr_type) {
 			if (dloc->op->offset < 0 && reg != state->stack_reg)
 				goto check_kernel;
 
@@ -1130,7 +1156,7 @@ again:
 		}
 
 		/* Remove the pointer and get the target type */
-		if (__die_get_real_type(&state->regs[reg].type, type_die) == NULL)
+		if (__die_get_real_type(ptr_type, type_die) == NULL)
 			return PERF_TMR_NO_POINTER;
 
 		dloc->type_offset = dloc->op->offset + state->regs[reg].offset;
@@ -1230,6 +1256,11 @@ again:
 		return PERF_TMR_BAIL_OUT;
 	}
 
+	if (state->regs[reg].kind == TSR_KIND_CONST &&
+	    dso__kernel(map__dso(dloc->ms->map))) {
+		if (dloc->op->offset < 0 && reg != state->stack_reg && reg != dloc->fbreg)
+			goto check_kernel;
+	}
 check_non_register:
 	if (reg == dloc->fbreg || reg == state->stack_reg) {
 		struct type_state_stack *stack;
@@ -1545,7 +1576,7 @@ static int find_data_type_die(struct data_loc_info *dloc, Dwarf_Die *type_die)
 	offset = loc->offset;
 
 	pr_debug_dtp("CU for %s (die:%#lx)\n",
-		     dwarf_diename(&cu_die), (long)dwarf_dieoffset(&cu_die));
+		     die_name(&cu_die), (long)dwarf_dieoffset(&cu_die));
 
 	if (reg == DWARF_REG_PC) {
 		if (get_global_var_type(&cu_die, dloc, dloc->ip, dloc->var_addr,
@@ -1601,39 +1632,36 @@ retry:
 
 		if (reg == DWARF_REG_PC) {
 			if (!die_find_variable_by_addr(&scopes[i], dloc->var_addr,
-						       &var_die, &type_offset))
+						       &var_die, &mem_die,
+						       &type_offset))
 				continue;
 		} else {
 			/* Look up variables/parameters in this scope */
 			if (!die_find_variable_by_reg(&scopes[i], pc, reg,
-						      &type_offset, is_fbreg, &var_die))
+						      &mem_die, &type_offset, is_fbreg, &var_die))
 				continue;
 		}
 
 		pr_debug_dtp("found \"%s\" (die: %#lx) in scope=%d/%d (die: %#lx) ",
-			     dwarf_diename(&var_die), (long)dwarf_dieoffset(&var_die),
+			     die_name(&var_die), (long)dwarf_dieoffset(&var_die),
 			     i+1, nr_scopes, (long)dwarf_dieoffset(&scopes[i]));
 
-		/* Found a variable, see if it's correct */
-		result = check_variable(dloc, &var_die, &mem_die, reg, type_offset, is_fbreg);
-		if (result == PERF_TMR_OK) {
-			if (reg == DWARF_REG_PC) {
-				pr_debug_dtp("addr=%#"PRIx64" type_offset=%#x\n",
-					     dloc->var_addr, type_offset);
-			} else if (reg == DWARF_REG_FB || is_fbreg) {
-				pr_debug_dtp("stack_offset=%#x type_offset=%#x\n",
-					     fb_offset, type_offset);
-			} else {
-				pr_debug_dtp("type_offset=%#x\n", type_offset);
-			}
-
-			if (!found || is_better_type(type_die, &mem_die)) {
-				*type_die = mem_die;
-				dloc->type_offset = type_offset;
-				found = true;
-			}
+		if (reg == DWARF_REG_PC) {
+			pr_debug_dtp("addr=%#"PRIx64" type_offset=%#x\n",
+				     dloc->var_addr, type_offset);
+		} else if (reg == DWARF_REG_FB || is_fbreg) {
+			pr_debug_dtp("stack_offset=%#x type_offset=%#x\n",
+				     fb_offset, type_offset);
 		} else {
-			pr_debug_dtp("failed: %s\n", match_result_str(result));
+			pr_debug_dtp("type_offset=%#x\n", type_offset);
+		}
+
+		if (!found || dloc->type_offset < type_offset ||
+		    (dloc->type_offset == type_offset &&
+		     !is_better_type(&mem_die, type_die))) {
+			*type_die = mem_die;
+			dloc->type_offset = type_offset;
+			found = true;
 		}
 
 		pr_debug_location(&var_die, pc, reg);

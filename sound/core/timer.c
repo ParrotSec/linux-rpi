@@ -129,6 +129,9 @@ static LIST_HEAD(snd_timer_list);
 /* list of slave instances */
 static LIST_HEAD(snd_timer_slave_list);
 
+/* list of open master instances that can accept slave links */
+static LIST_HEAD(snd_timer_master_list);
+
 /* lock for slave active lists */
 static DEFINE_SPINLOCK(slave_active_lock);
 
@@ -161,6 +164,7 @@ struct snd_timer_instance *snd_timer_instance_new(const char *owner)
 	}
 	INIT_LIST_HEAD(&timeri->open_list);
 	INIT_LIST_HEAD(&timeri->active_list);
+	INIT_LIST_HEAD(&timeri->master_list);
 	INIT_LIST_HEAD(&timeri->ack_list);
 	INIT_LIST_HEAD(&timeri->slave_list_head);
 	INIT_LIST_HEAD(&timeri->slave_active_head);
@@ -245,6 +249,12 @@ static int check_matching_master_slave(struct snd_timer_instance *master,
 	return 1;
 }
 
+static bool snd_timer_has_slave_key(const struct snd_timer_instance *timeri)
+{
+	return !(timeri->flags & SNDRV_TIMER_IFLG_SLAVE) &&
+		timeri->slave_class > SNDRV_TIMER_SCLASS_NONE;
+}
+
 /*
  * look for a master instance matching with the slave id of the given slave.
  * when found, relink the open_link of the slave.
@@ -253,19 +263,15 @@ static int check_matching_master_slave(struct snd_timer_instance *master,
  */
 static int snd_timer_check_slave(struct snd_timer_instance *slave)
 {
-	struct snd_timer *timer;
 	struct snd_timer_instance *master;
 	int err = 0;
 
-	/* FIXME: it's really dumb to look up all entries.. */
-	list_for_each_entry(timer, &snd_timer_list, device_list) {
-		list_for_each_entry(master, &timer->open_list_head, open_list) {
-			err = check_matching_master_slave(master, slave);
-			if (err != 0) /* match found or error */
-				goto out;
-		}
+	list_for_each_entry(master, &snd_timer_master_list, master_list) {
+		err = check_matching_master_slave(master, slave);
+		if (err != 0) /* match found or error */
+			goto out;
 	}
- out:
+out:
 	return err < 0 ? err : 0;
 }
 
@@ -377,6 +383,8 @@ int snd_timer_open(struct snd_timer_instance *timeri,
 	timeri->slave_id = slave_id;
 
 	list_add_tail(&timeri->open_list, &timer->open_list_head);
+	if (snd_timer_has_slave_key(timeri))
+		list_add_tail(&timeri->master_list, &snd_timer_master_list);
 	timer->num_instances++;
 	err = snd_timer_check_master(timeri);
 list_added:
@@ -409,6 +417,8 @@ static void remove_slave_links(struct snd_timer_instance *timeri,
 		list_del_init(&slave->ack_list);
 		list_del_init(&slave->active_list);
 	}
+	/* the close is done; a reopen must not see the mark */
+	timeri->flags &= ~SNDRV_TIMER_IFLG_DEAD;
 }
 
 /*
@@ -433,14 +443,27 @@ static void snd_timer_close_locked(struct snd_timer_instance *timeri,
 			num_slaves--;
 	}
 
+	if (!list_empty(&timeri->master_list))
+		list_del_init(&timeri->master_list);
+
 	/* force to stop the timer */
 	snd_timer_stop(timeri);
 
 	if (timer) {
+		struct snd_timer_instance *slave;
+		bool busy;
+
 		timer->num_instances--;
-		/* wait, until the active callback is finished */
+		/* unqueue then drain the slaves' callbacks before remove_slave_links() severs them */
 		spin_lock_irq(&timer->lock);
-		while (timeri->flags & SNDRV_TIMER_IFLG_CALLBACK) {
+		list_for_each_entry(slave, &timeri->slave_list_head, open_list)
+			list_del_init(&slave->ack_list);
+		for (;;) {
+			busy = timeri->flags & SNDRV_TIMER_IFLG_CALLBACK;
+			list_for_each_entry(slave, &timeri->slave_list_head, open_list)
+				busy |= slave->flags & SNDRV_TIMER_IFLG_CALLBACK;
+			if (!busy)
+				break;
 			spin_unlock_irq(&timer->lock);
 			udelay(10);
 			spin_lock_irq(&timer->lock);
@@ -873,12 +896,15 @@ void snd_timer_interrupt(struct snd_timer * timer, unsigned long ticks_left)
 			ack_list_head = &timer->ack_list_head;
 		else
 			ack_list_head = &timer->sack_list_head;
-		if (list_empty(&ti->ack_list))
+		/* don't requeue an instance whose callback is still running */
+		if (list_empty(&ti->ack_list) &&
+		    !(ti->flags & SNDRV_TIMER_IFLG_CALLBACK))
 			list_add_tail(&ti->ack_list, ack_list_head);
 		list_for_each_entry(ts, &ti->slave_active_head, active_list) {
 			ts->pticks = ti->pticks;
 			ts->resolution = resolution;
-			if (list_empty(&ts->ack_list))
+			if (list_empty(&ts->ack_list) &&
+			    !(ts->flags & SNDRV_TIMER_IFLG_CALLBACK))
 				list_add_tail(&ts->ack_list, ack_list_head);
 		}
 	}
@@ -998,6 +1024,7 @@ static int snd_timer_dev_register(struct snd_device *dev)
 {
 	struct snd_timer *timer = dev->device_data;
 	struct snd_timer *timer1;
+	struct list_head *insert_before = &snd_timer_list;
 
 	if (snd_BUG_ON(!timer || !timer->hw.start || !timer->hw.stop))
 		return -ENXIO;
@@ -1007,28 +1034,36 @@ static int snd_timer_dev_register(struct snd_device *dev)
 
 	guard(mutex)(&register_mutex);
 	list_for_each_entry(timer1, &snd_timer_list, device_list) {
-		if (timer1->tmr_class > timer->tmr_class)
+		if (timer1->tmr_class > timer->tmr_class) {
+			insert_before = &timer1->device_list;
 			break;
+		}
 		if (timer1->tmr_class < timer->tmr_class)
 			continue;
 		if (timer1->card && timer->card) {
-			if (timer1->card->number > timer->card->number)
+			if (timer1->card->number > timer->card->number) {
+				insert_before = &timer1->device_list;
 				break;
+			}
 			if (timer1->card->number < timer->card->number)
 				continue;
 		}
-		if (timer1->tmr_device > timer->tmr_device)
+		if (timer1->tmr_device > timer->tmr_device) {
+			insert_before = &timer1->device_list;
 			break;
+		}
 		if (timer1->tmr_device < timer->tmr_device)
 			continue;
-		if (timer1->tmr_subdevice > timer->tmr_subdevice)
+		if (timer1->tmr_subdevice > timer->tmr_subdevice) {
+			insert_before = &timer1->device_list;
 			break;
+		}
 		if (timer1->tmr_subdevice < timer->tmr_subdevice)
 			continue;
 		/* conflicts.. */
 		return -EBUSY;
 	}
-	list_add_tail(&timer->device_list, &timer1->device_list);
+	list_add_tail(&timer->device_list, insert_before);
 	return 0;
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2023 Advanced Micro Devices, Inc.
+ * Copyright 2012-2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -63,7 +63,7 @@ struct dcn_dsc_reg_state;
 struct dcn_optc_reg_state;
 struct dcn_dccg_reg_state;
 
-#define DC_VER "3.2.369"
+#define DC_VER "3.2.378"
 
 /**
  * MAX_SURFACES - representative of the upper bound of surfaces that can be piped to a single CRTC
@@ -520,7 +520,7 @@ struct dc_config {
 	union allow_lttpr_non_transparent_mode allow_lttpr_non_transparent_mode;
 	bool multi_mon_pp_mclk_switch;
 	bool disable_dmcu;
-	bool enable_4to1MPC;
+	bool allow_4to1MPC;
 	bool enable_windowed_mpo_odm;
 	bool forceHBR2CP2520; // Used for switching between test patterns TPS4 and CP2520
 	uint32_t allow_edp_hotplug_detection;
@@ -562,6 +562,7 @@ struct dc_config {
 	bool frame_update_cmd_version2;
 	struct spl_sharpness_range dcn_sharpness_range;
 	struct spl_sharpness_range dcn_override_sharpness_range;
+	bool no_native422_support;
 };
 
 enum visual_confirm {
@@ -581,6 +582,7 @@ enum visual_confirm {
 	VISUAL_CONFIRM_HW_CURSOR = 20,
 	VISUAL_CONFIRM_VABC = 21,
 	VISUAL_CONFIRM_DCC = 22,
+	VISUAL_CONFIRM_BOOSTED_REFRESH_RATE = 23,
 	VISUAL_CONFIRM_EXPLICIT = 0x80000000,
 };
 
@@ -733,6 +735,8 @@ struct dc_clocks {
 	struct {
 		uint8_t base_efficiency; //LP1
 		uint8_t low_power_efficiency; //LP2
+		uint8_t z8_stutter_efficiency;
+		int z8_stutter_period;
 	} stutter_efficiency;
 };
 
@@ -983,7 +987,6 @@ struct link_service;
  * causing an issue or not.
  */
 struct dc_debug_options {
-	bool native422_support;
 	bool disable_dsc;
 	enum visual_confirm visual_confirm;
 	int visual_confirm_rect_height;
@@ -1058,9 +1061,11 @@ struct dc_debug_options {
 	bool hdmi20_disable;
 	bool skip_detection_link_training;
 	uint32_t edid_read_retry_times;
-	unsigned int force_odm_combine; //bit vector based on otg inst
-	unsigned int seamless_boot_odm_combine;
-	unsigned int force_odm_combine_4to1; //bit vector based on otg inst
+
+	uint8_t force_odm_combine; //bit vector based on otg inst
+	uint8_t seamless_boot_odm_combine;
+	uint8_t force_odm_combine_4to1; //bit vector based on otg inst
+
 	int minimum_z8_residency_time;
 	int minimum_z10_residency_time;
 	bool disable_z9_mpc;
@@ -1211,6 +1216,8 @@ struct dc_debug_options {
 	unsigned int num_fast_flips_to_steady_state_override;
 	bool enable_dmu_recovery;
 	unsigned int force_vmin_threshold;
+	bool enable_otg_frame_sync_pwa;
+	unsigned int min_deep_sleep_dcfclk_khz;
 };
 
 
@@ -1419,6 +1426,7 @@ struct dc_plane_status {
 	struct dc_plane_address current_address;
 	bool is_flip_pending;
 	bool is_right_eye;
+	struct cm_hist cm_hist;
 };
 
 union surface_update_flags {
@@ -1455,6 +1463,7 @@ union surface_update_flags {
 		uint32_t mcm_transfer_function_enable_change:1; /* disable or enable MCM transfer func */
 		uint32_t full_update:1;
 		uint32_t sdr_white_level_nits:1;
+		uint32_t cm_hist_change:1;
 	} bits;
 
 	uint32_t raw;
@@ -1539,6 +1548,7 @@ struct dc_plane_state {
 	int sharpness_level;
 	enum linear_light_scaling linear_light_scaling;
 	unsigned int sdr_white_level_nits;
+	struct cm_hist_control cm_hist_control;
 	struct spl_sharpness_range sharpness_range;
 	enum sharpness_range_source sharpness_source;
 };
@@ -1682,6 +1692,10 @@ struct dc_scratch_space {
 	struct panel_cntl *panel_cntl;
 	struct link_encoder *link_enc;
 	struct graphics_object_id link_id;
+
+	/* External encoder eg. NUTMEG or TRAVIS used on CIK APUs. */
+	struct graphics_object_id ext_enc_id;
+
 	/* Endpoint type distinguishes display endpoints which do not have entries
 	 * in the BIOS connector table from those that do. Helps when tracking link
 	 * encoder to display endpoint assignments.
@@ -1713,6 +1727,8 @@ struct dc_scratch_space {
 		bool dp_skip_DID2;
 		bool dp_skip_reset_segment;
 		bool dp_skip_fs_144hz;
+		/* Some DP bridges don't work with RBR and must use HBR. */
+		bool dp_skip_rbr;
 		bool dp_mot_reset_segment;
 		/* Some USB4 docks do not handle turning off MST DSC once it has been enabled. */
 		bool dpia_mst_dsc_always_on;
@@ -1843,6 +1859,9 @@ struct dc_fast_update {
 	struct dc_transfer_func *out_transfer_func;
 	struct dc_csc_transform *output_csc_transform;
 	const struct dc_csc_transform *cursor_csc_color_matrix;
+#if defined(CONFIG_DRM_AMD_DC_DCN4_2)
+	struct cm_hist_control *cm_hist_control;
+#endif
 };
 
 struct dc_surface_update {
@@ -1872,9 +1891,11 @@ struct dc_surface_update {
 	 * change cm2_params.cm2_luts: Fast update
 	 */
 	const struct dc_cm2_parameters *cm2_params;
+	const struct dc_plane_cm *cm;
 	const struct dc_csc_transform *cursor_csc_color_matrix;
 	unsigned int sdr_white_level_nits;
 	struct dc_bias_and_scale bias_and_scale;
+	struct cm_hist_control *cm_hist_control;
 };
 
 struct dc_underflow_debug_data {
@@ -1917,6 +1938,15 @@ void dc_3dlut_func_retain(struct dc_3dlut *lut);
 
 void dc_post_update_surfaces_to_stream(
 		struct dc *dc);
+
+/*
+ * dc_get_default_tiling_info() - Retrieve an ASIC-appropriate default tiling
+ * description for (typically) linear surfaces.
+ *
+ * This is used by OS/DM paths that need a valid, fully-initialized tiling
+ * description without hardcoding gfx-version specifics in the caller.
+ */
+void dc_get_default_tiling_info(const struct dc *dc, struct dc_tiling_info *tiling_info);
 
 /**
  * struct dc_validation_set - Struct to store surface/stream associations for validation
@@ -2016,7 +2046,7 @@ bool dc_get_edp_link_panel_inst(const struct dc *dc,
 /* Return an array of link pointers to edp links. */
 void dc_get_edp_links(const struct dc *dc,
 		struct dc_link **edp_links,
-		int *edp_num);
+		unsigned int *edp_num);
 
 void dc_set_edp_power(const struct dc *dc, struct dc_link *edp_link,
 				 bool powerOn);
@@ -2661,6 +2691,7 @@ struct dc_sink {
 	struct stereo_3d_features features_3d[TIMING_3D_FORMAT_MAX];
 	bool converter_disable_audio;
 
+	struct mccs_caps mccs_caps;
 	struct scdc_caps scdc_caps;
 	struct dc_sink_dsc_caps dsc_caps;
 	struct dc_sink_fec_caps fec_caps;
@@ -2707,6 +2738,7 @@ enum dc_irq_source dc_interrupt_to_irq_source(
 		uint32_t ext_id);
 bool dc_interrupt_set(struct dc *dc, enum dc_irq_source src, bool enable);
 void dc_interrupt_ack(struct dc *dc, enum dc_irq_source src);
+bool dc_get_flip_pending_on_otg(struct dc *dc, int otg_inst);
 enum dc_irq_source dc_get_hpd_irq_source_at_index(
 		struct dc *dc, uint32_t link_index);
 

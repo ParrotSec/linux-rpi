@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-parisc/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-parisc
+lib/modules/7.1.13+deb14-parisc/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-parisc
+lib/modules/7.1.13+deb14-parisc/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-parisc
+lib/modules/7.1.13+deb14-parisc/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-parisc

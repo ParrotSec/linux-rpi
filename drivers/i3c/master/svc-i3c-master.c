@@ -208,7 +208,6 @@ struct svc_i3c_drvdata {
  * @free_slots: Bit array of available slots
  * @addrs: Array containing the dynamic addresses of each attached device
  * @descs: Array of descriptors, one per attached device
- * @hj_work: Hot-join work
  * @irq: Main interrupt
  * @num_clks: I3C clock number
  * @fclk: Fast clock (bus)
@@ -235,7 +234,6 @@ struct svc_i3c_master {
 	u32 free_slots;
 	u8 addrs[SVC_I3C_MAX_DEVS];
 	struct i3c_dev_desc *descs[SVC_I3C_MAX_DEVS];
-	struct work_struct hj_work;
 	int irq;
 	int num_clks;
 	struct clk *fclk;
@@ -344,7 +342,7 @@ static void svc_i3c_master_reset_fifo_trigger(struct svc_i3c_master *master)
 {
 	u32 reg;
 
-	/* Set RX and TX tigger levels, flush FIFOs */
+	/* Set RX and TX trigger levels, flush FIFOs */
 	reg = SVC_I3C_MDATACTRL_FLUSHTB |
 	      SVC_I3C_MDATACTRL_FLUSHRB |
 	      SVC_I3C_MDATACTRL_UNLOCK_TRIG |
@@ -364,14 +362,6 @@ static inline struct svc_i3c_master *
 to_svc_i3c_master(struct i3c_master_controller *master)
 {
 	return container_of(master, struct svc_i3c_master, base);
-}
-
-static void svc_i3c_master_hj_work(struct work_struct *work)
-{
-	struct svc_i3c_master *master;
-
-	master = container_of(work, struct svc_i3c_master, hj_work);
-	i3c_master_do_daa(&master->base);
 }
 
 static struct i3c_dev_desc *
@@ -572,7 +562,7 @@ static void svc_i3c_master_ibi_isr(struct svc_i3c_master *master)
 	 * 3. IBI isr writes an AutoIBI request.
 	 * 4. The controller will not start AutoIBI process because SDA is not low.
 	 * 5. IBIWON polling times out.
-	 * 6. Controller reamins in AutoIBI state and doesn't accept EmitStop request.
+	 * 6. Controller remains in AutoIBI state and doesn't accept EmitStop request.
 	 */
 	writel(SVC_I3C_MCTRL_REQUEST_START_ADDR |
 	       SVC_I3C_MCTRL_TYPE_I3C |
@@ -651,7 +641,7 @@ static void svc_i3c_master_ibi_isr(struct svc_i3c_master *master)
 	case SVC_I3C_MSTATUS_IBITYPE_HOT_JOIN:
 		svc_i3c_master_emit_stop(master);
 		if (is_events_enabled(master, SVC_I3C_EVENT_HOTJOIN))
-			queue_work(master->base.wq, &master->hj_work);
+			i3c_master_queue_hotjoin(&master->base);
 		break;
 	case SVC_I3C_MSTATUS_IBITYPE_MASTER_REQUEST:
 		svc_i3c_master_emit_stop(master);
@@ -672,10 +662,18 @@ static irqreturn_t svc_i3c_master_irq_handler(int irq, void *dev_id)
 	/* Clear the interrupt status */
 	writel(SVC_I3C_MINT_SLVSTART, master->regs + SVC_I3C_MSTATUS);
 
-	/* Ignore the false event */
-	if (svc_has_quirk(master, SVC_I3C_QUIRK_FALSE_SLVSTART) &&
-	    !SVC_I3C_MSTATUS_STATE_SLVREQ(active))
-		return IRQ_HANDLED;
+	if (svc_has_quirk(master, SVC_I3C_QUIRK_FALSE_SLVSTART)) {
+		/*
+		 * Re-read MSTATUS to obtain the latest state and avoid
+		 * missing an IBI that arrives after MSTATUS is latched
+		 * but before SLVSTART is cleared.
+		 */
+		active = readl(master->regs + SVC_I3C_MSTATUS);
+
+		/* Ignore the false event */
+		if (!SVC_I3C_MSTATUS_STATE_SLVREQ(active))
+			return IRQ_HANDLED;
+	}
 
 	/*
 	 * The SDA line remains low until the request is processed.
@@ -774,7 +772,7 @@ static int svc_i3c_master_bus_init(struct i3c_master_controller *m)
 
 	/*
 	 * Using I3C Open-Drain mode, target is 4.17MHz/240ns with a
-	 * duty-cycle tuned so that high levels are filetered out by
+	 * duty-cycle tuned so that high levels are filtered out by
 	 * the 50ns filter (target being 40ns).
 	 */
 	odhpp = 1;
@@ -1268,7 +1266,7 @@ static int svc_i3c_master_do_daa(struct i3c_master_controller *m)
 	/* Configure IBI auto-rules */
 	ret = svc_i3c_update_ibirules(master);
 	if (ret)
-		dev_err(master->dev, "Cannot handle such a list of devices");
+		dev_err(master->dev, "Cannot handle such a list of devices\n");
 
 rpm_out:
 	pm_runtime_put_autosuspend(master->dev);
@@ -2022,7 +2020,6 @@ static int svc_i3c_master_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "can't enable I3C clocks\n");
 
-	INIT_WORK(&master->hj_work, svc_i3c_master_hj_work);
 	mutex_init(&master->lock);
 
 	ret = devm_request_irq(dev, master->irq, svc_i3c_master_irq_handler,
@@ -2081,7 +2078,6 @@ static void svc_i3c_master_remove(struct platform_device *pdev)
 {
 	struct svc_i3c_master *master = platform_get_drvdata(pdev);
 
-	cancel_work_sync(&master->hj_work);
 	i3c_master_unregister(&master->base);
 
 	pm_runtime_dont_use_autosuspend(&pdev->dev);

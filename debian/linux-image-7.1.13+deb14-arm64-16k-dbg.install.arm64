@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-arm64-16k/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-arm64-16k
+lib/modules/7.1.13+deb14-arm64-16k/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-arm64-16k
+lib/modules/7.1.13+deb14-arm64-16k/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-arm64-16k
+lib/modules/7.1.13+deb14-arm64-16k/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-arm64-16k

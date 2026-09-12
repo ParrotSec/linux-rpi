@@ -112,11 +112,13 @@ static bool pde_subdir_insert(struct proc_dir_entry *dir,
 	/* Add new node and rebalance tree. */
 	rb_link_node(&de->subdir_node, parent, new);
 	rb_insert_color(&de->subdir_node, root);
+	if (S_ISDIR(de->mode))
+		dir->nlink++;
 	return true;
 }
 
-static int proc_notify_change(struct mnt_idmap *idmap,
-			      struct dentry *dentry, struct iattr *iattr)
+static int proc_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+		struct iattr *iattr)
 {
 	struct inode *inode = d_inode(dentry);
 	struct proc_dir_entry *de = PDE(inode);
@@ -151,7 +153,7 @@ static int proc_getattr(struct mnt_idmap *idmap,
 }
 
 static const struct inode_operations proc_file_inode_operations = {
-	.setattr	= proc_notify_change,
+	.setattr	= proc_setattr,
 };
 
 /*
@@ -364,7 +366,7 @@ const struct dentry_operations proc_net_dentry_ops = {
 static const struct inode_operations proc_dir_inode_operations = {
 	.lookup		= proc_lookup,
 	.getattr	= proc_getattr,
-	.setattr	= proc_notify_change,
+	.setattr	= proc_setattr,
 };
 
 static void pde_set_flags(struct proc_dir_entry *pde)
@@ -404,7 +406,6 @@ struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 		write_unlock(&proc_subdir_lock);
 		goto out_free_inum;
 	}
-	dir->nlink++;
 	write_unlock(&proc_subdir_lock);
 
 	return dp;
@@ -702,6 +703,8 @@ static void pde_erase(struct proc_dir_entry *pde, struct proc_dir_entry *parent)
 {
 	rb_erase(&pde->subdir_node, &parent->subdir);
 	RB_CLEAR_NODE(&pde->subdir_node);
+	if (S_ISDIR(pde->mode))
+		parent->nlink--;
 }
 
 /*
@@ -727,8 +730,6 @@ void remove_proc_entry(const char *name, struct proc_dir_entry *parent)
 			de = NULL;
 		} else {
 			pde_erase(de, parent);
-			if (S_ISDIR(de->mode))
-				parent->nlink--;
 		}
 	}
 	write_unlock(&proc_subdir_lock);
@@ -787,8 +788,6 @@ int remove_proc_subtree(const char *name, struct proc_dir_entry *parent)
 			continue;
 		}
 		next = de->parent;
-		if (S_ISDIR(de->mode))
-			next->nlink--;
 		write_unlock(&proc_subdir_lock);
 
 		proc_entry_rundown(de);

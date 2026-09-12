@@ -1,0 +1,4 @@
+lib/modules/7.1.13+parrot7-powerpc-smp/kernel      usr/lib/debug/lib/modules/7.1.13+parrot7-powerpc-smp
+lib/modules/7.1.13+parrot7-powerpc-smp/System.map  usr/lib/debug/lib/modules/7.1.13+parrot7-powerpc-smp
+lib/modules/7.1.13+parrot7-powerpc-smp/vdso        usr/lib/debug/lib/modules/7.1.13+parrot7-powerpc-smp
+lib/modules/7.1.13+parrot7-powerpc-smp/vmlinux     usr/lib/debug/lib/modules/7.1.13+parrot7-powerpc-smp

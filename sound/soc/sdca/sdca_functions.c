@@ -847,6 +847,8 @@ static int find_sdca_control_range(struct device *dev,
 		return 0;
 	else if (num_range < 0)
 		return num_range;
+	else if (num_range < 2 * sizeof(*limits))
+		return -EINVAL;
 
 	range_list = devm_kcalloc(dev, num_range, sizeof(*range_list), GFP_KERNEL);
 	if (!range_list)
@@ -1006,8 +1008,11 @@ static int find_sdca_entity_control(struct device *dev, struct sdca_entity *enti
 			control->has_fixed = true;
 		fallthrough;
 	case SDCA_ACCESS_MODE_RO:
-		control->deferrable = fwnode_property_read_bool(control_node,
-								"mipi-sdca-control-deferrable");
+		ret = fwnode_property_read_u32(control_node,
+					       "mipi-sdca-control-deferrable",
+					       &tmp);
+		if (ret == 0)
+			control->deferrable = !!tmp;
 		break;
 	default:
 		break;

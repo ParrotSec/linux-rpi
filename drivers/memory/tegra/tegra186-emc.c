@@ -22,6 +22,7 @@ struct tegra186_emc {
 	struct tegra_bpmp *bpmp;
 	struct device *dev;
 	struct clk *clk;
+	struct clk *clk_dbb;
 
 	struct tegra186_emc_dvfs *dvfs;
 	unsigned int num_dvfs;
@@ -257,15 +258,13 @@ static int tegra186_emc_icc_get_init_bw(struct icc_node *node, u32 *avg, u32 *pe
 
 static int tegra186_emc_interconnect_init(struct tegra186_emc *emc)
 {
-	struct tegra_mc *mc = dev_get_drvdata(emc->dev->parent);
-	const struct tegra_mc_soc *soc = mc->soc;
 	struct icc_node *node;
 	int err;
 
 	emc->provider.dev = emc->dev;
 	emc->provider.set = tegra186_emc_icc_set_bw;
 	emc->provider.data = &emc->provider;
-	emc->provider.aggregate = soc->icc_ops->aggregate;
+	emc->provider.aggregate = icc_std_aggregate;
 	emc->provider.xlate = tegra186_emc_of_icc_xlate;
 	emc->provider.get_bw = tegra186_emc_icc_get_init_bw;
 
@@ -325,6 +324,13 @@ static int tegra186_emc_probe(struct platform_device *pdev)
 	if (IS_ERR(emc->clk)) {
 		err = dev_err_probe(&pdev->dev, PTR_ERR(emc->clk),
 				    "failed to get EMC clock\n");
+		goto put_bpmp;
+	}
+
+	emc->clk_dbb = devm_clk_get_optional_enabled(&pdev->dev, "dbb");
+	if (IS_ERR(emc->clk_dbb)) {
+		err = dev_err_probe(&pdev->dev, PTR_ERR(emc->clk_dbb),
+				    "failed to get DBB clock\n");
 		goto put_bpmp;
 	}
 

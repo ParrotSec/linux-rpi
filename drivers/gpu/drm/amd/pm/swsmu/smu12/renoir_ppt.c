@@ -1215,9 +1215,10 @@ static int renoir_get_smu_metrics_data(struct smu_context *smu,
 		    ((amdgpu_ip_version(adev, MP1_HWIP, 0) ==
 		      IP_VERSION(12, 0, 0)) &&
 		     (adev->pm.fw_version >= 0x373200)))
-			*value = metrics->CurrentSocketPower << 8;
+			*value = metrics->CurrentSocketPower *
+				 MILLIWATT_PER_WATT;
 		else
-			*value = (metrics->CurrentSocketPower << 8) / 1000;
+			*value = metrics->CurrentSocketPower;
 		break;
 	case METRICS_TEMPERATURE_EDGE:
 		*value = (metrics->GfxTemperature / 100) *
@@ -1457,7 +1458,7 @@ static const struct pptable_funcs renoir_ppt_funcs = {
 	.get_power_profile_mode = renoir_get_power_profile_mode,
 	.read_sensor = renoir_read_sensor,
 	.check_fw_status = smu_v12_0_check_fw_status,
-	.check_fw_version = smu_v12_0_check_fw_version,
+	.check_fw_version = smu_cmn_check_fw_version,
 	.powergate_sdma = smu_v12_0_powergate_sdma,
 	.set_gfx_cgpg = smu_v12_0_set_gfx_cgpg,
 	.gfx_off_control = smu_v12_0_gfx_off_control,

@@ -382,8 +382,12 @@ static int ath12k_ahb_power_up(struct ath12k_base *ab)
 		ATH12K_AHB_UPD_SWID;
 
 	/* Load FW image to a reserved memory location */
-	ret = qcom_mdt_load(dev, fw, fw_name, pasid, mem_region, mem_phys, mem_size,
-			    &mem_phys);
+	if (ab_ahb->scm_auth_enabled)
+		ret = qcom_mdt_load(dev, fw, fw_name, pasid, mem_region,
+				    mem_phys, mem_size, &mem_phys);
+	else
+		ret = qcom_mdt_load_no_init(dev, fw, fw_name, mem_region,
+					    mem_phys, mem_size, &mem_phys);
 	if (ret) {
 		ath12k_err(ab, "Failed to load MDT segments: %d\n", ret);
 		goto err_fw;
@@ -414,11 +418,13 @@ static int ath12k_ahb_power_up(struct ath12k_base *ab)
 		goto err_fw2;
 	}
 
-	/* Authenticate FW image using peripheral ID */
-	ret = qcom_scm_pas_auth_and_reset(pasid);
-	if (ret) {
-		ath12k_err(ab, "failed to boot the remote processor %d\n", ret);
-		goto err_fw2;
+	if (ab_ahb->scm_auth_enabled) {
+		/* Authenticate FW image using peripheral ID */
+		ret = qcom_scm_pas_auth_and_reset(pasid);
+		if (ret) {
+			ath12k_err(ab, "failed to boot the remote processor %d\n", ret);
+			goto err_fw2;
+		}
 	}
 
 	/* Instruct Q6 to spawn userPD thread */
@@ -475,13 +481,15 @@ static void ath12k_ahb_power_down(struct ath12k_base *ab, bool is_suspend)
 
 	qcom_smem_state_update_bits(ab_ahb->stop_state, BIT(ab_ahb->stop_bit), 0);
 
-	pasid = (u32_encode_bits(ab_ahb->userpd_id, ATH12K_USERPD_ID_MASK)) |
-		ATH12K_AHB_UPD_SWID;
-	/* Release the firmware */
-	ret = qcom_scm_pas_shutdown(pasid);
-	if (ret)
-		ath12k_err(ab, "scm pas shutdown failed for userPD%d: %d\n",
-			   ab_ahb->userpd_id, ret);
+	if (ab_ahb->scm_auth_enabled) {
+		pasid = (u32_encode_bits(ab_ahb->userpd_id, ATH12K_USERPD_ID_MASK)) |
+			 ATH12K_AHB_UPD_SWID;
+		/* Release the firmware */
+		ret = qcom_scm_pas_shutdown(pasid);
+		if (ret)
+			ath12k_err(ab, "scm pas shutdown failed for userPD%d\n",
+				   ab_ahb->userpd_id);
+	}
 }
 
 static void ath12k_ahb_init_qmi_ce_config(struct ath12k_base *ab)
@@ -575,31 +583,36 @@ static int ath12k_ahb_config_ext_irq(struct ath12k_base *ab)
 		netif_napi_add(irq_grp->napi_ndev, &irq_grp->napi,
 			       ath12k_ahb_ext_grp_napi_poll);
 
-		for (j = 0; j < ATH12K_EXT_IRQ_NUM_MAX; j++) {
-			/* For TX ring, ensure that the ring mask and the
-			 * tcl_to_wbm_rbm_map point to the same ring number.
-			 */
+		for (j = 0; j < DP_TCL_NUM_RING_MAX; j++) {
 			if (ring_mask->tx[i] &
-			    BIT(ab->hal.tcl_to_wbm_rbm_map[j].wbm_ring_num)) {
+			    BIT(ab->hal.tcl_to_wbm_rbm_map[j].wbm_ring_num) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX) {
 				irq_grp->irqs[num_irq++] =
 					wbm2host_tx_completions_ring1 - j;
 			}
+		}
 
-			if (ring_mask->rx[i] & BIT(j)) {
+		for (j = 0; j < ATH12K_EXT_IRQ_NUM_MAX; j++) {
+			if (ring_mask->rx[i] & BIT(j) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX) {
 				irq_grp->irqs[num_irq++] =
 					reo2host_destination_ring1 - j;
 			}
 
-			if (ring_mask->rx_err[i] & BIT(j))
+			if (ring_mask->rx_err[i] & BIT(j) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX)
 				irq_grp->irqs[num_irq++] = reo2host_exception;
 
-			if (ring_mask->rx_wbm_rel[i] & BIT(j))
+			if (ring_mask->rx_wbm_rel[i] & BIT(j) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX)
 				irq_grp->irqs[num_irq++] = wbm2host_rx_release;
 
-			if (ring_mask->reo_status[i] & BIT(j))
+			if (ring_mask->reo_status[i] & BIT(j) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX)
 				irq_grp->irqs[num_irq++] = reo2host_status;
 
-			if (ring_mask->rx_mon_dest[i] & BIT(j))
+			if (ring_mask->rx_mon_dest[i] & BIT(j) &&
+			    num_irq < ATH12K_EXT_IRQ_NUM_MAX)
 				irq_grp->irqs[num_irq++] =
 					rxdma2host_monitor_destination_mac1;
 		}

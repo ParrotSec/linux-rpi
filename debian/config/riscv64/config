@@ -7,8 +7,10 @@ CONFIG_SECCOMP=y
 ## file: arch/riscv/Kconfig
 ##
 CONFIG_SMP=y
+CONFIG_NR_CPUS=128
 CONFIG_NUMA=y
 # CONFIG_COMPAT is not set
+# CONFIG_RISCV_USER_CFI is not set
 
 ##
 ## file: arch/riscv/Kconfig.socs
@@ -32,7 +34,6 @@ CONFIG_ARCH_CANAAN=y
 ## file: arch/riscv/crypto/Kconfig
 ##
 CONFIG_CRYPTO_AES_RISCV64=m
-CONFIG_CRYPTO_GHASH_RISCV64=m
 
 ##
 ## file: arch/riscv/kvm/Kconfig
@@ -59,6 +60,7 @@ CONFIG_BT_HCIUART=y
 ##
 ## file: drivers/cache/Kconfig
 ##
+CONFIG_AX45MP_L2_CACHE=y
 CONFIG_SIFIVE_CCACHE=y
 CONFIG_STARFIVE_STARLINK_CACHE=y
 
@@ -87,6 +89,10 @@ CONFIG_SPACEMIT_K3_CCU=y
 ##
 ## file: drivers/cpufreq/Kconfig
 ##
+## choice: Default CPUFreq governor
+# CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE is not set
+CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+## end choice
 CONFIG_CPUFREQ_DT=m
 CONFIG_CPUFREQ_DT_PLATDEV=y
 CONFIG_ACPI_CPPC_CPUFREQ=m
@@ -120,6 +126,7 @@ CONFIG_POLARFIRE_SOC_AUTO_UPDATE=m
 ##
 CONFIG_GPIOLIB=y
 CONFIG_GPIO_DWAPB=m
+CONFIG_GPIO_POLARFIRE_SOC=y
 CONFIG_GPIO_SIFIVE=y
 CONFIG_GPIO_SPACEMIT_K1=y
 
@@ -127,6 +134,12 @@ CONFIG_GPIO_SPACEMIT_K1=y
 ## file: drivers/gpu/drm/Kconfig
 ##
 CONFIG_DRM=m
+
+##
+## file: drivers/gpu/drm/bridge/Kconfig
+##
+CONFIG_DRM_DISPLAY_CONNECTOR=m
+CONFIG_DRM_THEAD_TH1520_DW_HDMI=m
 
 ##
 ## file: drivers/gpu/drm/imagination/Kconfig
@@ -142,6 +155,11 @@ CONFIG_DRM_RADEON=m
 ## file: drivers/gpu/drm/sun4i/Kconfig
 ##
 CONFIG_DRM_SUN4I=m
+
+##
+## file: drivers/gpu/drm/verisilicon/Kconfig
+##
+CONFIG_DRM_VERISILICON_DC=m
 
 ##
 ## file: drivers/hwmon/Kconfig
@@ -289,6 +307,7 @@ CONFIG_PCIE_SG2042_HOST=y
 ##
 ## file: drivers/pci/controller/dwc/Kconfig
 ##
+CONFIG_PCIE_ANDES_QILAI=y
 CONFIG_PCIE_DW_PLAT_HOST=y
 CONFIG_PCIE_FU740=y
 CONFIG_PCIE_SOPHGO_DW=y
@@ -439,14 +458,14 @@ CONFIG_SPI_SUN6I=m
 CONFIG_STAGING_MEDIA=y
 
 ##
-## file: drivers/staging/media/starfive/camss/Kconfig
-##
-CONFIG_VIDEO_STARFIVE_CAMSS=m
-
-##
 ## file: drivers/thermal/Kconfig
 ##
 CONFIG_SUN8I_THERMAL=m
+
+##
+## file: drivers/thermal/spacemit/Kconfig
+##
+CONFIG_SPACEMIT_K1_TSENSOR=m
 
 ##
 ## file: drivers/tty/hvc/Kconfig
@@ -464,6 +483,8 @@ CONFIG_SERIAL_SH_SCI=m
 ##
 CONFIG_SERIAL_8250=y
 CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_8250_NR_UARTS=6
+CONFIG_SERIAL_8250_RUNTIME_UARTS=6
 CONFIG_SERIAL_8250_DW=y
 CONFIG_SERIAL_OF_PLATFORM=y
 
@@ -551,9 +572,20 @@ CONFIG_KALLSYMS_ALL=y
 CONFIG_KEXEC=y
 
 ##
+## file: kernel/dma/Kconfig
+##
+CONFIG_DMA_CMA=y
+CONFIG_CMA_SIZE_MBYTES=96
+
+##
 ## file: lib/Kconfig.debug
 ##
 CONFIG_DEBUG_INFO_BTF=y
+
+##
+## file: mm/Kconfig
+##
+CONFIG_CMA=y
 
 ##
 ## file: sound/hda/controllers/Kconfig

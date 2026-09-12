@@ -235,8 +235,7 @@ static void irdma_complete_cqp_request(struct irdma_cqp *cqp,
 				       struct irdma_cqp_request *cqp_request)
 {
 	if (cqp_request->waiting) {
-		WRITE_ONCE(cqp_request->request_done, true);
-		wake_up(&cqp_request->waitq);
+		complete_all(&cqp_request->comp);
 	} else if (cqp_request->callback_fcn) {
 		cqp_request->callback_fcn(cqp_request);
 	}
@@ -1033,7 +1032,7 @@ static int irdma_create_cqp(struct irdma_pci_f *rf)
 	if (!cqp->cqp_requests)
 		return -ENOMEM;
 
-	cqp->scratch_array = kcalloc(sqsize, sizeof(*cqp->scratch_array), GFP_KERNEL);
+	cqp->scratch_array = kzalloc_objs(*cqp->scratch_array, sqsize);
 	if (!cqp->scratch_array) {
 		status = -ENOMEM;
 		goto err_scratch;
@@ -1082,6 +1081,7 @@ static int irdma_create_cqp(struct irdma_pci_f *rf)
 		cqp_init_info.hw_maj_ver = IRDMA_CQPHC_HW_MAJVER_GEN_2;
 		break;
 	case IRDMA_GEN_3:
+	case IRDMA_GEN_4:
 		cqp_init_info.hw_maj_ver = IRDMA_CQPHC_HW_MAJVER_GEN_3;
 		cqp_init_info.ts_override = 1;
 		break;
@@ -1106,9 +1106,9 @@ static int irdma_create_cqp(struct irdma_pci_f *rf)
 	INIT_LIST_HEAD(&cqp->cqp_avail_reqs);
 	INIT_LIST_HEAD(&cqp->cqp_pending_reqs);
 
-	/* init the waitqueue of the cqp_requests and add them to the list */
+	/* init the completion of the cqp_requests and add them to the list */
 	for (i = 0; i < sqsize; i++) {
-		init_waitqueue_head(&cqp->cqp_requests[i].waitq);
+		init_completion(&cqp->cqp_requests[i].comp);
 		list_add_tail(&cqp->cqp_requests[i].list, &cqp->cqp_avail_reqs);
 	}
 	init_waitqueue_head(&cqp->remove_wq);
@@ -1508,7 +1508,7 @@ static int irdma_create_aeq(struct irdma_pci_f *rf)
 		   hmc_info->hmc_obj[IRDMA_HMC_IW_CQ].cnt;
 	aeq_size = min(aeq_size, dev->hw_attrs.max_hw_aeq_size);
 	/* GEN_3 does not support virtual AEQ. Cap at max Kernel alloc size */
-	if (rf->rdma_ver == IRDMA_GEN_3)
+	if (rf->rdma_ver >= IRDMA_GEN_3)
 		aeq_size = min(aeq_size, (u32)((PAGE_SIZE << MAX_PAGE_ORDER) /
 			       sizeof(struct irdma_sc_aeqe)));
 	aeq->mem.size = ALIGN(sizeof(struct irdma_sc_aeqe) * aeq_size,
@@ -1518,7 +1518,7 @@ static int irdma_create_aeq(struct irdma_pci_f *rf)
 					 GFP_KERNEL | __GFP_NOWARN);
 	if (aeq->mem.va)
 		goto skip_virt_aeq;
-	else if (rf->rdma_ver == IRDMA_GEN_3)
+	else if (rf->rdma_ver >= IRDMA_GEN_3)
 		return -ENOMEM;
 
 	/* physically mapped aeq failed. setup virtual aeq */
@@ -1693,6 +1693,8 @@ static int irdma_hmc_setup(struct irdma_pci_f *rf)
 static void irdma_del_init_mem(struct irdma_pci_f *rf)
 {
 	struct irdma_sc_dev *dev = &rf->sc_dev;
+	struct irdma_dma_mem *fw_scratch_buf0;
+	struct irdma_dma_mem *fw_scratch_buf1;
 
 	if (!rf->sc_dev.privileged)
 		irdma_vchnl_req_put_hmc_fcn(&rf->sc_dev);
@@ -1713,6 +1715,15 @@ static void irdma_del_init_mem(struct irdma_pci_f *rf)
 	rf->iw_msixtbl = NULL;
 	kfree(rf->hmc_info_mem);
 	rf->hmc_info_mem = NULL;
+
+	fw_scratch_buf0 = &dev->hmc_fpm_misc.fw_scratch_buf0;
+	fw_scratch_buf1 = &dev->hmc_fpm_misc.fw_scratch_buf1;
+	if (fw_scratch_buf0->va)
+		dma_free_coherent(dev->hw->device, fw_scratch_buf0->size,
+				  fw_scratch_buf0->va, fw_scratch_buf0->pa);
+	if (fw_scratch_buf1->va)
+		dma_free_coherent(dev->hw->device, fw_scratch_buf1->size,
+				  fw_scratch_buf1->va, fw_scratch_buf1->pa);
 }
 
 /**
@@ -1942,7 +1953,7 @@ int irdma_rt_init_hw(struct irdma_device *iwdev,
 	if (status)
 		return status;
 
-	stats_info.pestat = kzalloc(sizeof(*stats_info.pestat), GFP_KERNEL);
+	stats_info.pestat = kzalloc_obj(*stats_info.pestat);
 	if (!stats_info.pestat) {
 		irdma_cleanup_cm_core(&iwdev->cm_core);
 		return -ENOMEM;
@@ -2181,8 +2192,13 @@ u32 irdma_initialize_hw_rsrc(struct irdma_pci_f *rf)
 	set_bit(2, rf->allocated_pds);
 
 	INIT_LIST_HEAD(&rf->mc_qht_list.list);
-	/* stag index mask has a minimum of 14 bits */
-	mrdrvbits = 24 - max(get_count_order(rf->max_mr), 14);
+
+	if (rf->rdma_ver >= IRDMA_GEN_4)
+		mrdrvbits = 24 - max(get_count_order(rf->max_mr), 16);
+	else
+		/* stag index mask has a minimum of 14 bits */
+		mrdrvbits = 24 - max(get_count_order(rf->max_mr), 14);
+
 	rf->mr_stagmask = ~(((1 << mrdrvbits) - 1) << (32 - mrdrvbits));
 
 	return 0;

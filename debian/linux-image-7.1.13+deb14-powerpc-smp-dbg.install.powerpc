@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-powerpc-smp/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-powerpc-smp
+lib/modules/7.1.13+deb14-powerpc-smp/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-powerpc-smp
+lib/modules/7.1.13+deb14-powerpc-smp/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-powerpc-smp
+lib/modules/7.1.13+deb14-powerpc-smp/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-powerpc-smp

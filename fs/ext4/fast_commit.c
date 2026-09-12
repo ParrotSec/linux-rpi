@@ -13,6 +13,7 @@
 #include "mballoc.h"
 
 #include <linux/lockdep.h>
+#include <linux/wait_bit.h>
 /*
  * Ext4 Fast Commits
  * -----------------
@@ -215,13 +216,18 @@ void ext4_fc_init_inode(struct inode *inode)
 	ext4_clear_inode_state(inode, EXT4_STATE_FC_COMMITTING);
 	INIT_LIST_HEAD(&ei->i_fc_list);
 	INIT_LIST_HEAD(&ei->i_fc_dilist);
-	init_waitqueue_head(&ei->i_fc_wait);
 }
 
 static bool ext4_fc_disabled(struct super_block *sb)
 {
 	return (!test_opt2(sb, JOURNAL_FAST_COMMIT) ||
 		(EXT4_SB(sb)->s_mount_state & EXT4_FC_REPLAY));
+}
+
+static bool ext4_fc_eligible(struct super_block *sb)
+{
+	return !ext4_fc_disabled(sb) &&
+		!(ext4_test_mount_flag(sb, EXT4_MF_FC_INELIGIBLE));
 }
 
 /*
@@ -233,6 +239,8 @@ void ext4_fc_del(struct inode *inode)
 	struct ext4_inode_info *ei = EXT4_I(inode);
 	struct ext4_fc_dentry_update *fc_dentry;
 	wait_queue_head_t *wq;
+	unsigned long *wait_word = ext4_inode_state_wait_word(inode);
+	int wait_bit = ext4_inode_state_wait_bit(EXT4_STATE_FC_FLUSHING_DATA);
 	int alloc_ctx;
 
 	if (ext4_fc_disabled(inode->i_sb))
@@ -262,17 +270,9 @@ void ext4_fc_del(struct inode *inode)
 	WARN_ON(ext4_test_inode_state(inode, EXT4_STATE_FC_COMMITTING)
 		&& !ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE));
 	while (ext4_test_inode_state(inode, EXT4_STATE_FC_FLUSHING_DATA)) {
-#if (BITS_PER_LONG < 64)
-		DEFINE_WAIT_BIT(wait, &ei->i_state_flags,
-				EXT4_STATE_FC_FLUSHING_DATA);
-		wq = bit_waitqueue(&ei->i_state_flags,
-				   EXT4_STATE_FC_FLUSHING_DATA);
-#else
-		DEFINE_WAIT_BIT(wait, &ei->i_flags,
-				EXT4_STATE_FC_FLUSHING_DATA);
-		wq = bit_waitqueue(&ei->i_flags,
-				   EXT4_STATE_FC_FLUSHING_DATA);
-#endif
+		DEFINE_WAIT_BIT(wait, wait_word, wait_bit);
+
+		wq = bit_waitqueue(wait_word, wait_bit);
 		prepare_to_wait(wq, &wait.wq_entry, TASK_UNINTERRUPTIBLE);
 		if (ext4_test_inode_state(inode, EXT4_STATE_FC_FLUSHING_DATA)) {
 			ext4_fc_unlock(inode->i_sb, alloc_ctx);
@@ -320,7 +320,7 @@ void ext4_fc_mark_ineligible(struct super_block *sb, int reason, handle_t *handl
 	if (ext4_fc_disabled(sb))
 		return;
 
-	if (handle && !IS_ERR(handle))
+	if (!IS_ERR_OR_NULL(handle))
 		tid = handle->h_transaction->t_tid;
 	else {
 		read_lock(&sbi->s_journal->j_state_lock);
@@ -473,13 +473,8 @@ void ext4_fc_track_unlink(handle_t *handle, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
 
-	if (ext4_fc_disabled(inode->i_sb))
-		return;
-
-	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE))
-		return;
-
-	__ext4_fc_track_unlink(handle, inode, dentry);
+	if (ext4_fc_eligible(inode->i_sb))
+		__ext4_fc_track_unlink(handle, inode, dentry);
 }
 
 void __ext4_fc_track_link(handle_t *handle,
@@ -496,17 +491,11 @@ void __ext4_fc_track_link(handle_t *handle,
 	trace_ext4_fc_track_link(handle, inode, dentry, ret);
 }
 
-void ext4_fc_track_link(handle_t *handle, struct dentry *dentry)
+void ext4_fc_track_link(handle_t *handle, struct inode *inode,
+			struct dentry *dentry)
 {
-	struct inode *inode = d_inode(dentry);
-
-	if (ext4_fc_disabled(inode->i_sb))
-		return;
-
-	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE))
-		return;
-
-	__ext4_fc_track_link(handle, inode, dentry);
+	if (ext4_fc_eligible(inode->i_sb))
+		__ext4_fc_track_link(handle, inode, dentry);
 }
 
 void __ext4_fc_track_create(handle_t *handle, struct inode *inode,
@@ -527,13 +516,8 @@ void ext4_fc_track_create(handle_t *handle, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
 
-	if (ext4_fc_disabled(inode->i_sb))
-		return;
-
-	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE))
-		return;
-
-	__ext4_fc_track_create(handle, inode, dentry);
+	if (ext4_fc_eligible(inode->i_sb))
+		__ext4_fc_track_create(handle, inode, dentry);
 }
 
 /* __track_fn for inode tracking */
@@ -552,12 +536,11 @@ void ext4_fc_track_inode(handle_t *handle, struct inode *inode)
 {
 	struct ext4_inode_info *ei = EXT4_I(inode);
 	wait_queue_head_t *wq;
+	unsigned long *wait_word = ext4_inode_state_wait_word(inode);
+	int wait_bit = ext4_inode_state_wait_bit(EXT4_STATE_FC_COMMITTING);
 	int ret;
 
 	if (S_ISDIR(inode->i_mode))
-		return;
-
-	if (ext4_fc_disabled(inode->i_sb))
 		return;
 
 	if (ext4_should_journal_data(inode)) {
@@ -566,7 +549,7 @@ void ext4_fc_track_inode(handle_t *handle, struct inode *inode)
 		return;
 	}
 
-	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE))
+	if (!ext4_fc_eligible(inode->i_sb))
 		return;
 
 	/*
@@ -577,17 +560,9 @@ void ext4_fc_track_inode(handle_t *handle, struct inode *inode)
 	lockdep_assert_not_held(&ei->i_data_sem);
 
 	while (ext4_test_inode_state(inode, EXT4_STATE_FC_COMMITTING)) {
-#if (BITS_PER_LONG < 64)
-		DEFINE_WAIT_BIT(wait, &ei->i_state_flags,
-				EXT4_STATE_FC_COMMITTING);
-		wq = bit_waitqueue(&ei->i_state_flags,
-				   EXT4_STATE_FC_COMMITTING);
-#else
-		DEFINE_WAIT_BIT(wait, &ei->i_flags,
-				EXT4_STATE_FC_COMMITTING);
-		wq = bit_waitqueue(&ei->i_flags,
-				   EXT4_STATE_FC_COMMITTING);
-#endif
+		DEFINE_WAIT_BIT(wait, wait_word, wait_bit);
+
+		wq = bit_waitqueue(wait_word, wait_bit);
 		prepare_to_wait(wq, &wait.wq_entry, TASK_UNINTERRUPTIBLE);
 		if (ext4_test_inode_state(inode, EXT4_STATE_FC_COMMITTING))
 			schedule();
@@ -616,7 +591,7 @@ static int __track_range(handle_t *handle, struct inode *inode, void *arg,
 		(struct __track_range_args *)arg;
 
 	if (inode->i_ino < EXT4_FIRST_INO(inode->i_sb)) {
-		ext4_debug("Special inode %ld being modified\n", inode->i_ino);
+		ext4_debug("Special inode %llu being modified\n", inode->i_ino);
 		return -ECANCELED;
 	}
 
@@ -644,10 +619,7 @@ void ext4_fc_track_range(handle_t *handle, struct inode *inode, ext4_lblk_t star
 	if (S_ISDIR(inode->i_mode))
 		return;
 
-	if (ext4_fc_disabled(inode->i_sb))
-		return;
-
-	if (ext4_test_mount_flag(inode->i_sb, EXT4_MF_FC_INELIGIBLE))
+	if (!ext4_fc_eligible(inode->i_sb))
 		return;
 
 	if (ext4_has_inline_data(inode)) {
@@ -914,7 +886,7 @@ static int ext4_fc_write_inode_data(struct inode *inode, u32 *crc)
 	spin_unlock(&ei->i_fc_lock);
 
 	cur_lblk_off = old_blk_size;
-	ext4_debug("will try writing %d to %d for inode %ld\n",
+	ext4_debug("will try writing %d to %d for inode %llu\n",
 		   cur_lblk_off, new_blk_size, inode->i_ino);
 
 	while (cur_lblk_off <= new_blk_size) {
@@ -1050,6 +1022,8 @@ static int ext4_fc_perform_commit(journal_t *journal)
 	int ret = 0;
 	u32 crc = 0;
 	int alloc_ctx;
+	int flushing_wait_bit =
+		ext4_inode_state_wait_bit(EXT4_STATE_FC_FLUSHING_DATA);
 
 	/*
 	 * Step 1: Mark all inodes on s_fc_q[MAIN] with
@@ -1075,11 +1049,8 @@ static int ext4_fc_perform_commit(journal_t *journal)
 	list_for_each_entry(iter, &sbi->s_fc_q[FC_Q_MAIN], i_fc_list) {
 		ext4_clear_inode_state(&iter->vfs_inode,
 				       EXT4_STATE_FC_FLUSHING_DATA);
-#if (BITS_PER_LONG < 64)
-		wake_up_bit(&iter->i_state_flags, EXT4_STATE_FC_FLUSHING_DATA);
-#else
-		wake_up_bit(&iter->i_flags, EXT4_STATE_FC_FLUSHING_DATA);
-#endif
+		wake_up_bit(ext4_inode_state_wait_word(&iter->vfs_inode),
+			    flushing_wait_bit);
 	}
 
 	/*
@@ -1295,6 +1266,8 @@ static void ext4_fc_cleanup(journal_t *journal, int full, tid_t tid)
 	struct ext4_inode_info *ei;
 	struct ext4_fc_dentry_update *fc_dentry;
 	int alloc_ctx;
+	int committing_wait_bit =
+		ext4_inode_state_wait_bit(EXT4_STATE_FC_COMMITTING);
 
 	if (full && sbi->s_fc_bh)
 		sbi->s_fc_bh = NULL;
@@ -1331,11 +1304,8 @@ static void ext4_fc_cleanup(journal_t *journal, int full, tid_t tid)
 		 * barrier in prepare_to_wait() in ext4_fc_track_inode().
 		 */
 		smp_mb();
-#if (BITS_PER_LONG < 64)
-		wake_up_bit(&ei->i_state_flags, EXT4_STATE_FC_COMMITTING);
-#else
-		wake_up_bit(&ei->i_flags, EXT4_STATE_FC_COMMITTING);
-#endif
+		wake_up_bit(ext4_inode_state_wait_word(&ei->vfs_inode),
+			    committing_wait_bit);
 	}
 
 	while (!list_empty(&sbi->s_fc_dentry_q[FC_Q_MAIN])) {
@@ -1446,7 +1416,6 @@ static int ext4_fc_replay_link_internal(struct super_block *sb,
 				struct inode *inode)
 {
 	struct inode *dir = NULL;
-	struct dentry *dentry_dir = NULL, *dentry_inode = NULL;
 	struct qstr qstr_dname = QSTR_INIT(darg->dname, darg->dname_len);
 	int ret = 0;
 
@@ -1457,21 +1426,7 @@ static int ext4_fc_replay_link_internal(struct super_block *sb,
 		goto out;
 	}
 
-	dentry_dir = d_obtain_alias(dir);
-	if (IS_ERR(dentry_dir)) {
-		ext4_debug("Failed to obtain dentry");
-		dentry_dir = NULL;
-		goto out;
-	}
-
-	dentry_inode = d_alloc(dentry_dir, &qstr_dname);
-	if (!dentry_inode) {
-		ext4_debug("Inode dentry not created.");
-		ret = -ENOMEM;
-		goto out;
-	}
-
-	ret = __ext4_link(dir, inode, dentry_inode);
+	ret = __ext4_link(dir, inode, &qstr_dname, NULL);
 	/*
 	 * It's possible that link already existed since data blocks
 	 * for the dir in question got persisted before we crashed OR
@@ -1485,16 +1440,8 @@ static int ext4_fc_replay_link_internal(struct super_block *sb,
 
 	ret = 0;
 out:
-	if (dentry_dir) {
-		d_drop(dentry_dir);
-		dput(dentry_dir);
-	} else if (dir) {
+	if (dir)
 		iput(dir);
-	}
-	if (dentry_inode) {
-		d_drop(dentry_inode);
-		dput(dentry_inode);
-	}
 
 	return ret;
 }
@@ -1759,8 +1706,7 @@ int ext4_fc_record_regions(struct super_block *sb, int ino,
 }
 
 /* Replay add range tag */
-static int ext4_fc_replay_add_range(struct super_block *sb,
-				    struct ext4_fc_tl_mem *tl, u8 *val)
+static int ext4_fc_replay_add_range(struct super_block *sb, u8 *val)
 {
 	struct ext4_fc_add_range fc_add_ex;
 	struct ext4_extent newex, *ex;
@@ -1795,7 +1741,7 @@ static int ext4_fc_replay_add_range(struct super_block *sb,
 
 	cur = start;
 	remaining = len;
-	ext4_debug("ADD_RANGE, lblk %d, pblk %lld, len %d, unwritten %d, inode %ld\n",
+	ext4_debug("ADD_RANGE, lblk %d, pblk %lld, len %d, unwritten %d, inode %llu\n",
 		  start, start_pblk, len, ext4_ext_is_unwritten(ex),
 		  inode->i_ino);
 
@@ -1811,8 +1757,11 @@ static int ext4_fc_replay_add_range(struct super_block *sb,
 		if (ret == 0) {
 			/* Range is not mapped */
 			path = ext4_find_extent(inode, cur, path, 0);
-			if (IS_ERR(path))
+			if (IS_ERR(path)) {
+				ret = PTR_ERR(path);
+				path = NULL;
 				goto out;
+			}
 			memset(&newex, 0, sizeof(newex));
 			newex.ee_block = cpu_to_le32(cur);
 			ext4_ext_store_pblock(
@@ -1824,8 +1773,11 @@ static int ext4_fc_replay_add_range(struct super_block *sb,
 			path = ext4_ext_insert_extent(NULL, inode,
 						      path, &newex, 0);
 			up_write((&EXT4_I(inode)->i_data_sem));
-			if (IS_ERR(path))
+			if (IS_ERR(path)) {
+				ret = PTR_ERR(path);
+				path = NULL;
 				goto out;
+			}
 			goto next;
 		}
 
@@ -1872,16 +1824,16 @@ next:
 	}
 	ext4_ext_replay_shrink_inode(inode, i_size_read(inode) >>
 					sb->s_blocksize_bits);
+	ret = 0;
 out:
 	ext4_free_ext_path(path);
 	iput(inode);
-	return 0;
+	return ret;
 }
 
 /* Replay DEL_RANGE tag */
 static int
-ext4_fc_replay_del_range(struct super_block *sb,
-			 struct ext4_fc_tl_mem *tl, u8 *val)
+ext4_fc_replay_del_range(struct super_block *sb, u8 *val)
 {
 	struct inode *inode;
 	struct ext4_fc_del_range lrange;
@@ -1906,7 +1858,7 @@ ext4_fc_replay_del_range(struct super_block *sb,
 	if (ret)
 		goto out;
 
-	ext4_debug("DEL_RANGE, inode %ld, lblk %d, len %d\n",
+	ext4_debug("DEL_RANGE, inode %llu, lblk %d, len %d\n",
 			inode->i_ino, le32_to_cpu(lrange.fc_lblk),
 			le32_to_cpu(lrange.fc_len));
 	while (remaining > 0) {
@@ -1936,9 +1888,10 @@ ext4_fc_replay_del_range(struct super_block *sb,
 	ext4_ext_replay_shrink_inode(inode,
 		i_size_read(inode) >> sb->s_blocksize_bits);
 	ext4_mark_inode_dirty(NULL, inode);
+	ret = 0;
 out:
 	iput(inode);
-	return 0;
+	return ret;
 }
 
 static void ext4_fc_set_bitmaps_and_counters(struct super_block *sb)
@@ -2251,13 +2204,13 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 			ret = ext4_fc_replay_unlink(sb, &tl, val);
 			break;
 		case EXT4_FC_TAG_ADD_RANGE:
-			ret = ext4_fc_replay_add_range(sb, &tl, val);
+			ret = ext4_fc_replay_add_range(sb, val);
 			break;
 		case EXT4_FC_TAG_CREAT:
 			ret = ext4_fc_replay_create(sb, &tl, val);
 			break;
 		case EXT4_FC_TAG_DEL_RANGE:
-			ret = ext4_fc_replay_del_range(sb, &tl, val);
+			ret = ext4_fc_replay_del_range(sb, val);
 			break;
 		case EXT4_FC_TAG_INODE:
 			ret = ext4_fc_replay_inode(sb, &tl, val);

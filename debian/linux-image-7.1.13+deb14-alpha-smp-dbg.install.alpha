@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-alpha-smp/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-alpha-smp
+lib/modules/7.1.13+deb14-alpha-smp/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-alpha-smp
+lib/modules/7.1.13+deb14-alpha-smp/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-alpha-smp
+lib/modules/7.1.13+deb14-alpha-smp/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-alpha-smp

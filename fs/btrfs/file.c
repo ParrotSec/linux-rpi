@@ -93,16 +93,8 @@ int btrfs_dirty_folio(struct btrfs_inode *inode, struct folio *folio, loff_t pos
 
 	end_of_last_block = start_pos + num_bytes - 1;
 
-	/*
-	 * The pages may have already been dirty, clear out old accounting so
-	 * we can set things up properly
-	 */
-	btrfs_clear_extent_bit(&inode->io_tree, start_pos, end_of_last_block,
-			       EXTENT_DELALLOC | EXTENT_DO_ACCOUNTING | EXTENT_DEFRAG,
-			       cached);
-
-	ret = btrfs_set_extent_delalloc(inode, start_pos, end_of_last_block,
-					extra_bits, cached);
+	ret = btrfs_reset_extent_delalloc(inode, start_pos, end_of_last_block,
+					  extra_bits, cached);
 	if (ret)
 		return ret;
 
@@ -633,7 +625,7 @@ again:
 							 trans->transid);
 			btrfs_set_file_extent_num_bytes(leaf, fi,
 							end - other_start);
-			return 0;
+			goto mark_dirty;
 		}
 	}
 
@@ -661,7 +653,7 @@ again:
 							other_end - start);
 			btrfs_set_file_extent_offset(leaf, fi,
 						     start - orig_offset);
-			return 0;
+			goto mark_dirty;
 		}
 	}
 
@@ -788,7 +780,12 @@ again:
 		}
 	}
 
-	return 0;
+mark_dirty:
+	ret = btrfs_inode_set_file_extent_range(inode, start, end - start);
+	if (ret)
+		btrfs_abort_transaction(trans, ret);
+
+	return ret;
 }
 
 /*
@@ -1445,7 +1442,7 @@ ssize_t btrfs_do_write_iter(struct kiocb *iocb, struct iov_iter *from,
 	 * have opened a file as writable, we have to stop this write operation
 	 * to ensure consistency.
 	 */
-	if (BTRFS_FS_ERROR(inode->root->fs_info))
+	if (unlikely(BTRFS_FS_ERROR(inode->root->fs_info)))
 		return -EROFS;
 
 	if (encoded && (iocb->ki_flags & IOCB_NOWAIT))
@@ -1961,18 +1958,7 @@ again:
 		}
 	}
 
-	/*
-	 * page_mkwrite gets called when the page is firstly dirtied after it's
-	 * faulted in, but write(2) could also dirty a page and set delalloc
-	 * bits, thus in this case for space account reason, we still need to
-	 * clear any delalloc bits within this page range since we have to
-	 * reserve data&meta space before lock_page() (see above comments).
-	 */
-	btrfs_clear_extent_bit(io_tree, page_start, end,
-			       EXTENT_DELALLOC | EXTENT_DO_ACCOUNTING |
-			       EXTENT_DEFRAG, &cached_state);
-
-	ret = btrfs_set_extent_delalloc(inode, page_start, end, 0, &cached_state);
+	ret = btrfs_reset_extent_delalloc(inode, page_start, end, 0, &cached_state);
 	if (ret < 0) {
 		btrfs_unlock_extent(io_tree, page_start, page_end, &cached_state);
 		goto out_unlock;
@@ -3316,8 +3302,8 @@ static bool find_delalloc_subrange(struct btrfs_inode *inode, u64 start, u64 end
 			*delalloc_start_ret = start;
 			delalloc_len = btrfs_count_range_bits(&inode->io_tree,
 							      delalloc_start_ret, end,
-							      len, EXTENT_DELALLOC, 1,
-							      cached_state);
+							      len, EXTENT_DELALLOC,
+							      true, cached_state);
 		} else {
 			spin_unlock(&inode->lock);
 		}

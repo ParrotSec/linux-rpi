@@ -14,6 +14,7 @@
  */
 
 #include <linux/firmware.h>
+#include <linux/iopoll.h>
 #include "regs.h"
 #include "rtl8xxxu.h"
 
@@ -3915,6 +3916,46 @@ static inline u8 rtl8xxxu_get_macid(struct rtl8xxxu_priv *priv,
 	return sta_info->macid;
 }
 
+static void rtl8xxxu_request_hw_feature(struct rtl8xxxu_priv *priv)
+{
+	if (!priv->fops->hw_feature_report)
+		return;
+
+	rtl8xxxu_write8(priv, REG_C2HEVT_MSG_NORMAL, C2H_HW_FEATURE_DUMP);
+}
+
+static int rtl8xxxu_dump_hw_feature(struct rtl8xxxu_priv *priv)
+{
+	static const u8 bw_map[8] = { 0, 0, 160, 5, 10, 20, 40, 80 };
+	struct rtl8xxxu_hw_feature *hw_feature = &priv->hw_feature;
+	u8 feature[13];
+	int i, ret;
+	u8 id, bw;
+
+	if (!priv->fops->hw_feature_report) {
+		hw_feature->max_bw = 40;
+		return 0;
+	}
+
+	ret = read_poll_timeout(rtl8xxxu_read8, id,
+				id == C2H_HW_FEATURE_REPORT,
+				10000, 800000, false,
+				priv, REG_C2HEVT_MSG_NORMAL);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(feature); i++)
+		feature[i] = rtl8xxxu_read8(priv, REG_C2HEVT_MSG_NORMAL + 2 + i);
+
+	rtl8xxxu_write8(priv, REG_C2HEVT_MSG_NORMAL, 0);
+
+	bw = u8_get_bits(feature[6], GENMASK(2, 0));
+
+	hw_feature->max_bw = bw_map[bw];
+
+	return 0;
+}
+
 static int rtl8xxxu_init_device(struct ieee80211_hw *hw)
 {
 	struct rtl8xxxu_priv *priv = hw->priv;
@@ -3961,6 +4002,8 @@ static int rtl8xxxu_init_device(struct ieee80211_hw *hw)
 	 */
 	rtl8xxxu_write16(priv, REG_TRXFF_BNDY + 2, fops->trxff_boundary);
 
+	rtl8xxxu_request_hw_feature(priv);
+
 	for (int retry = 5; retry >= 0 ; retry--) {
 		ret = rtl8xxxu_download_firmware(priv);
 		dev_dbg(dev, "%s: download_firmware %i\n", __func__, ret);
@@ -3975,6 +4018,12 @@ static int rtl8xxxu_init_device(struct ieee80211_hw *hw)
 	dev_dbg(dev, "%s: start_firmware %i\n", __func__, ret);
 	if (ret)
 		goto exit;
+
+	ret = rtl8xxxu_dump_hw_feature(priv);
+	if (ret) {
+		dev_err(dev, "failed to dump hw feature\n");
+		goto exit;
+	}
 
 	if (fops->phy_init_antenna_selection)
 		fops->phy_init_antenna_selection(priv);
@@ -5134,10 +5183,10 @@ static void rtl8xxxu_dump_action(struct device *dev,
 	if (!(rtl8xxxu_debug & RTL8XXXU_DEBUG_ACTION))
 		return;
 
-	switch (mgmt->u.action.u.addba_resp.action_code) {
+	switch (mgmt->u.action.action_code) {
 	case WLAN_ACTION_ADDBA_RESP:
-		cap = le16_to_cpu(mgmt->u.action.u.addba_resp.capab);
-		timeout = le16_to_cpu(mgmt->u.action.u.addba_resp.timeout);
+		cap = le16_to_cpu(mgmt->u.action.addba_resp.capab);
+		timeout = le16_to_cpu(mgmt->u.action.addba_resp.timeout);
 		dev_info(dev, "WLAN_ACTION_ADDBA_RESP: "
 			 "timeout %i, tid %02x, buf_size %02x, policy %02x, "
 			 "status %02x\n",
@@ -5145,11 +5194,11 @@ static void rtl8xxxu_dump_action(struct device *dev,
 			 (cap & IEEE80211_ADDBA_PARAM_TID_MASK) >> 2,
 			 (cap & IEEE80211_ADDBA_PARAM_BUF_SIZE_MASK) >> 6,
 			 (cap >> 1) & 0x1,
-			 le16_to_cpu(mgmt->u.action.u.addba_resp.status));
+			 le16_to_cpu(mgmt->u.action.addba_resp.status));
 		break;
 	case WLAN_ACTION_ADDBA_REQ:
-		cap = le16_to_cpu(mgmt->u.action.u.addba_req.capab);
-		timeout = le16_to_cpu(mgmt->u.action.u.addba_req.timeout);
+		cap = le16_to_cpu(mgmt->u.action.addba_req.capab);
+		timeout = le16_to_cpu(mgmt->u.action.addba_req.timeout);
 		dev_info(dev, "WLAN_ACTION_ADDBA_REQ: "
 			 "timeout %i, tid %02x, buf_size %02x, policy %02x\n",
 			 timeout,
@@ -5159,7 +5208,7 @@ static void rtl8xxxu_dump_action(struct device *dev,
 		break;
 	default:
 		dev_info(dev, "action frame %02x\n",
-			 mgmt->u.action.u.addba_resp.action_code);
+			 mgmt->u.action.action_code);
 		break;
 	}
 }
@@ -7686,11 +7735,12 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	int ret;
 	int untested = 1;
 
-	udev = usb_get_dev(interface_to_usbdev(interface));
+	udev = interface_to_usbdev(interface);
 
 	switch (id->idVendor) {
 	case USB_VENDOR_ID_REALTEK:
 		switch(id->idProduct) {
+		case 0x0179:
 		case 0x1724:
 		case 0x8176:
 		case 0x8178:
@@ -7744,10 +7794,8 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	}
 
 	hw = ieee80211_alloc_hw(sizeof(struct rtl8xxxu_priv), &rtl8xxxu_ops);
-	if (!hw) {
-		ret = -ENOMEM;
-		goto err_put_dev;
-	}
+	if (!hw)
+		return -ENOMEM;
 
 	priv = hw->priv;
 	priv->hw = hw;
@@ -7836,15 +7884,20 @@ static int rtl8xxxu_probe(struct usb_interface *interface,
 	sband->ht_cap.ht_supported = true;
 	sband->ht_cap.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K;
 	sband->ht_cap.ampdu_density = IEEE80211_HT_MPDU_DENSITY_16;
-	sband->ht_cap.cap = IEEE80211_HT_CAP_SGI_20 | IEEE80211_HT_CAP_SGI_40 |
-			    IEEE80211_HT_CAP_SUP_WIDTH_20_40;
+	sband->ht_cap.cap = IEEE80211_HT_CAP_SGI_20;
+
+	if (priv->hw_feature.max_bw >= 40) {
+		sband->ht_cap.cap |= IEEE80211_HT_CAP_SGI_40;
+		sband->ht_cap.cap |= IEEE80211_HT_CAP_SUP_WIDTH_20_40;
+	} else {
+		dev_info(&udev->dev, "hardware doesn't support HT40\n");
+	}
+
 	memset(&sband->ht_cap.mcs, 0, sizeof(sband->ht_cap.mcs));
 	sband->ht_cap.mcs.rx_mask[0] = 0xff;
 	sband->ht_cap.mcs.rx_mask[4] = 0x01;
-	if (priv->rf_paths > 1) {
+	if (priv->rf_paths > 1)
 		sband->ht_cap.mcs.rx_mask[1] = 0xff;
-		sband->ht_cap.cap |= IEEE80211_HT_CAP_SGI_40;
-	}
 	sband->ht_cap.mcs.tx_params = IEEE80211_HT_MCS_TX_DEFINED;
 
 	hw->wiphy->bands[NL80211_BAND_2GHZ] = sband;
@@ -7889,8 +7942,6 @@ err_set_intfdata:
 	mutex_destroy(&priv->h2c_mutex);
 
 	ieee80211_free_hw(hw);
-err_put_dev:
-	usb_put_dev(udev);
 
 	return ret;
 }
@@ -7923,7 +7974,6 @@ static void rtl8xxxu_disconnect(struct usb_interface *interface)
 			 "Device still attached, trying to reset\n");
 		usb_reset_device(priv->udev);
 	}
-	usb_put_dev(priv->udev);
 	ieee80211_free_hw(hw);
 }
 

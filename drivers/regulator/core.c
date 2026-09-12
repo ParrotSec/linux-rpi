@@ -248,7 +248,7 @@ static void regulator_lock_two(struct regulator_dev *rdev1,
 	ret = regulator_lock_nested(rdev1, ww_ctx);
 	WARN_ON(ret);
 	ret = regulator_lock_nested(rdev2, ww_ctx);
-	if (ret != -EDEADLOCK) {
+	if (ret != -EDEADLK) {
 		WARN_ON(ret);
 		goto exit;
 	}
@@ -264,7 +264,7 @@ static void regulator_lock_two(struct regulator_dev *rdev1,
 		swap(held, contended);
 		ret = regulator_lock_nested(contended, ww_ctx);
 
-		if (ret != -EDEADLOCK) {
+		if (ret != -EDEADLK) {
 			WARN_ON(ret);
 			break;
 		}
@@ -1550,7 +1550,7 @@ static int set_machine_constraints(struct regulator_dev *rdev,
 	 * Existing logic does not warn if over_current_protection is given as
 	 * a constraint but driver does not support that. I think we should
 	 * warn about this type of issues as it is possible someone changes
-	 * PMIC on board to another type - and the another PMIC's driver does
+	 * PMIC on board to another type - and the other PMIC's driver does
 	 * not support setting protection. Board composer may happily believe
 	 * the DT limits are respected - especially if the new PMIC HW also
 	 * supports protection but the driver does not. I won't change the logic

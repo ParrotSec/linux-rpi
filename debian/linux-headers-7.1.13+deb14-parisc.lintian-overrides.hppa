@@ -1,0 +1,3 @@
+# This 'executable' file intentionally contains only BTF sections
+linux-headers-7.1.13+deb14-parisc: statically-linked-binary [usr/src/*/vmlinux]
+linux-headers-7.1.13+deb14-parisc: unstripped-binary-or-object [usr/src/*/vmlinux]

@@ -42,7 +42,6 @@ features/all/dwav-usb-mt-driver.patch
 # Change some defaults for security reasons
 debian/af_802154-Disable-auto-loading-as-mitigation-against.patch
 debian/rds-Disable-auto-loading-as-mitigation-against-local.patch
-debian/hamradio-disable-auto-loading-as-mitigation-against-local-exploits.patch
 debian/fs-enable-link-security-restrictions-by-default.patch
 
 # Set various features runtime-disabled by default
@@ -71,13 +70,16 @@ bugfix/arm64/arm64-acpi-Add-fixup-for-HPE-m400-quirks.patch
 # Arch features
 features/x86/x86-memtest-WARN-if-bad-RAM-found.patch
 features/x86/x86-make-x32-syscall-support-conditional.patch
-features/riscv64/riscv-dts-spacemit-adapt-regulator-node-name-to-pref.patch
-features/riscv64/riscv-dts-spacemit-add-LEDs-for-Milk-V-Jupiter-board.patch
-features/riscv64/riscv-dts-spacemit-add-24c04-eeprom-on-Milk-V-Jupite.patch
-features/riscv64/riscv-dts-spacemit-add-i2c-aliases-on-Milk-V-Jupiter.patch
-features/riscv64/riscv-dts-spacemit-enable-QSPI-and-add-SPI-NOR-on-Mi.patch
-features/riscv64/riscv-dts-spacemit-enable-USB-3-ports-on-Milk-V-Jupi.patch
-features/riscv64/riscv-dts-spacemit-enable-PCIe-ports-on-Milk-V-Jupit.patch
+features/riscv64/thermal-drivers-spacemit-k1-Add-thermal-sensor-suppo.patch
+features/riscv64/riscv-dts-spacemit-Add-thermal-sensor-for-K1-SoC.patch
+features/riscv64/mmc-sdhci-of-k1-enable-essential-clock-infrastructur.patch
+features/riscv64/mmc-sdhci-of-k1-add-regulator-and-pinctrl-voltage-sw.patch
+features/riscv64/mmc-sdhci-of-k1-add-comprehensive-SDR-tuning-support.patch
+features/riscv64/riscv-dts-spacemit-k1-add-SD-card-controller-and-pin.patch
+features/riscv64/riscv-dts-spacemit-k1-bananapi-f3-add-SD-card-suppor.patch
+features/riscv64/riscv-dts-spacemit-sort-aliases-on-Milk-V-Jupiter.patch
+features/riscv64/riscv-dts-spacemit-enable-eMMC-on-Milk-V-Jupiter.patch
+features/riscv64/riscv-dts-spacemit-enable-SD-card-support-on-Milk-V-.patch
 
 # Miscellaneous bug fixes
 bugfix/all/disable-some-marvell-phys.patch
@@ -114,5 +116,8 @@ bugfix/all/kbuild-bpf-fix-btf-reproducibility.patch
 bugfix/all/perf-docs-Fix-perf-check-manual-page-built-with-asci.patch
 bugfix/all/libbpf-use-the-standard-fixdep-build-rule.patch
 bugfix/all/tools-hv-Make-the-sample-hv_get_dhcp_info-script-mor.patch
+bugfix/all/rtla-fix-output-files-in-source-tree.patch
+bugfix/all/perf-tools-put-python-egg-info-in-output-directory.patch
+bugfix/all/perf-tools-put-python-bytecode-in-output-directory.patch
 
 # ABI maintenance

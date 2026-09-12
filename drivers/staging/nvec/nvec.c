@@ -494,6 +494,8 @@ static void nvec_tx_completed(struct nvec_chip *nvec)
 static void nvec_rx_completed(struct nvec_chip *nvec)
 {
 	if (nvec->rx->pos != nvec_msg_size(nvec->rx)) {
+		unsigned char msg_type = nvec->rx->data[0];
+
 		dev_err(nvec->dev, "RX incomplete: Expected %u bytes, got %u\n",
 			(uint)nvec_msg_size(nvec->rx),
 			(uint)nvec->rx->pos);
@@ -502,7 +504,7 @@ static void nvec_rx_completed(struct nvec_chip *nvec)
 		nvec->state = 0;
 
 		/* Battery quirk - Often incomplete, and likes to crash */
-		if (nvec->rx->data[0] == NVEC_BAT)
+		if (msg_type == NVEC_BAT)
 			complete(&nvec->ec_transfer);
 
 		return;
@@ -659,8 +661,10 @@ static irqreturn_t nvec_interrupt(int irq, void *dev)
 			nvec_tx_set(nvec);
 			to_send = nvec->tx->data[0];
 			nvec->tx->pos = 1;
-			/* delay ACK due to AP20 HW Bug
-			   do not replace by usleep_range */
+			/*
+			 * delay ACK due to AP20 HW Bug
+			 * do not replace by usleep_range
+			 */
 			udelay(33);
 		} else if (status == (I2C_SL_IRQ)) {
 			nvec->rx->data[1] = received;
@@ -811,13 +815,12 @@ static int tegra_nvec_probe(struct platform_device *pdev)
 
 	nvec->irq = platform_get_irq(pdev, 0);
 	if (nvec->irq < 0)
-		return -ENODEV;
+		return nvec->irq;
 
 	i2c_clk = devm_clk_get(dev, "div-clk");
-	if (IS_ERR(i2c_clk)) {
-		dev_err(dev, "failed to get controller clock\n");
-		return -ENODEV;
-	}
+	if (IS_ERR(i2c_clk))
+		return dev_err_probe(dev, PTR_ERR(i2c_clk),
+				     "failed to get controller clock\n");
 
 	nvec->rst = devm_reset_control_get_exclusive(dev, "i2c");
 	if (IS_ERR(nvec->rst)) {
@@ -849,10 +852,8 @@ static int tegra_nvec_probe(struct platform_device *pdev)
 
 	err = devm_request_irq(dev, nvec->irq, nvec_interrupt, IRQF_NO_AUTOEN,
 			       "nvec", nvec);
-	if (err) {
-		dev_err(dev, "couldn't request irq\n");
-		return -ENODEV;
-	}
+	if (err)
+		return dev_err_probe(dev, err, "couldn't request irq\n");
 
 	tegra_init_i2c_slave(nvec);
 

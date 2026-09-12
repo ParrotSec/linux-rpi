@@ -32,7 +32,6 @@ static u64 jiffies_read(struct clocksource *cs)
 static struct clocksource clocksource_jiffies = {
 	.name			= "jiffies",
 	.rating			= 1, /* lowest valid rating*/
-	.uncertainty_margin	= 32 * NSEC_PER_MSEC,
 	.read			= jiffies_read,
 	.mask			= CLOCKSOURCE_MASK(32),
 	.mult			= TICK_NSEC << JIFFIES_SHIFT, /* details above */
@@ -61,15 +60,14 @@ EXPORT_SYMBOL(get_jiffies_64);
 
 EXPORT_SYMBOL(jiffies);
 
-static int __init init_jiffies_clocksource(void)
-{
-	return __clocksource_register(&clocksource_jiffies);
-}
-
-core_initcall(init_jiffies_clocksource);
+static bool cs_jiffies_registered __initdata;
 
 struct clocksource * __init __weak clocksource_default_clock(void)
 {
+	if (!cs_jiffies_registered) {
+		__clocksource_register(&clocksource_jiffies);
+		cs_jiffies_registered = true;
+	}
 	return &clocksource_jiffies;
 }
 

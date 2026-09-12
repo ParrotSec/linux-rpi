@@ -259,6 +259,7 @@ struct hda_codec {
 	unsigned int forced_resume:1; /* forced resume for jack */
 	unsigned int no_stream_clean_at_suspend:1; /* do not clean streams at suspend */
 	unsigned int ctl_dev_id:1; /* old control element id build behaviour */
+	unsigned int eld_jack_detect:1;	/* Machine jack-detection by ELD */
 
 	unsigned long power_on_acct;
 	unsigned long power_off_acct;
@@ -334,6 +335,17 @@ snd_hda_codec_write(struct hda_codec *codec, hda_nid_t nid, int flags,
 			unsigned int verb, unsigned int parm)
 {
 	return snd_hdac_codec_write(&codec->core, nid, flags, verb, parm);
+}
+
+/* sync after write */
+static inline int
+snd_hda_codec_write_sync(struct hda_codec *codec, hda_nid_t nid, int flags,
+			 unsigned int verb, unsigned int parm)
+{
+	/* use snd_hda_codec_read() for writing;
+	 * the returned value is usually discarded
+	 */
+	return snd_hdac_codec_read(&codec->core, nid, flags, verb, parm);
 }
 
 #define snd_hda_param_read(codec, nid, param) \
@@ -469,6 +481,10 @@ int snd_hda_lock_devices(struct hda_bus *bus);
 void snd_hda_unlock_devices(struct hda_bus *bus);
 void snd_hda_bus_reset(struct hda_bus *bus);
 void snd_hda_bus_reset_codecs(struct hda_bus *bus);
+
+void snd_hda_codec_set_gpio(struct hda_codec *codec, unsigned int mask,
+			    unsigned int dir, unsigned int data,
+			    unsigned int delay);
 
 int snd_hda_codec_set_name(struct hda_codec *codec, const char *name);
 

@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-7.1.13+deb14/scripts                          usr/src/linux-headers-7.1.13+deb14-alpha-generic/scripts
+usr/lib/linux-kbuild-7.1.13+deb14/tools                            usr/src/linux-headers-7.1.13+deb14-alpha-generic/tools
+usr/src/linux-headers-7.1.13+deb14-alpha-generic                                               usr/lib/modules/7.1.13+deb14-alpha-generic/build
+usr/src/linux-headers-7.1.13+deb14-common  usr/lib/modules/7.1.13+deb14-alpha-generic/source

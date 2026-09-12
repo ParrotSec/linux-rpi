@@ -2421,6 +2421,14 @@ struct net *rtnl_get_net_ns_capable(struct sock *sk, int netnsid)
 }
 EXPORT_SYMBOL_GPL(rtnl_get_net_ns_capable);
 
+bool rtnl_dev_link_net_capable(const struct net_device *dev,
+			       const struct net *link_net)
+{
+	return net_eq(link_net, dev_net(dev)) ||
+	       ns_capable(link_net->user_ns, CAP_NET_ADMIN);
+}
+EXPORT_SYMBOL_GPL(rtnl_dev_link_net_capable);
+
 static int rtnl_valid_dump_ifinfo_req(const struct nlmsghdr *nlh,
 				      bool strict_check, struct nlattr **tb,
 				      struct netlink_ext_ack *extack)
@@ -3432,6 +3440,7 @@ errout:
 					     dev->name);
 	}
 
+	netif_rx_mode_sync(dev);
 	netdev_unlock_ops(dev);
 
 	return err;
@@ -6327,8 +6336,9 @@ static int rtnl_stats_get(struct sk_buff *skb, struct nlmsghdr *nlh,
 				  NETLINK_CB(skb).portid, nlh->nlmsg_seq, 0,
 				  0, &filters, &idxattr, &prividx, extack);
 	if (err < 0) {
-		/* -EMSGSIZE implies BUG in if_nlmsg_stats_size */
-		WARN_ON(err == -EMSGSIZE);
+		/* -EMSGSIZE implies BUG in if_nlmsg_stats_size
+		 * or a too big nested attribute.
+		 */
 		kfree_skb(nskb);
 	} else {
 		err = rtnl_unicast(nskb, net, NETLINK_CB(skb).portid);

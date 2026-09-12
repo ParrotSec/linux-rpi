@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-armmp-lpae/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-armmp-lpae
+lib/modules/7.1.13+deb14-armmp-lpae/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-armmp-lpae
+lib/modules/7.1.13+deb14-armmp-lpae/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-armmp-lpae
+lib/modules/7.1.13+deb14-armmp-lpae/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-armmp-lpae

@@ -46,8 +46,8 @@ struct egpio_info {
 	uint              chained_irq;
 
 	/* egpio info */
-	struct egpio_chip *chip;
 	int               nchips;
+	struct egpio_chip chip[] __counted_by(nchips);
 };
 
 static inline void egpio_writew(u16 value, struct egpio_info *ei, int reg)
@@ -268,11 +268,14 @@ static int __init egpio_probe(struct platform_device *pdev)
 	struct gpio_chip  *chip;
 	unsigned int      irq, irq_end;
 	int               i;
+	int               ret;
 
 	/* Initialize ei data structure. */
-	ei = devm_kzalloc(&pdev->dev, sizeof(*ei), GFP_KERNEL);
+	ei = devm_kzalloc(&pdev->dev, struct_size(ei, chip, pdata->num_chips), GFP_KERNEL);
 	if (!ei)
 		return -ENOMEM;
+
+	ei->nchips = pdata->num_chips;
 
 	spin_lock_init(&ei->lock);
 
@@ -302,13 +305,6 @@ static int __init egpio_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, ei);
 
-	ei->nchips = pdata->num_chips;
-	ei->chip = devm_kcalloc(&pdev->dev,
-				ei->nchips, sizeof(struct egpio_chip),
-				GFP_KERNEL);
-	if (!ei->chip)
-		return -ENOMEM;
-
 	for (i = 0; i < ei->nchips; i++) {
 		ei->chip[i].reg_start = pdata->chip[i].reg_start;
 		ei->chip[i].cached_values = pdata->chip[i].initial_values;
@@ -331,7 +327,10 @@ static int __init egpio_probe(struct platform_device *pdev)
 		chip->base            = pdata->chip[i].gpio_base;
 		chip->ngpio           = pdata->chip[i].num_gpios;
 
-		gpiochip_add_data(chip, &ei->chip[i]);
+		ret = devm_gpiochip_add_data(&pdev->dev, chip, &ei->chip[i]);
+		if (ret)
+			return dev_err_probe(&pdev->dev, ret,
+					     "failed to register gpiochip %d\n", i);
 	}
 
 	/* Set initial pin values */

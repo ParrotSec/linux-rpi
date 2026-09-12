@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-sh7751r/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-sh7751r
+lib/modules/7.1.13+deb14-sh7751r/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-sh7751r
+lib/modules/7.1.13+deb14-sh7751r/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-sh7751r
+lib/modules/7.1.13+deb14-sh7751r/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-sh7751r

@@ -2,7 +2,7 @@ include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
 
 variables:
-  RELEASE: 'trixie-backports'
+  RELEASE: 'unstable'
   # Run lintian from the above release
   SALSA_CI_IMAGES_LINTIAN: ${SALSA_CI_IMAGES}/lintian:${RELEASE}
   # Make that build quicker

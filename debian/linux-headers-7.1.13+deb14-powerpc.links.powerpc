@@ -1,0 +1,4 @@
+usr/lib/linux-kbuild-7.1.13+deb14/scripts                          usr/src/linux-headers-7.1.13+deb14-powerpc/scripts
+usr/lib/linux-kbuild-7.1.13+deb14/tools                            usr/src/linux-headers-7.1.13+deb14-powerpc/tools
+usr/src/linux-headers-7.1.13+deb14-powerpc                                               usr/lib/modules/7.1.13+deb14-powerpc/build
+usr/src/linux-headers-7.1.13+deb14-common  usr/lib/modules/7.1.13+deb14-powerpc/source

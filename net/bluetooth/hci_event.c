@@ -297,8 +297,10 @@ static u8 hci_cc_reset(struct hci_dev *hdev, void *data, struct sk_buff *skb)
 
 	hdev->ssp_debug_mode = 0;
 
+	hci_dev_lock(hdev);
 	hci_bdaddr_list_clear(&hdev->le_accept_list);
 	hci_bdaddr_list_clear(&hdev->le_resolv_list);
+	hci_dev_unlock(hdev);
 
 	return rp->status;
 }
@@ -1769,6 +1771,13 @@ static void le_set_scan_enable_complete(struct hci_dev *hdev, u8 enable)
 
 		hci_dev_clear_flag(hdev, HCI_LE_SCAN);
 
+		if (hdev->discovery.type == DISCOV_TYPE_INTERLEAVED &&
+		    hci_test_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY) &&
+		    !test_bit(HCI_INQUIRY, &hdev->flags) &&
+		    hdev->discovery.state == DISCOVERY_FINDING) {
+			hci_discovery_set_state(hdev, DISCOVERY_STOPPED);
+		}
+
 		/* The HCI_LE_SCAN_INTERRUPTED flag indicates that we
 		 * interrupted scanning due to a connect request. Mark
 		 * therefore discovery as stopped.
@@ -2759,7 +2768,7 @@ static void hci_cs_disconnect(struct hci_dev *hdev, u8 status)
 	}
 
 	mgmt_device_disconnected(hdev, &conn->dst, conn->type, conn->dst_type,
-				 cp->reason, mgmt_conn);
+				 hci_to_mgmt_reason(cp->reason), mgmt_conn);
 
 	hci_disconn_cfm(conn, cp->reason);
 
@@ -3377,22 +3386,6 @@ unlock:
 	hci_dev_unlock(hdev);
 }
 
-static u8 hci_to_mgmt_reason(u8 err)
-{
-	switch (err) {
-	case HCI_ERROR_CONNECTION_TIMEOUT:
-		return MGMT_DEV_DISCONN_TIMEOUT;
-	case HCI_ERROR_REMOTE_USER_TERM:
-	case HCI_ERROR_REMOTE_LOW_RESOURCES:
-	case HCI_ERROR_REMOTE_POWER_OFF:
-		return MGMT_DEV_DISCONN_REMOTE;
-	case HCI_ERROR_LOCAL_HOST_TERM:
-		return MGMT_DEV_DISCONN_LOCAL_HOST;
-	default:
-		return MGMT_DEV_DISCONN_UNKNOWN;
-	}
-}
-
 static void hci_disconn_complete_evt(struct hci_dev *hdev, void *data,
 				     struct sk_buff *skb)
 {
@@ -3839,8 +3832,10 @@ static u8 hci_cc_le_set_cig_params(struct hci_dev *hdev, void *data,
 	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
 
 	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_SET_CIG_PARAMS);
-	if (!rp->status && (!cp || rp->num_handles != cp->num_cis ||
-			    rp->cig_id != cp->cig_id)) {
+	if (!rp->status &&
+	    (!cp || rp->num_handles != cp->num_cis ||
+	     rp->cig_id != cp->cig_id ||
+	     skb->len < array_size(rp->num_handles, sizeof(*rp->handle)))) {
 		bt_dev_err(hdev, "unexpected Set CIG Parameters response data");
 		status = HCI_ERROR_UNSPECIFIED;
 	}
@@ -7191,7 +7186,7 @@ static void hci_le_big_sync_established_evt(struct hci_dev *hdev, void *data,
 	clear_bit(HCI_CONN_CREATE_BIG_SYNC, &conn->flags);
 
 	conn->num_bis = 0;
-	memset(conn->bis, 0, sizeof(conn->num_bis));
+	memset(conn->bis, 0, sizeof(conn->bis));
 
 	for (i = 0; i < ev->num_bis; i++) {
 		u16 handle = le16_to_cpu(ev->bis[i]);

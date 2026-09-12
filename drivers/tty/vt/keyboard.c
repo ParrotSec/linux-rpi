@@ -74,7 +74,7 @@ static inline int kbd_defleds(void)
 	k_self,		k_fn,		k_spec,		k_pad,\
 	k_dead,		k_cons,		k_cur,		k_shift,\
 	k_meta,		k_ascii,	k_lock,		k_lowercase,\
-	k_slock,	k_dead2,	k_brl,		k_ignore
+	k_slock,	k_dead2,	k_brl,		k_csi
 
 typedef void (k_handler_fn)(struct vc_data *vc, unsigned char value,
 			    char up_flag);
@@ -127,6 +127,7 @@ static const unsigned char max_vals[] = {
 	[ KT_SLOCK	] = NR_LOCK - 1,
 	[ KT_DEAD2	] = 255,
 	[ KT_BRL	] = NR_BRL - 1,
+	[ KT_CSI	] = 99,
 };
 
 static const int NR_TYPES = ARRAY_SIZE(max_vals);
@@ -644,10 +645,6 @@ static void fn_null(struct vc_data *vc)
 /*
  * Special key handlers
  */
-static void k_ignore(struct vc_data *vc, unsigned char value, char up_flag)
-{
-}
-
 static void k_spec(struct vc_data *vc, unsigned char value, char up_flag)
 {
 	if (up_flag)
@@ -765,14 +762,45 @@ static void k_fn(struct vc_data *vc, unsigned char value, char up_flag)
 		pr_err("k_fn called with value=%d\n", value);
 }
 
+/*
+ * Compute xterm-style modifier parameter for CSI sequences.
+ * Returns 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0)
+ *
+ * Only the canonical modifier weights are counted. The left/right variants
+ * (KG_SHIFTL, KG_SHIFTR, KG_CTRLL, KG_CTRLR) and KG_ALTGR are commonly
+ * repurposed as keymap layout-group or level selectors rather than as plain
+ * modifiers (for instance XKB-derived keymaps select the layout group with
+ * KG_SHIFTL/KG_SHIFTR), so counting them would encode a spurious modifier.
+ */
+static int csi_modifier_param(void)
+{
+	int mod = 1;
+
+	if (shift_state & BIT(KG_SHIFT))
+		mod += 1;
+	if (shift_state & BIT(KG_ALT))
+		mod += 2;
+	if (shift_state & BIT(KG_CTRL))
+		mod += 4;
+	return mod;
+}
+
 static void k_cur(struct vc_data *vc, unsigned char value, char up_flag)
 {
 	static const char cur_chars[] = "BDCA";
+	int mod;
 
 	if (up_flag)
 		return;
 
-	applkey(vc, cur_chars[value], vc_kbd_mode(kbd, VC_CKMODE));
+	mod = csi_modifier_param();
+	if (mod > 1) {
+		char buf[] = { 0x1b, '[', '1', ';', '0' + mod, cur_chars[value], 0x00 };
+
+		puts_queue(vc, buf);
+	} else {
+		applkey(vc, cur_chars[value], vc_kbd_mode(kbd, VC_CKMODE));
+	}
 }
 
 static void k_pad(struct vc_data *vc, unsigned char value, char up_flag)
@@ -1002,6 +1030,37 @@ static void k_brl(struct vc_data *vc, unsigned char value, char up_flag)
 		}
 		pressed &= ~BIT(value - 1);
 	}
+}
+
+/*
+ * Handle KT_CSI keysym type: generate CSI tilde sequences with modifier
+ * support. The value encodes the CSI parameter number, producing sequences
+ * like ESC [ <value> ~ or ESC [ <value> ; <mod> ~ when modifiers are held.
+ */
+static void k_csi(struct vc_data *vc, unsigned char value, char up_flag)
+{
+	char buf[10];
+	int i = 0;
+	int mod;
+
+	if (up_flag)
+		return;
+
+	mod = csi_modifier_param();
+
+	buf[i++] = 0x1b;
+	buf[i++] = '[';
+	if (value >= 10)
+		buf[i++] = '0' + value / 10;
+	buf[i++] = '0' + value % 10;
+	if (mod > 1) {
+		buf[i++] = ';';
+		buf[i++] = '0' + mod;
+	}
+	buf[i++] = '~';
+	buf[i] = 0x00;
+
+	puts_queue(vc, buf);
 }
 
 #if IS_ENABLED(CONFIG_INPUT_LEDS) && IS_ENABLED(CONFIG_LEDS_TRIGGERS)
@@ -1378,7 +1437,7 @@ static void kbd_keycode(unsigned int keycode, int down, bool hw_raw)
 	struct keyboard_notifier_param param = { .vc = vc, .value = keycode, .down = down };
 	int rc;
 
-	tty = vc->port.tty;
+	tty = tty_port_tty_get(&vc->port);
 
 	if (tty && (!tty->driver_data)) {
 		/* No driver data? Strange. Okay we fix it then. */
@@ -1438,12 +1497,30 @@ static void kbd_keycode(unsigned int keycode, int down, bool hw_raw)
 		 * characters get aren't echoed locally. This makes key repeat
 		 * usable with slow applications and under heavy loads.
 		 */
+		tty_kref_put(tty);
 		return;
 	}
+
+	tty_kref_put(tty);
 
 	param.shift = shift_final = (shift_state | kbd->slockstate) ^ kbd->lockstate;
 	param.ledstate = kbd->ledflagstate;
 	key_map = key_maps[shift_final];
+
+	/*
+	 * Fall back to the plain map if modifiers are active, the modifier-
+	 * specific map is missing or has no entry, and the plain map has a
+	 * modifier-aware key type (KT_CUR or KT_CSI). These handlers encode
+	 * the modifier state into the emitted escape sequence.
+	 */
+	if (shift_final && keycode < NR_KEYS &&
+	    (!key_map || key_map[keycode] == K_HOLE) && key_maps[0]) {
+		unsigned short plain = key_maps[0][keycode];
+		unsigned char type = KTYP(plain);
+
+		if (type >= 0xf0 && (type - 0xf0 == KT_CUR || type - 0xf0 == KT_CSI))
+			key_map = key_maps[0];
+	}
 
 	rc = atomic_notifier_call_chain(&keyboard_notifier_list,
 					KBD_KEYCODE, &param);

@@ -17,8 +17,6 @@
 #include "coresight-priv.h"
 #include "ultrasoc-smb.h"
 
-DEFINE_CORESIGHT_DEVLIST(sink_devs, "ultra_smb");
-
 #define ULTRASOC_SMB_DSM_UUID	"82ae1283-7f6a-4cbe-aa06-53e8fb24db18"
 
 static bool smb_buffer_not_empty(struct smb_drv_data *drvdata)
@@ -339,6 +337,7 @@ static void smb_sync_perf_buffer(struct smb_drv_data *drvdata,
 	unsigned long to_copy;
 	long pg_idx, pg_offset;
 
+	head %= (unsigned long)buf->nr_pages << PAGE_SHIFT;
 	pg_idx = head >> PAGE_SHIFT;
 	pg_offset = head & (PAGE_SIZE - 1);
 
@@ -478,7 +477,7 @@ static int smb_register_sink(struct platform_device *pdev,
 	desc.pdata = pdata;
 	desc.dev = &pdev->dev;
 	desc.groups = smb_sink_groups;
-	desc.name = coresight_alloc_device_name(&sink_devs, &pdev->dev);
+	desc.name = coresight_alloc_device_name("ultra_smb", &pdev->dev);
 	if (!desc.name) {
 		dev_err(&pdev->dev, "Failed to alloc coresight device name");
 		return -ENOMEM;

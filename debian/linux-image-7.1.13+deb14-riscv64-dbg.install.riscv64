@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-riscv64/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-riscv64
+lib/modules/7.1.13+deb14-riscv64/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-riscv64
+lib/modules/7.1.13+deb14-riscv64/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-riscv64
+lib/modules/7.1.13+deb14-riscv64/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-riscv64

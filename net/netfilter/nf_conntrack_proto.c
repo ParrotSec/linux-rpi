@@ -79,6 +79,12 @@ void nf_ct_l4proto_log_invalid(const struct sk_buff *skb,
 	struct net *net;
 	va_list args;
 
+	/* nfnetlink_log may re-enter conntrack attribute dumping and try to
+	 * take ct->lock again via helpers such as tcp_to_nlattr(), so invalid
+	 * conntrack logs must only be emitted after dropping ct->lock.
+	 */
+	lockdep_assert_not_held(&ct->lock);
+
 	net = nf_ct_net(ct);
 	if (likely(net->ct.sysctl_log_invalid == 0))
 		return;
@@ -102,9 +108,6 @@ const struct nf_conntrack_l4proto *nf_ct_l4proto_find(u8 l4proto)
 	case IPPROTO_ICMP: return &nf_conntrack_l4proto_icmp;
 #ifdef CONFIG_NF_CT_PROTO_SCTP
 	case IPPROTO_SCTP: return &nf_conntrack_l4proto_sctp;
-#endif
-#ifdef CONFIG_NF_CT_PROTO_UDPLITE
-	case IPPROTO_UDPLITE: return &nf_conntrack_l4proto_udplite;
 #endif
 #ifdef CONFIG_NF_CT_PROTO_GRE
 	case IPPROTO_GRE: return &nf_conntrack_l4proto_gre;

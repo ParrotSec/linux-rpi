@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-sparc64-smp/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-sparc64-smp
+lib/modules/7.1.13+deb14-sparc64-smp/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-sparc64-smp
+lib/modules/7.1.13+deb14-sparc64-smp/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-sparc64-smp
+lib/modules/7.1.13+deb14-sparc64-smp/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-sparc64-smp

@@ -25,10 +25,10 @@ static bool check_prog_load(int prog_fd, bool expect_err, const char *tag)
 
 static struct {
 	/* strategically placed before others to avoid accidental modification by kernel */
-	char filler[1024];
-	char buf[1024];
+	char filler[16384];
+	char buf[16384];
 	/* strategically placed after buf[] to catch more accidental corruptions */
-	char reference[1024];
+	char reference[16384];
 } logs;
 static const struct bpf_insn *insns;
 static size_t insn_cnt;
@@ -317,6 +317,7 @@ static void verif_btf_log_subtest(bool bad_btf)
 	res = load_btf(&opts, true);
 	ASSERT_EQ(res, -ENOSPC, "half_log_fd");
 	ASSERT_EQ(strlen(logs.buf), 24, "log_fixed_25");
+	strscpy(op_name, "log_fixed", sizeof(op_name));
 	ASSERT_STRNEQ(logs.buf, logs.reference, 24, op_name);
 
 	/* validate rolling verifier log logic: try all variations of log buf

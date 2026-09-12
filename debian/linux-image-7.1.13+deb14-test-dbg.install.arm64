@@ -1,0 +1,4 @@
+lib/modules/7.1.13+deb14-test/kernel      usr/lib/debug/lib/modules/7.1.13+deb14-test
+lib/modules/7.1.13+deb14-test/System.map  usr/lib/debug/lib/modules/7.1.13+deb14-test
+lib/modules/7.1.13+deb14-test/vdso        usr/lib/debug/lib/modules/7.1.13+deb14-test
+lib/modules/7.1.13+deb14-test/vmlinux     usr/lib/debug/lib/modules/7.1.13+deb14-test

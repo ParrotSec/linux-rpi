@@ -56,7 +56,6 @@ pub(crate) struct Allocation {
     pub(crate) process: Arc<Process>,
     allocation_info: Option<AllocationInfo>,
     free_on_drop: bool,
-    pub(crate) oneway_spam_detected: bool,
     #[allow(dead_code)]
     pub(crate) debug_id: usize,
 }
@@ -68,7 +67,6 @@ impl Allocation {
         offset: usize,
         size: usize,
         ptr: usize,
-        oneway_spam_detected: bool,
     ) -> Self {
         Self {
             process,
@@ -76,7 +74,6 @@ impl Allocation {
             size,
             ptr,
             debug_id,
-            oneway_spam_detected,
             allocation_info: None,
             free_on_drop: true,
         }
@@ -216,6 +213,7 @@ impl Allocation {
             let res = FileDescriptorReservation::get_unused_fd_flags(bindings::O_CLOEXEC)?;
             let fd = res.reserved_fd();
             self.write::<u32>(file_info.buffer_offset, &fd)?;
+            crate::trace::trace_transaction_fd_recv(self.debug_id, fd, file_info.buffer_offset);
 
             reservations.push(
                 Reservation {
@@ -261,26 +259,29 @@ impl Drop for Allocation {
 
             if let Some(offsets) = info.offsets.clone() {
                 let view = AllocationView::new(self, offsets.start);
-                for i in offsets.step_by(size_of::<usize>()) {
+                for i in offsets.step_by(size_of::<u64>()) {
                     if view.cleanup_object(i).is_err() {
                         pr_warn!("Error cleaning up object at offset {}\n", i)
                     }
                 }
             }
 
-            for &fd in &info.file_list.close_on_free {
-                let closer = match DeferredFdCloser::new(GFP_KERNEL) {
-                    Ok(closer) => closer,
-                    Err(kernel::alloc::AllocError) => {
-                        // Ignore allocation failures.
-                        break;
-                    }
-                };
+            if self.process.task == kernel::current!().group_leader() {
+                for &fd in &info.file_list.close_on_free {
+                    let closer = match DeferredFdCloser::new(GFP_KERNEL) {
+                        Ok(closer) => closer,
+                        Err(kernel::alloc::AllocError) => {
+                            // Ignore allocation failures.
+                            break;
+                        }
+                    };
 
-                // Here, we ignore errors. The operation can fail if the fd is not valid, or if the
-                // method is called from a kthread. However, this is always called from a syscall,
-                // so the latter case cannot happen, and we don't care about the first case.
-                let _ = closer.close_fd(fd);
+                    // Here, we ignore errors. The operation can fail if the fd is not valid, or if
+                    // the method is called from a kthread. However, this is always called from a
+                    // syscall, so the latter case cannot happen, and we don't care about the first
+                    // case.
+                    let _ = closer.close_fd(fd);
+                }
             }
 
             if info.clear_on_free {
@@ -419,7 +420,8 @@ impl<'a> AllocationView<'a> {
     }
 
     fn cleanup_object(&self, index_offset: usize) -> Result {
-        let offset = self.alloc.read(index_offset)?;
+        let offset = self.alloc.read::<u64>(index_offset)?;
+        let offset: usize = offset.try_into().map_err(|_| EINVAL)?;
         let header = self.read::<BinderObjectHeader>(offset)?;
         match header.type_ {
             BINDER_TYPE_WEAK_BINDER | BINDER_TYPE_BINDER => {

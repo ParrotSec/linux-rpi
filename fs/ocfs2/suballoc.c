@@ -197,6 +197,31 @@ static int ocfs2_validate_gd_self(struct super_block *sb,
 			 8 * le16_to_cpu(gd->bg_size));
 	}
 
+	/*
+	 * For discontiguous block groups, validate the on-disk extent list
+	 * against the maximum number of extent records that can physically
+	 * fit in a single block.
+	 */
+	if (ocfs2_gd_is_discontig(gd)) {
+		u16 max_recs = ocfs2_extent_recs_per_gd(sb);
+		u16 l_count = le16_to_cpu(gd->bg_list.l_count);
+		u16 l_next_free_rec = le16_to_cpu(gd->bg_list.l_next_free_rec);
+
+		if (l_count != max_recs) {
+			do_error("Group descriptor #%llu bad discontig l_count %u expected %u\n",
+				 (unsigned long long)bh->b_blocknr,
+				 l_count,
+				 max_recs);
+		}
+
+		if (l_next_free_rec > l_count) {
+			do_error("Group descriptor #%llu bad discontig l_next_free_rec %u max %u\n",
+				 (unsigned long long)bh->b_blocknr,
+				 l_next_free_rec,
+				 l_count);
+		}
+	}
+
 	return 0;
 }
 
@@ -206,13 +231,35 @@ static int ocfs2_validate_gd_parent(struct super_block *sb,
 				    int resize)
 {
 	unsigned int max_bits;
+	unsigned int max_bitmap_bits;
+	unsigned int max_bitmap_size;
+	int suballocator;
 	struct ocfs2_group_desc *gd = (struct ocfs2_group_desc *)bh->b_data;
+
+	suballocator = le64_to_cpu(di->i_blkno) != OCFS2_SB(sb)->bitmap_blkno;
+	max_bitmap_size = ocfs2_group_bitmap_size(sb, suballocator,
+						  OCFS2_SB(sb)->s_feature_incompat);
+	max_bitmap_bits = max_bitmap_size * 8;
 
 	if (di->i_blkno != gd->bg_parent_dinode) {
 		do_error("Group descriptor #%llu has bad parent pointer (%llu, expected %llu)\n",
 			 (unsigned long long)bh->b_blocknr,
 			 (unsigned long long)le64_to_cpu(gd->bg_parent_dinode),
 			 (unsigned long long)le64_to_cpu(di->i_blkno));
+	}
+
+	if (le16_to_cpu(gd->bg_size) > max_bitmap_size) {
+		do_error("Group descriptor #%llu has bitmap size %u but physical max of %u\n",
+			 (unsigned long long)bh->b_blocknr,
+			 le16_to_cpu(gd->bg_size),
+			 max_bitmap_size);
+	}
+
+	if (le16_to_cpu(gd->bg_bits) > max_bitmap_bits) {
+		do_error("Group descriptor #%llu has bit count %u but physical max of %u\n",
+			 (unsigned long long)bh->b_blocknr,
+			 le16_to_cpu(gd->bg_bits),
+			 max_bitmap_bits);
 	}
 
 	max_bits = le16_to_cpu(di->id2.i_chain.cl_cpg) * le16_to_cpu(di->id2.i_chain.cl_bpc);

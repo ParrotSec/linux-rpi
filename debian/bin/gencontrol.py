@@ -146,7 +146,7 @@ class Gencontrol(Base):
                 libcdev_kernel.add(kernelarch.name)
                 for debianarch in kernelarch.debianarchs:
                     libcdev_spec_cross.add(
-                        f'{debianarch.defs_debianarch.multiarch}:{kernelarch.name}'
+                        f'{debianarch.defs_debianarch.gnutype}:{kernelarch.name}'
                     )
                     if not debianarch.packages.libc_dev_cross_only:
                         libcdev_spec.add(
@@ -164,7 +164,7 @@ class Gencontrol(Base):
                 for debianarch in kernelarch.debianarchs:
                     self.bundle.add('libc-dev-cross', (), libcdev_makeflags, vars | {
                         'libcdev_debian': debianarch.name,
-                        'libcdev_multiarch': debianarch.defs_debianarch.multiarch,
+                        'libcdev_multiarch': debianarch.defs_debianarch.gnutype,
                     })
 
     def do_indep_featureset_setup(
@@ -379,16 +379,19 @@ linux-signed-{vars['arch']} (@signedtemplate_sourceversion@) {dist}; urgency={ur
 
         if build_signed:
             packages_binary_unsigned = (
-                self.bundle.add('binary-unsigned', ruleid, makeflags, vars, arch=arch)
+                self.bundle.add(
+                    'binary', ruleid, makeflags, vars | {'build_unsigned': True}, arch=arch)
             )
             packages_binary = packages_binary_unsigned[:]
             packages_binary.extend(
-                bundle_signed.add('signed.binary', ruleid, makeflags, vars, arch=arch)
+                bundle_signed.add(
+                    'signed.binary', ruleid, makeflags, vars | {'build_unsigned': False}, arch=arch)
             )
 
         else:
             packages_binary = packages_binary_unsigned = (
-                bundle_signed.add('binary', ruleid, makeflags, vars, arch=arch)
+                bundle_signed.add(
+                    'binary', ruleid, makeflags, vars | {'build_unsigned': False}, arch=arch)
             )
 
         packages_image = (

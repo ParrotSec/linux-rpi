@@ -188,15 +188,12 @@ void __init mem_init(void)
 {
 	BUG_ON(!mem_map);
 
-	/* clear the zero-page */
-	memset((void *)empty_zero_page, 0, PAGE_SIZE);
-
 	printk("mem_init_done ...........................................\n");
 	mem_init_done = 1;
 	return;
 }
 
-static int __init map_page(unsigned long va, phys_addr_t pa, pgprot_t prot)
+static int map_page(unsigned long va, phys_addr_t pa, pgprot_t prot)
 {
 	p4d_t *p4d;
 	pud_t *pud;

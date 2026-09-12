@@ -155,7 +155,7 @@ static void *c2c_he_zalloc(size_t size)
 	if (!c2c_he->nodeset)
 		goto out_free;
 
-	c2c_he->node_stats = zalloc(c2c.nodes_cnt * sizeof(*c2c_he->node_stats));
+	c2c_he->node_stats = calloc(c2c.nodes_cnt, sizeof(*c2c_he->node_stats));
 	if (!c2c_he->node_stats)
 		goto out_free;
 
@@ -180,7 +180,8 @@ static void c2c_he_free(void *he)
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
 	if (c2c_he->hists) {
-		hists__delete_entries(&c2c_he->hists->hists);
+		hists__delete_all_entries(&c2c_he->hists->hists);
+		perf_hpp__reset_output_field(&c2c_he->hists->list);
 		zfree(&c2c_he->hists);
 	}
 
@@ -221,6 +222,8 @@ he__get_c2c_hists(struct hist_entry *he,
 
 	ret = c2c_hists__init(hists, sort, nr_header_lines, env);
 	if (ret) {
+		perf_hpp__reset_output_field(&hists->list);
+		c2c_he->hists = NULL;
 		free(hists);
 		return NULL;
 	}
@@ -241,6 +244,10 @@ static void c2c_he__set_cpu(struct c2c_hist_entry *c2c_he,
 		      "WARNING: no sample cpu value"))
 		return;
 
+	/* cpuset bitmap has c2c.cpus_cnt bits from env->nr_cpus_avail */
+	if (sample->cpu >= (unsigned int)c2c.cpus_cnt)
+		return;
+
 	__set_bit(sample->cpu, c2c_he->cpuset);
 }
 
@@ -256,6 +263,10 @@ static void c2c_he__set_node(struct c2c_hist_entry *c2c_he,
 
 	node = mem2node__node(&c2c.mem2node, sample->phys_addr);
 	if (WARN_ONCE(node < 0, "WARNING: failed to find node\n"))
+		return;
+
+	/* nodeset bitmap has c2c.nodes_cnt bits from env->nr_numa_nodes */
+	if (node >= c2c.nodes_cnt)
 		return;
 
 	__set_bit(node, c2c_he->nodeset);
@@ -386,7 +397,12 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 		 * Doing node stats only for single callchain data.
 		 */
 		int cpu = sample->cpu == (unsigned int) -1 ? 0 : sample->cpu;
-		int node = c2c.cpu2node[cpu];
+		int node;
+
+		/* cpu2node[] has c2c.cpus_cnt entries; large u32 wraps signed negative */
+		if (cpu < 0 || cpu >= c2c.cpus_cnt)
+			cpu = 0;
+		node = c2c.cpu2node[cpu];
 
 		c2c_hists = he__get_c2c_hists(he, c2c.cl_sort, 2, machine->env);
 		if (!c2c_hists) {
@@ -405,7 +421,9 @@ static int process_sample_event(const struct perf_tool *tool __maybe_unused,
 		c2c_he = container_of(he, struct c2c_hist_entry, he);
 		c2c_add_stats(&c2c_he->stats, &stats);
 		c2c_add_stats(&c2c_hists->stats, &stats);
-		c2c_add_stats(&c2c_he->node_stats[node], &stats);
+		/* node_stats[] has c2c.nodes_cnt entries */
+		if (node >= 0 && node < c2c.nodes_cnt)
+			c2c_add_stats(&c2c_he->node_stats[node], &stats);
 
 		compute_stats(c2c_he, &stats, sample->weight);
 
@@ -2310,7 +2328,6 @@ static int setup_nodes(struct perf_session *session)
 {
 	struct numa_node *n;
 	unsigned long **nodes;
-	int node, idx;
 	struct perf_cpu cpu;
 	int *cpu2node;
 	struct perf_env *env = perf_session__env(session);
@@ -2325,24 +2342,25 @@ static int setup_nodes(struct perf_session *session)
 	if (!n)
 		return -EINVAL;
 
-	nodes = zalloc(sizeof(unsigned long *) * c2c.nodes_cnt);
+	nodes = calloc(c2c.nodes_cnt, sizeof(unsigned long *));
 	if (!nodes)
 		return -ENOMEM;
 
 	c2c.nodes = nodes;
 
-	cpu2node = zalloc(sizeof(int) * c2c.cpus_cnt);
+	cpu2node = calloc(c2c.cpus_cnt, sizeof(int));
 	if (!cpu2node)
 		return -ENOMEM;
 
-	for (idx = 0; idx < c2c.cpus_cnt; idx++)
+	for (int idx = 0; idx < c2c.cpus_cnt; idx++)
 		cpu2node[idx] = -1;
 
 	c2c.cpu2node = cpu2node;
 
-	for (node = 0; node < c2c.nodes_cnt; node++) {
+	for (int node = 0; node < c2c.nodes_cnt; node++) {
 		struct perf_cpu_map *map = n[node].map;
 		unsigned long *set;
+		unsigned int idx;
 
 		set = bitmap_zalloc(c2c.cpus_cnt);
 		if (!set)
@@ -2351,6 +2369,10 @@ static int setup_nodes(struct perf_session *session)
 		nodes[node] = set;
 
 		perf_cpu_map__for_each_cpu_skip_any(cpu, idx, map) {
+			/* topology CPU IDs from perf.data may exceed nr_cpus_avail */
+			if (cpu.cpu < 0 || cpu.cpu >= c2c.cpus_cnt)
+				continue;
+
 			__set_bit(cpu.cpu, set);
 
 			if (WARN_ONCE(cpu2node[cpu.cpu] != -1, "node/cpu topology bug"))
@@ -2892,9 +2914,10 @@ static int ui_quirks(void)
 
 #define CALLCHAIN_DEFAULT_OPT  "graph,0.5,caller,function,percent"
 
-const char callchain_help[] = "Display call graph (stack chain/backtrace):\n\n"
-				CALLCHAIN_REPORT_HELP
-				"\n\t\t\t\tDefault: " CALLCHAIN_DEFAULT_OPT;
+static const char callchain_help[] =
+	"Display call graph (stack chain/backtrace):\n\n"
+	CALLCHAIN_REPORT_HELP
+	"\n\t\t\t\tDefault: " CALLCHAIN_DEFAULT_OPT;
 
 static int
 parse_callchain_opt(const struct option *opt, const char *arg, int unset)

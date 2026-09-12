@@ -10,6 +10,7 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #include <drm/gpu_scheduler.h>
+#include <linux/amd-pmf-io.h>
 #include <linux/cleanup.h>
 #include <linux/errno.h>
 #include <linux/firmware.h>
@@ -59,45 +60,6 @@ struct mgmt_mbox_chann_info {
 	__u32	rsvd[4];
 };
 
-static int aie2_check_protocol(struct amdxdna_dev_hdl *ndev, u32 fw_major, u32 fw_minor)
-{
-	const struct aie2_fw_feature_tbl *feature;
-	bool found = false;
-
-	for (feature = ndev->priv->fw_feature_tbl; feature->major; feature++) {
-		if (feature->major != fw_major)
-			continue;
-		if (fw_minor < feature->min_minor)
-			continue;
-		if (feature->max_minor > 0 && fw_minor > feature->max_minor)
-			continue;
-
-		ndev->feature_mask |= feature->features;
-
-		/* firmware version matches one of the driver support entry */
-		found = true;
-	}
-
-	return found ? 0 : -EOPNOTSUPP;
-}
-
-static void aie2_dump_chann_info_debug(struct amdxdna_dev_hdl *ndev)
-{
-	struct amdxdna_dev *xdna = ndev->xdna;
-
-	XDNA_DBG(xdna, "i2x tail    0x%x", ndev->mgmt_i2x.mb_tail_ptr_reg);
-	XDNA_DBG(xdna, "i2x head    0x%x", ndev->mgmt_i2x.mb_head_ptr_reg);
-	XDNA_DBG(xdna, "i2x ringbuf 0x%x", ndev->mgmt_i2x.rb_start_addr);
-	XDNA_DBG(xdna, "i2x rsize   0x%x", ndev->mgmt_i2x.rb_size);
-	XDNA_DBG(xdna, "x2i tail    0x%x", ndev->mgmt_x2i.mb_tail_ptr_reg);
-	XDNA_DBG(xdna, "x2i head    0x%x", ndev->mgmt_x2i.mb_head_ptr_reg);
-	XDNA_DBG(xdna, "x2i ringbuf 0x%x", ndev->mgmt_x2i.rb_start_addr);
-	XDNA_DBG(xdna, "x2i rsize   0x%x", ndev->mgmt_x2i.rb_size);
-	XDNA_DBG(xdna, "x2i chann index 0x%x", ndev->mgmt_chan_idx);
-	XDNA_DBG(xdna, "mailbox protocol major 0x%x", ndev->mgmt_prot_major);
-	XDNA_DBG(xdna, "mailbox protocol minor 0x%x", ndev->mgmt_prot_minor);
-}
-
 static int aie2_get_mgmt_chann_info(struct amdxdna_dev_hdl *ndev)
 {
 	struct mgmt_mbox_chann_info info_regs;
@@ -127,13 +89,13 @@ static int aie2_get_mgmt_chann_info(struct amdxdna_dev_hdl *ndev)
 		reg[i] = readl(ndev->sram_base + off + i * sizeof(u32));
 
 	if (info_regs.magic != MGMT_MBOX_MAGIC) {
-		XDNA_ERR(ndev->xdna, "Invalid mbox magic 0x%x", info_regs.magic);
+		XDNA_ERR(ndev->aie.xdna, "Invalid mbox magic 0x%x", info_regs.magic);
 		ret = -EINVAL;
 		goto done;
 	}
 
-	i2x = &ndev->mgmt_i2x;
-	x2i = &ndev->mgmt_x2i;
+	i2x = &ndev->aie.mgmt_i2x;
+	x2i = &ndev->aie.mgmt_x2i;
 
 	i2x->mb_head_ptr_reg = AIE2_MBOX_OFF(ndev, info_regs.i2x_head);
 	i2x->mb_tail_ptr_reg = AIE2_MBOX_OFF(ndev, info_regs.i2x_tail);
@@ -145,14 +107,15 @@ static int aie2_get_mgmt_chann_info(struct amdxdna_dev_hdl *ndev)
 	x2i->rb_start_addr   = AIE2_SRAM_OFF(ndev, info_regs.x2i_buf);
 	x2i->rb_size         = info_regs.x2i_buf_sz;
 
-	ndev->mgmt_chan_idx  = info_regs.msi_id;
-	ndev->mgmt_prot_major = info_regs.prot_major;
-	ndev->mgmt_prot_minor = info_regs.prot_minor;
+	ndev->aie.mgmt_chan_idx  = info_regs.msi_id;
+	ndev->aie.mgmt_prot_major = info_regs.prot_major;
+	ndev->aie.mgmt_prot_minor = info_regs.prot_minor;
 
-	ret = aie2_check_protocol(ndev, ndev->mgmt_prot_major, ndev->mgmt_prot_minor);
+	ret = aie_check_protocol(&ndev->aie, ndev->aie.mgmt_prot_major,
+				 ndev->aie.mgmt_prot_minor);
 
 done:
-	aie2_dump_chann_info_debug(ndev);
+	aie_dump_mgmt_chann_debug(&ndev->aie);
 
 	/* Must clear address at FW_ALIVE_OFF */
 	writel(0, SRAM_GET_ADDR(ndev, FW_ALIVE_OFF));
@@ -172,13 +135,14 @@ int aie2_runtime_cfg(struct amdxdna_dev_hdl *ndev,
 			continue;
 
 		if (cfg->feature_mask &&
-		    bitmap_subset(&cfg->feature_mask, &ndev->feature_mask, AIE2_FEATURE_MAX))
+		    bitmap_subset(&cfg->feature_mask, &ndev->aie.feature_mask,
+				  AIE2_FEATURE_MAX))
 			continue;
 
 		value = val ? *val : cfg->value;
 		ret = aie2_set_runtime_cfg(ndev, cfg->type, value);
 		if (ret) {
-			XDNA_ERR(ndev->xdna, "Set type %d value %d failed",
+			XDNA_ERR(ndev->aie.xdna, "Set type %d value %d failed",
 				 cfg->type, value);
 			return ret;
 		}
@@ -193,13 +157,13 @@ static int aie2_xdna_reset(struct amdxdna_dev_hdl *ndev)
 
 	ret = aie2_suspend_fw(ndev);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Suspend firmware failed");
+		XDNA_ERR(ndev->aie.xdna, "Suspend firmware failed");
 		return ret;
 	}
 
 	ret = aie2_resume_fw(ndev);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Resume firmware failed");
+		XDNA_ERR(ndev->aie.xdna, "Resume firmware failed");
 		return ret;
 	}
 
@@ -212,19 +176,19 @@ static int aie2_mgmt_fw_init(struct amdxdna_dev_hdl *ndev)
 
 	ret = aie2_runtime_cfg(ndev, AIE2_RT_CFG_INIT, NULL);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Runtime config failed");
+		XDNA_ERR(ndev->aie.xdna, "Runtime config failed");
 		return ret;
 	}
 
 	ret = aie2_assign_mgmt_pasid(ndev, 0);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Can not assign PASID");
+		XDNA_ERR(ndev->aie.xdna, "Can not assign PASID");
 		return ret;
 	}
 
 	ret = aie2_xdna_reset(ndev);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Reset firmware failed");
+		XDNA_ERR(ndev->aie.xdna, "Reset firmware failed");
 		return ret;
 	}
 
@@ -235,21 +199,21 @@ static int aie2_mgmt_fw_query(struct amdxdna_dev_hdl *ndev)
 {
 	int ret;
 
-	ret = aie2_query_firmware_version(ndev, &ndev->xdna->fw_ver);
+	ret = aie2_query_firmware_version(ndev, &ndev->aie.xdna->fw_ver);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "query firmware version failed");
+		XDNA_ERR(ndev->aie.xdna, "query firmware version failed");
 		return ret;
 	}
 
 	ret = aie2_query_aie_version(ndev, &ndev->version);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Query AIE version failed");
+		XDNA_ERR(ndev->aie.xdna, "Query AIE version failed");
 		return ret;
 	}
 
 	ret = aie2_query_aie_metadata(ndev, &ndev->metadata);
 	if (ret) {
-		XDNA_ERR(ndev->xdna, "Query AIE metadata failed");
+		XDNA_ERR(ndev->aie.xdna, "Query AIE metadata failed");
 		return ret;
 	}
 
@@ -261,8 +225,8 @@ static int aie2_mgmt_fw_query(struct amdxdna_dev_hdl *ndev)
 static void aie2_mgmt_fw_fini(struct amdxdna_dev_hdl *ndev)
 {
 	if (aie2_suspend_fw(ndev))
-		XDNA_ERR(ndev->xdna, "Suspend_fw failed");
-	XDNA_DBG(ndev->xdna, "Firmware suspended");
+		XDNA_ERR(ndev->aie.xdna, "Suspend_fw failed");
+	XDNA_DBG(ndev->aie.xdna, "Firmware suspended");
 }
 
 static int aie2_xrs_load(void *cb_arg, struct xrs_action_load *action)
@@ -330,7 +294,7 @@ static void aie2_hw_stop(struct amdxdna_dev *xdna)
 
 	aie2_runtime_cfg(ndev, AIE2_RT_CFG_CLK_GATING, NULL);
 	aie2_mgmt_fw_fini(ndev);
-	aie2_destroy_mgmt_chann(ndev);
+	aie_destroy_chann(&ndev->aie, &ndev->aie.mgmt_chann);
 	drmm_kfree(&xdna->ddev, ndev->mbox);
 	ndev->mbox = NULL;
 	aie2_psp_stop(ndev->psp_hdl);
@@ -373,8 +337,8 @@ static int aie2_hw_start(struct amdxdna_dev *xdna)
 		goto disable_dev;
 	}
 
-	ndev->mgmt_chann = xdna_mailbox_alloc_channel(ndev->mbox);
-	if (!ndev->mgmt_chann) {
+	ndev->aie.mgmt_chann = xdna_mailbox_alloc_channel(ndev->mbox);
+	if (!ndev->aie.mgmt_chann) {
 		XDNA_ERR(xdna, "failed to alloc channel");
 		ret = -ENODEV;
 		goto disable_dev;
@@ -398,17 +362,17 @@ static int aie2_hw_start(struct amdxdna_dev *xdna)
 		goto stop_psp;
 	}
 
-	mgmt_mb_irq = pci_irq_vector(pdev, ndev->mgmt_chan_idx);
+	mgmt_mb_irq = pci_irq_vector(pdev, ndev->aie.mgmt_chan_idx);
 	if (mgmt_mb_irq < 0) {
 		ret = mgmt_mb_irq;
 		XDNA_ERR(xdna, "failed to alloc irq vector, ret %d", ret);
 		goto stop_psp;
 	}
 
-	xdna_mailbox_intr_reg = ndev->mgmt_i2x.mb_head_ptr_reg + 4;
-	ret = xdna_mailbox_start_channel(ndev->mgmt_chann,
-					 &ndev->mgmt_x2i,
-					 &ndev->mgmt_i2x,
+	xdna_mailbox_intr_reg = ndev->aie.mgmt_i2x.mb_head_ptr_reg + 4;
+	ret = xdna_mailbox_start_channel(ndev->aie.mgmt_chann,
+					 &ndev->aie.mgmt_x2i,
+					 &ndev->aie.mgmt_i2x,
 					 xdna_mailbox_intr_reg,
 					 mgmt_mb_irq);
 	if (ret) {
@@ -447,14 +411,14 @@ static int aie2_hw_start(struct amdxdna_dev *xdna)
 
 stop_fw:
 	aie2_suspend_fw(ndev);
-	xdna_mailbox_stop_channel(ndev->mgmt_chann);
+	xdna_mailbox_stop_channel(ndev->aie.mgmt_chann);
 stop_psp:
 	aie2_psp_stop(ndev->psp_hdl);
 fini_smu:
 	aie2_smu_fini(ndev);
 free_channel:
-	xdna_mailbox_free_channel(ndev->mgmt_chann);
-	ndev->mgmt_chann = NULL;
+	xdna_mailbox_free_channel(ndev->aie.mgmt_chann);
+	ndev->aie.mgmt_chann = NULL;
 disable_dev:
 	pci_disable_device(pdev);
 
@@ -510,12 +474,17 @@ static int aie2_init(struct amdxdna_dev *xdna)
 		return -EINVAL;
 	}
 
+	if (!xdna->group) {
+		XDNA_ERR(xdna, "Running without IOMMU not supported");
+		return -EINVAL;
+	}
+
 	ndev = drmm_kzalloc(&xdna->ddev, sizeof(*ndev), GFP_KERNEL);
 	if (!ndev)
 		return -ENOMEM;
 
 	ndev->priv = xdna->dev_info->dev_priv;
-	ndev->xdna = xdna;
+	ndev->aie.xdna = xdna;
 
 	for (i = 0; i < ARRAY_SIZE(npu_fw); i++) {
 		fw_full_path = kasprintf(GFP_KERNEL, "%s%s", ndev->priv->fw_path, npu_fw[i]);
@@ -638,21 +607,17 @@ static void aie2_fini(struct amdxdna_dev *xdna)
 static int aie2_get_aie_status(struct amdxdna_client *client,
 			       struct amdxdna_drm_get_info *args)
 {
-	struct amdxdna_drm_query_aie_status status;
+	struct amdxdna_drm_query_aie_status status = {};
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
+	u32 buf_sz;
 	int ret;
 
 	ndev = xdna->dev_handle;
-	if (copy_from_user(&status, u64_to_user_ptr(args->buffer), sizeof(status))) {
+	buf_sz = min(args->buffer_size, sizeof(status));
+	if (copy_from_user(&status, u64_to_user_ptr(args->buffer), buf_sz)) {
 		XDNA_ERR(xdna, "Failed to copy AIE request into kernel");
 		return -EFAULT;
-	}
-
-	if (ndev->metadata.cols * ndev->metadata.size < status.buffer_size) {
-		XDNA_ERR(xdna, "Invalid buffer size. Given Size: %u. Need Size: %u.",
-			 status.buffer_size, ndev->metadata.cols * ndev->metadata.size);
-		return -EINVAL;
 	}
 
 	ret = aie2_query_status(ndev, u64_to_user_ptr(status.buffer),
@@ -662,7 +627,7 @@ static int aie2_get_aie_status(struct amdxdna_client *client,
 		return ret;
 	}
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &status, sizeof(status))) {
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &status, buf_sz)) {
 		XDNA_ERR(xdna, "Failed to copy AIE request info to user space");
 		return -EFAULT;
 	}
@@ -677,6 +642,7 @@ static int aie2_get_aie_metadata(struct amdxdna_client *client,
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
 	int ret = 0;
+	u32 buf_sz;
 
 	ndev = xdna->dev_handle;
 	meta = kzalloc_obj(*meta);
@@ -708,7 +674,8 @@ static int aie2_get_aie_metadata(struct amdxdna_client *client,
 	meta->shim.lock_count = ndev->metadata.shim.lock_count;
 	meta->shim.event_reg_count = ndev->metadata.shim.event_reg_count;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), meta, sizeof(*meta)))
+	buf_sz = min(args->buffer_size, sizeof(*meta));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), meta, buf_sz))
 		ret = -EFAULT;
 
 	kfree(meta);
@@ -721,12 +688,14 @@ static int aie2_get_aie_version(struct amdxdna_client *client,
 	struct amdxdna_drm_query_aie_version version;
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
+	u32 buf_sz;
 
 	ndev = xdna->dev_handle;
 	version.major = ndev->version.major;
 	version.minor = ndev->version.minor;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &version, sizeof(version)))
+	buf_sz = min(args->buffer_size, sizeof(version));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &version, buf_sz))
 		return -EFAULT;
 
 	return 0;
@@ -737,13 +706,15 @@ static int aie2_get_firmware_version(struct amdxdna_client *client,
 {
 	struct amdxdna_drm_query_firmware_version version;
 	struct amdxdna_dev *xdna = client->xdna;
+	u32 buf_sz;
 
 	version.major = xdna->fw_ver.major;
 	version.minor = xdna->fw_ver.minor;
 	version.patch = xdna->fw_ver.sub;
 	version.build = xdna->fw_ver.build;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &version, sizeof(version)))
+	buf_sz = min(args->buffer_size, sizeof(version));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &version, buf_sz))
 		return -EFAULT;
 
 	return 0;
@@ -755,11 +726,13 @@ static int aie2_get_power_mode(struct amdxdna_client *client,
 	struct amdxdna_drm_get_power_mode mode = {};
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
+	u32 buf_sz;
 
 	ndev = xdna->dev_handle;
 	mode.power_mode = ndev->pw_mode;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &mode, sizeof(mode)))
+	buf_sz = min(args->buffer_size, sizeof(mode));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &mode, buf_sz))
 		return -EFAULT;
 
 	return 0;
@@ -772,6 +745,7 @@ static int aie2_get_clock_metadata(struct amdxdna_client *client,
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
 	int ret = 0;
+	u32 buf_sz;
 
 	ndev = xdna->dev_handle;
 	clock = kzalloc_obj(*clock);
@@ -784,11 +758,65 @@ static int aie2_get_clock_metadata(struct amdxdna_client *client,
 	snprintf(clock->h_clock.name, sizeof(clock->h_clock.name), "H Clock");
 	clock->h_clock.freq_mhz = ndev->hclk_freq;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), clock, sizeof(*clock)))
+	buf_sz = min(args->buffer_size, sizeof(*clock));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), clock, buf_sz))
 		ret = -EFAULT;
 
 	kfree(clock);
 	return ret;
+}
+
+static int aie2_get_sensors(struct amdxdna_client *client,
+			    struct amdxdna_drm_get_info *args)
+{
+	struct amdxdna_dev_hdl *ndev = client->xdna->dev_handle;
+	struct amdxdna_drm_query_sensor sensor = {};
+	struct amd_pmf_npu_metrics npu_metrics;
+	u32 sensors_count = 0, i;
+	int ret;
+
+	ret = AIE2_GET_PMF_NPU_METRICS(&npu_metrics);
+	if (ret)
+		return ret;
+
+	sensor.type = AMDXDNA_SENSOR_TYPE_POWER;
+	sensor.input = npu_metrics.npu_power;
+	sensor.unitm = -3;
+	scnprintf(sensor.label, sizeof(sensor.label), "Total Power");
+	scnprintf(sensor.units, sizeof(sensor.units), "mW");
+
+	if (args->buffer_size < sizeof(sensor))
+		goto out;
+
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &sensor, sizeof(sensor)))
+		return -EFAULT;
+
+	args->buffer_size -= sizeof(sensor);
+	sensors_count++;
+
+	for (i = 0; i < min_t(u32, ndev->total_col, 8); i++) {
+		memset(&sensor, 0, sizeof(sensor));
+		sensor.input = npu_metrics.npu_busy[i];
+		sensor.type = AMDXDNA_SENSOR_TYPE_COLUMN_UTILIZATION;
+		sensor.unitm = 0;
+		scnprintf(sensor.label, sizeof(sensor.label), "Column %d Utilization", i);
+		scnprintf(sensor.units, sizeof(sensor.units), "%%");
+
+		if (args->buffer_size < sizeof(sensor))
+			goto out;
+
+		if (copy_to_user(u64_to_user_ptr(args->buffer) + sensors_count * sizeof(sensor),
+				 &sensor, sizeof(sensor)))
+			return -EFAULT;
+
+		args->buffer_size -= sizeof(sensor);
+		sensors_count++;
+	}
+
+out:
+	args->buffer_size = sensors_count * sizeof(sensor);
+
+	return 0;
 }
 
 static int aie2_hwctx_status_cb(struct amdxdna_hwctx *hwctx, void *arg)
@@ -796,7 +824,10 @@ static int aie2_hwctx_status_cb(struct amdxdna_hwctx *hwctx, void *arg)
 	struct amdxdna_drm_hwctx_entry *tmp __free(kfree) = NULL;
 	struct amdxdna_drm_get_array *array_args = arg;
 	struct amdxdna_drm_hwctx_entry __user *buf;
+	struct app_health_report report;
+	struct amdxdna_dev_hdl *ndev;
 	u32 size;
+	int ret;
 
 	if (!array_args->num_element)
 		return -EINVAL;
@@ -812,6 +843,7 @@ static int aie2_hwctx_status_cb(struct amdxdna_hwctx *hwctx, void *arg)
 	tmp->command_submissions = hwctx->priv->seq;
 	tmp->command_completions = hwctx->priv->completed;
 	tmp->pasid = hwctx->client->pasid;
+	tmp->heap_usage = hwctx->client->heap_usage;
 	tmp->priority = hwctx->qos.priority;
 	tmp->gops = hwctx->qos.gops;
 	tmp->fps = hwctx->qos.fps;
@@ -819,6 +851,17 @@ static int aie2_hwctx_status_cb(struct amdxdna_hwctx *hwctx, void *arg)
 	tmp->latency = hwctx->qos.latency;
 	tmp->frame_exec_time = hwctx->qos.frame_exec_time;
 	tmp->state = AMDXDNA_HWCTX_STATE_ACTIVE;
+	ndev = hwctx->client->xdna->dev_handle;
+	ret = aie2_query_app_health(ndev, hwctx->fw_ctx_id, &report);
+	if (!ret) {
+		/* Fill in app health report fields */
+		tmp->txn_op_idx = report.txn_op_id;
+		tmp->ctx_pc = report.ctx_pc;
+		tmp->fatal_error_type = report.fatal_info.fatal_type;
+		tmp->fatal_error_exception_type = report.fatal_info.exception_type;
+		tmp->fatal_error_exception_pc = report.fatal_info.exception_pc;
+		tmp->fatal_error_app_module = report.fatal_info.app_module;
+	}
 
 	buf = u64_to_user_ptr(array_args->buffer);
 	size = min(sizeof(*tmp), array_args->element_size);
@@ -863,6 +906,7 @@ static int aie2_query_resource_info(struct amdxdna_client *client,
 	const struct amdxdna_dev_priv *priv;
 	struct amdxdna_dev_hdl *ndev;
 	struct amdxdna_dev *xdna;
+	u32 buf_sz;
 
 	xdna = client->xdna;
 	ndev = xdna->dev_handle;
@@ -874,7 +918,8 @@ static int aie2_query_resource_info(struct amdxdna_client *client,
 	res_info.npu_tops_curr = ndev->curr_tops;
 	res_info.npu_task_curr = ndev->hwctx_num;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &res_info, sizeof(res_info)))
+	buf_sz = min(args->buffer_size, sizeof(res_info));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &res_info, buf_sz))
 		return -EFAULT;
 
 	return 0;
@@ -910,12 +955,7 @@ static int aie2_get_telemetry(struct amdxdna_client *client,
 		XDNA_ERR(xdna, "Invalid buffer size");
 		return -EINVAL;
 	}
-
 	telemetry_data_sz = args->buffer_size - header_sz;
-	if (telemetry_data_sz > SZ_4M) {
-		XDNA_ERR(xdna, "Buffer size is too big, %d", telemetry_data_sz);
-		return -EINVAL;
-	}
 
 	header = kzalloc(header_sz, GFP_KERNEL);
 	if (!header)
@@ -956,6 +996,7 @@ static int aie2_get_preempt_state(struct amdxdna_client *client,
 	struct amdxdna_drm_attribute_state state = {};
 	struct amdxdna_dev *xdna = client->xdna;
 	struct amdxdna_dev_hdl *ndev;
+	u32 buf_sz;
 
 	ndev = xdna->dev_handle;
 	if (args->param == DRM_AMDXDNA_GET_FORCE_PREEMPT_STATE)
@@ -963,7 +1004,8 @@ static int aie2_get_preempt_state(struct amdxdna_client *client,
 	else if (args->param == DRM_AMDXDNA_GET_FRAME_BOUNDARY_PREEMPT_STATE)
 		state.state = ndev->frame_boundary_preempt;
 
-	if (copy_to_user(u64_to_user_ptr(args->buffer), &state, sizeof(state)))
+	buf_sz = min(args->buffer_size, sizeof(state));
+	if (copy_to_user(u64_to_user_ptr(args->buffer), &state, buf_sz))
 		return -EFAULT;
 
 	return 0;
@@ -993,6 +1035,9 @@ static int aie2_get_info(struct amdxdna_client *client, struct amdxdna_drm_get_i
 		break;
 	case DRM_AMDXDNA_QUERY_CLOCK_METADATA:
 		ret = aie2_get_clock_metadata(client, args);
+		break;
+	case DRM_AMDXDNA_QUERY_SENSORS:
+		ret = aie2_get_sensors(client, args);
 		break;
 	case DRM_AMDXDNA_QUERY_HW_CONTEXTS:
 		ret = aie2_get_hwctx_status(client, args);
@@ -1080,6 +1125,9 @@ static int aie2_get_array(struct amdxdna_client *client,
 		break;
 	case DRM_AMDXDNA_HW_LAST_ASYNC_ERR:
 		ret = aie2_get_array_async_error(xdna->dev_handle, args);
+		break;
+	case DRM_AMDXDNA_BO_USAGE:
+		ret = amdxdna_drm_get_bo_usage(&xdna->ddev, args);
 		break;
 	default:
 		XDNA_ERR(xdna, "Not supported request parameter %u", args->param);

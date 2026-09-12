@@ -628,9 +628,8 @@ svm_range_vram_node_new(struct kfd_node *node, struct svm_range *prange,
 		}
 	}
 
-	r = dma_resv_reserve_fences(bo->tbo.base.resv, 1);
+	r = dma_resv_reserve_fences(bo->tbo.base.resv, TTM_NUM_MOVE_FENCES);
 	if (r) {
-		pr_debug("failed %d to reserve bo\n", r);
 		amdgpu_bo_unreserve(bo);
 		goto reserve_bo_failed;
 	}
@@ -1145,7 +1144,7 @@ static int
 svm_range_split_tail(struct svm_range *prange, uint64_t new_last,
 		     struct list_head *insert_list, struct list_head *remap_list)
 {
-	unsigned long last_align_down = ALIGN_DOWN(prange->last, 512);
+	unsigned long last_align_down = ALIGN_DOWN(prange->last + 1, 512);
 	unsigned long start_align = ALIGN(prange->start, 512);
 	bool huge_page_mapping = last_align_down > start_align;
 	struct svm_range *tail = NULL;
@@ -1169,7 +1168,7 @@ static int
 svm_range_split_head(struct svm_range *prange, uint64_t new_start,
 		     struct list_head *insert_list, struct list_head *remap_list)
 {
-	unsigned long last_align_down = ALIGN_DOWN(prange->last, 512);
+	unsigned long last_align_down = ALIGN_DOWN(prange->last + 1, 512);
 	unsigned long start_align = ALIGN(prange->start, 512);
 	bool huge_page_mapping = last_align_down > start_align;
 	struct svm_range *head = NULL;
@@ -1182,8 +1181,8 @@ svm_range_split_head(struct svm_range *prange, uint64_t new_start,
 
 	list_add(&head->list, insert_list);
 
-	if (huge_page_mapping && head->last + 1 > start_align &&
-	    head->last + 1 < last_align_down && (!IS_ALIGNED(head->last, 512)))
+	if (huge_page_mapping && new_start > start_align &&
+	    new_start < last_align_down && !IS_ALIGNED(new_start, 512))
 		list_add(&head->update_list, remap_list);
 
 	return 0;
@@ -1219,7 +1218,8 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 	bool snoop = (domain != SVM_RANGE_VRAM_DOMAIN);
 	bool coherent = flags & (KFD_IOCTL_SVM_FLAG_COHERENT | KFD_IOCTL_SVM_FLAG_EXT_COHERENT);
 	bool ext_coherent = flags & KFD_IOCTL_SVM_FLAG_EXT_COHERENT;
-	unsigned int mtype_local;
+	unsigned int mtype_local, mtype_remote;
+	bool is_aid_a1, is_local;
 
 	if (domain == SVM_RANGE_VRAM_DOMAIN)
 		bo_node = prange->svm_bo->node;
@@ -1307,20 +1307,23 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 		mapping_flags |= AMDGPU_VM_MTYPE_NC;
 		break;
 	case IP_VERSION(12, 1, 0):
+		is_aid_a1 = (node->adev->rev_id & 0x10);
+		is_local = (domain == SVM_RANGE_VRAM_DOMAIN) &&
+				(bo_node->adev == node->adev);
+
+		mtype_local = amdgpu_mtype_local == 0 ? AMDGPU_VM_MTYPE_RW :
+				amdgpu_mtype_local == 1 ? AMDGPU_VM_MTYPE_NC :
+				is_aid_a1 ? AMDGPU_VM_MTYPE_RW : AMDGPU_VM_MTYPE_NC;
+		mtype_remote = is_aid_a1 ? AMDGPU_VM_MTYPE_NC : AMDGPU_VM_MTYPE_UC;
 		snoop = true;
-		if (domain == SVM_RANGE_VRAM_DOMAIN) {
-			mtype_local = amdgpu_mtype_local == 1 ? AMDGPU_VM_MTYPE_NC :
-								AMDGPU_VM_MTYPE_RW;
-			/* local HBM  */
-			if (bo_node->adev == node->adev)
-				mapping_flags |= mtype_local;
-			/* Remote GPU memory */
-			else
-				mapping_flags |= ext_coherent ? AMDGPU_VM_MTYPE_UC :
-								AMDGPU_VM_MTYPE_NC;
-		/* system memory accessed by the dGPU */
+
+		if (is_local) /* local HBM  */ {
+			mapping_flags |= mtype_local;
+		} else if (ext_coherent) {
+			mapping_flags |= AMDGPU_VM_MTYPE_UC;
 		} else {
-			mapping_flags |= ext_coherent ? AMDGPU_VM_MTYPE_UC : AMDGPU_VM_MTYPE_NC;
+			/* system memory or remote VRAM */
+			mapping_flags |= mtype_remote;
 		}
 		break;
 	default:
@@ -1363,6 +1366,12 @@ svm_range_unmap_from_gpu(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 
 	pr_debug("CPU[0x%llx 0x%llx] -> GPU[0x%llx 0x%llx]\n", start, last,
 		gpu_start, gpu_end);
+
+	if (!amdgpu_vm_ready(vm)) {
+		pr_debug("VM not ready, canceling unmap\n");
+		return -EINVAL;
+	}
+
 	return amdgpu_vm_update_range(adev, vm, false, true, true, false, NULL, gpu_start,
 				      gpu_end, init_pte_value, 0, 0, NULL, NULL,
 				      fence);
@@ -1439,6 +1448,11 @@ svm_range_map_to_gpu(struct kfd_process_device *pdd, struct svm_range *prange,
 
 	pr_debug("svms 0x%p [0x%lx 0x%lx] readonly %d\n", prange->svms,
 		 last_start, last_start + npages - 1, readonly);
+
+	if (!amdgpu_vm_ready(vm)) {
+		pr_debug("VM not ready, canceling map\n");
+		return -EINVAL;
+	}
 
 	for (i = offset; i < offset + npages; i++) {
 		uint64_t gpu_start;
@@ -4101,6 +4115,7 @@ exit:
 	list_for_each_entry_safe(criu_svm_md, next, &svms->criu_svm_metadata_list, list) {
 		pr_debug("freeing criu_svm_md[]\n\tstart: 0x%llx\n",
 						criu_svm_md->data.start_addr);
+		list_del(&criu_svm_md->list);
 		kfree(criu_svm_md);
 	}
 

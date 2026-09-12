@@ -103,6 +103,9 @@ v3d_job_free(struct kref *ref)
 	if (job->perfmon)
 		v3d_perfmon_put(job->perfmon);
 
+	v3d_stats_put(job->client_stats);
+	v3d_stats_put(job->global_stats);
+
 	kfree(job);
 }
 
@@ -220,6 +223,9 @@ v3d_job_init(struct v3d_dev *v3d, struct drm_file *file_priv,
 	}
 
 	kref_init(&job->refcount);
+
+	job->client_stats = v3d_stats_get(v3d_priv->stats[queue]);
+	job->global_stats = v3d_stats_get(v3d->queue[queue].stats);
 
 	return 0;
 
@@ -478,6 +484,8 @@ v3d_get_cpu_indirect_csd_params(struct drm_file *file_priv,
 	       sizeof(indirect_csd.wg_uniform_offsets));
 
 	info->indirect = drm_gem_object_lookup(file_priv, indirect_csd.indirect);
+	if (!info->indirect)
+		return -ENOENT;
 
 	return v3d_setup_csd_jobs_and_bos(file_priv, v3d, &indirect_csd.submit,
 					  &info->job, &info->clean_job,

@@ -82,7 +82,7 @@ struct spear_adc_state {
 	 * of register writes, then a wait for a completion callback,
 	 * and finally a register read, during which userspace could issue
 	 * another read request. This lock protects a read access from
-	 * ocurring before another one has finished.
+	 * occurring before another one has finished.
 	 */
 	struct mutex lock;
 	u32 current_clk;
@@ -280,6 +280,7 @@ static int spear_adc_probe(struct platform_device *pdev)
 	st = iio_priv(indio_dev);
 	st->dev = dev;
 
+	init_completion(&st->completion);
 	mutex_init(&st->lock);
 
 	/*
@@ -325,8 +326,6 @@ static int spear_adc_probe(struct platform_device *pdev)
 	device_property_read_u32(dev, "vref-external", &st->vref_external);
 
 	spear_adc_configure(st);
-
-	init_completion(&st->completion);
 
 	indio_dev->name = SPEAR_ADC_MOD_NAME;
 	indio_dev->info = &spear_adc_info;

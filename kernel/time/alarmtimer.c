@@ -234,19 +234,23 @@ static int alarmtimer_suspend(struct device *dev)
 	if (!rtc)
 		return 0;
 
-	/* Find the soonest timer to expire*/
+	/* Find the soonest timer to expire */
 	for (i = 0; i < ALARM_NUMTYPE; i++) {
 		struct alarm_base *base = &alarm_bases[i];
 		struct timerqueue_node *next;
+		ktime_t next_expires;
 		ktime_t delta;
 
-		scoped_guard(spinlock_irqsave, &base->lock)
+		scoped_guard(spinlock_irqsave, &base->lock) {
 			next = timerqueue_getnext(&base->timerqueue);
+			if (next)
+				next_expires = next->expires;
+		}
 		if (!next)
 			continue;
-		delta = ktime_sub(next->expires, base->get_ktime());
+		delta = ktime_sub(next_expires, base->get_ktime());
 		if (!min || (delta < min)) {
-			expires = next->expires;
+			expires = next_expires;
 			min = delta;
 			type = i;
 		}
@@ -508,8 +512,6 @@ static enum alarmtimer_type clock2alarm(clockid_t clockid)
  * @now: time at the timer expiration
  *
  * Posix timer callback for expired alarm timers.
- *
- * Return: whether the timer is to be restarted
  */
 static void alarm_handle_timer(struct alarm *alarm, ktime_t now)
 {
@@ -523,12 +525,13 @@ static void alarm_handle_timer(struct alarm *alarm, ktime_t now)
  * alarm_timer_rearm - Posix timer callback for rearming timer
  * @timr:	Pointer to the posixtimer data struct
  */
-static void alarm_timer_rearm(struct k_itimer *timr)
+static bool alarm_timer_rearm(struct k_itimer *timr)
 {
 	struct alarm *alarm = &timr->it.alarm.alarmtimer;
 
 	timr->it_overrun += alarm_forward_now(alarm, timr->it_interval);
 	alarm_start(alarm, alarm->node.expires);
+	return true;
 }
 
 /**
@@ -584,7 +587,7 @@ static void alarm_timer_wait_running(struct k_itimer *timr)
  * @absolute:	Expiry value is absolute time
  * @sigev_none:	Posix timer does not deliver signals
  */
-static void alarm_timer_arm(struct k_itimer *timr, ktime_t expires,
+static bool alarm_timer_arm(struct k_itimer *timr, ktime_t expires,
 			    bool absolute, bool sigev_none)
 {
 	struct alarm *alarm = &timr->it.alarm.alarmtimer;
@@ -596,6 +599,7 @@ static void alarm_timer_arm(struct k_itimer *timr, ktime_t expires,
 		alarm->node.expires = expires;
 	else
 		alarm_start(&timr->it.alarm.alarmtimer, expires);
+	return true;
 }
 
 /**

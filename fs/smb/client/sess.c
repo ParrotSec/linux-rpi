@@ -233,9 +233,9 @@ int cifs_try_adding_channels(struct cifs_ses *ses)
 				cifs_dbg(VFS, "failed to open extra channel on iface:%pIS rc=%d\n",
 					 &iface->sockaddr,
 					 rc);
-				kref_put(&iface->refcount, release_iface);
 				/* failure to add chan should increase weight */
 				iface->weight_fulfilled++;
+				kref_put(&iface->refcount, release_iface);
 				continue;
 			}
 
@@ -595,17 +595,6 @@ cifs_ses_add_channel(struct cifs_ses *ses,
 	spin_unlock(&ses->chan_lock);
 
 	mutex_lock(&ses->session_mutex);
-	/*
-	 * We need to allocate the server crypto now as we will need
-	 * to sign packets before we generate the channel signing key
-	 * (we sign with the session key)
-	 */
-	rc = smb3_crypto_shash_allocate(chan->server);
-	if (rc) {
-		cifs_dbg(VFS, "%s: crypto alloc failed\n", __func__);
-		mutex_unlock(&ses->session_mutex);
-		goto out;
-	}
 
 	rc = cifs_negotiate_protocol(xid, ses, chan->server);
 	if (!rc)

@@ -170,6 +170,12 @@ struct seccomp_data {
 # endif
 #endif
 
+#ifndef __NR_uprobe
+# if defined(__x86_64__)
+#  define __NR_uprobe 336
+# endif
+#endif
+
 #ifndef SECCOMP_SET_MODE_STRICT
 #define SECCOMP_SET_MODE_STRICT 0
 #endif
@@ -5172,7 +5178,8 @@ FIXTURE_SETUP(UPROBE)
 		ASSERT_GE(bit, 0);
 	}
 
-	offset = get_uprobe_offset(variant->uretprobe ? probed_uretprobe : probed_uprobe);
+	offset = get_uprobe_offset(variant->uretprobe ? (void *)probed_uretprobe
+						      : (void *)probed_uprobe);
 	ASSERT_GE(offset, 0);
 
 	if (variant->uretprobe)

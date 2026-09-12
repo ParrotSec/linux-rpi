@@ -77,6 +77,16 @@ static void pcim_msi_release(void *pcidev)
 /*
  * Needs to be separate from pcim_release to prevent an ordering problem
  * vs. msi_device_data_release() in the MSI core code.
+ *
+ * TODO: Remove the legacy side-effect of pcim_enable_device() that
+ * activates automatic IRQ vector management. This design is dangerous
+ * and confusing because it switches normally un-managed functions
+ * into managed mode. Drivers should explicitly manage their IRQ vectors
+ * without this implicit behavior.
+ *
+ * The current implementation uses both pdev->is_managed and
+ * pdev->is_msi_managed flags, which adds unnecessary complexity.
+ * This should be simplified in a future kernel version.
  */
 static int pcim_setup_msi_release(struct pci_dev *dev)
 {
@@ -739,7 +749,7 @@ static int msix_capability_init(struct pci_dev *dev, struct msix_entry *entries,
 
 	ret = msix_setup_interrupts(dev, entries, nvec, affd);
 	if (ret)
-		goto out_unmap;
+		goto out_disable;
 
 	/* Disable INTX */
 	pci_intx_for_msi(dev, 0);
@@ -760,8 +770,6 @@ static int msix_capability_init(struct pci_dev *dev, struct msix_entry *entries,
 	pcibios_free_irq(dev);
 	return 0;
 
-out_unmap:
-	iounmap(dev->msix_base);
 out_disable:
 	dev->msix_enabled = 0;
 	pci_msix_clear_and_set_ctrl(dev, PCI_MSIX_FLAGS_MASKALL | PCI_MSIX_FLAGS_ENABLE, 0);

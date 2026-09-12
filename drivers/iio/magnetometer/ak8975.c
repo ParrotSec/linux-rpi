@@ -495,6 +495,10 @@ static int ak8975_who_i_am(struct i2c_client *client,
 		dev_err(&client->dev, "Error reading WIA\n");
 		return ret;
 	}
+	if (ret != sizeof(wia_val)) {
+		dev_err(&client->dev, "Error reading WIA\n");
+		return -EIO;
+	}
 
 	if (wia_val[0] != AK8975_DEVICE_ID)
 		return -ENODEV;
@@ -545,7 +549,7 @@ static int ak8975_set_mode(struct ak8975_data *data, enum ak_ctrl_mode mode)
 		return ret;
 	}
 	data->cntl_cache = regval;
-	/* After mode change wait atleast 100us */
+	/* After mode change wait at least 100us */
 	usleep_range(100, 500);
 
 	return 0;
@@ -618,6 +622,10 @@ static int ak8975_setup(struct i2c_client *client)
 	if (ret < 0) {
 		dev_err(&client->dev, "Not able to read asa data\n");
 		return ret;
+	}
+	if (ret != sizeof(data->asa)) {
+		dev_err(&client->dev, "Error reading asa data\n");
+		return -EIO;
 	}
 
 	/* After reading fuse ROM data set power-down mode */
@@ -697,7 +705,7 @@ static int wait_conversion_complete_polled(struct ak8975_data *data)
 	return read_status;
 }
 
-/* Returns 0 if the end of conversion interrupt occured or -ETIME otherwise */
+/* Returns 0 if the end of conversion interrupt occurred or -ETIME otherwise */
 static int wait_conversion_complete_interrupt(struct ak8975_data *data)
 {
 	int ret;
@@ -758,8 +766,12 @@ static int ak8975_read_axis(struct iio_dev *indio_dev, int index, int *val)
 			sizeof(rval), (u8*)&rval);
 	if (ret < 0)
 		goto exit;
+	if (ret != sizeof(rval)) {
+		ret = -EIO;
+		goto exit;
+	}
 
-	/* Read out ST2 for release lock on measurment data. */
+	/* Read out ST2 for release lock on measurement data. */
 	ret = i2c_smbus_read_byte_data(client, data->def->ctrl_regs[ST2]);
 	if (ret < 0) {
 		dev_err(&client->dev, "Error in reading ST2\n");
@@ -784,6 +796,7 @@ static int ak8975_read_axis(struct iio_dev *indio_dev, int index, int *val)
 
 exit:
 	mutex_unlock(&data->lock);
+	pm_runtime_put_autosuspend(&data->client->dev);
 	dev_err(&client->dev, "Error in reading axis\n");
 	return ret;
 }
@@ -872,6 +885,8 @@ static void ak8975_fill_buffer(struct iio_dev *indio_dev)
 							3 * sizeof(fval[0]),
 							(u8 *)fval);
 	if (ret < 0)
+		goto unlock;
+	if (ret != sizeof(fval))
 		goto unlock;
 
 	mutex_unlock(&data->lock);

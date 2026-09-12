@@ -50,6 +50,7 @@ struct lease_manager_operations {
 	void (*lm_setup)(struct file_lease *, void **);
 	bool (*lm_breaker_owns_lease)(struct file_lease *);
 	int (*lm_open_conflict)(struct file *, int);
+	bool (*lm_breaker_timedout)(struct file_lease *fl);
 };
 
 struct lock_manager {
@@ -563,7 +564,7 @@ static inline bool is_delegated(struct delegated_inode *di)
 	return false;
 }
 
-static inline int break_lease(struct inode *inode, bool wait)
+static inline int break_lease(struct inode *inode, unsigned int mode)
 {
 	return 0;
 }

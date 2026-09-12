@@ -173,7 +173,7 @@ int attr_allocate_clusters(struct ntfs_sb_info *sbi, struct runs_tree *run,
 
 		if (err == -ENOSPC && pre) {
 			pre = 0;
-			if (*pre_alloc)
+			if (pre_alloc)
 				*pre_alloc = 0;
 			continue;
 		}
@@ -1004,6 +1004,7 @@ int attr_data_get_block_locked(struct ntfs_inode *ni, CLST vcn, CLST clen,
 	struct ATTRIB *attr, *attr_b;
 	struct ATTR_LIST_ENTRY *le, *le_b;
 	struct mft_inode *mi, *mi_b;
+	struct page *page;
 	CLST hint, svcn, to_alloc, evcn1, next_svcn, asize, end, vcn0;
 	CLST alloc, evcn;
 	unsigned fr;
@@ -1042,10 +1043,13 @@ again:
 		*lcn = RESIDENT_LCN;
 		*len = data_size;
 		if (res && data_size) {
-			*res = kmemdup(resident_data(attr_b), data_size,
-				       GFP_KERNEL);
-			if (!*res)
+			page = alloc_page(GFP_KERNEL);
+			if (!page) {
 				err = -ENOMEM;
+			} else {
+				*res = page_address(page);
+				memcpy(*res, resident_data(attr_b), data_size);
+			}
 		}
 		goto out;
 	}
@@ -1590,6 +1594,12 @@ int attr_wof_frame_info(struct ntfs_inode *ni, struct ATTRIB *attr,
 		if (index != folio->index) {
 			u64 from = vbo[i] & ~(u64)(PAGE_SIZE - 1);
 			u64 to = min(from + PAGE_SIZE, wof_size);
+
+			if (from >= wof_size) {
+				_ntfs_bad_inode(&ni->vfs_inode);
+				err = -EINVAL;
+				goto out1;
+			}
 
 			err = attr_load_runs_range(ni, ATTR_DATA, WOF_NAME,
 						   ARRAY_SIZE(WOF_NAME), run,

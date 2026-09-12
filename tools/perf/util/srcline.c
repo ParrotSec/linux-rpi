@@ -8,10 +8,12 @@
 #include "symbol.h"
 #include "libdw.h"
 #include "debug.h"
+#include "util.h"
 
 #include <inttypes.h>
 #include <string.h>
 #include <linux/string.h>
+#include <linux/zalloc.h>
 
 bool srcline_full_filename;
 
@@ -73,14 +75,6 @@ int inline_list__append_tail(struct symbol *symbol, char *srcline, struct inline
 	return 0;
 }
 
-/* basename version that takes a const input string */
-static const char *gnu_basename(const char *path)
-{
-	const char *base = strrchr(path, '/');
-
-	return base ? base + 1 : path;
-}
-
 char *srcline_from_fileline(const char *file, unsigned int line)
 {
 	char *srcline;
@@ -89,7 +83,7 @@ char *srcline_from_fileline(const char *file, unsigned int line)
 		return NULL;
 
 	if (!srcline_full_filename)
-		file = gnu_basename(file);
+		file = perf_basename(file);
 
 	if (asprintf(&srcline, "%s:%u", file, line) < 0)
 		return NULL;
@@ -435,9 +429,12 @@ struct inline_node *dso__parse_addr_inlines(struct dso *dso, u64 addr,
 	return addr2inlines(dso_name, addr, dso, sym);
 }
 
-void inline_node__delete(struct inline_node *node)
+void inline_node__clear_frames(struct inline_node *node)
 {
 	struct inline_list *ilist, *tmp;
+
+	if (node == NULL)
+		return;
 
 	list_for_each_entry_safe(ilist, tmp, &node->val, list) {
 		list_del_init(&ilist->list);
@@ -447,7 +444,11 @@ void inline_node__delete(struct inline_node *node)
 			symbol__delete(ilist->symbol);
 		free(ilist);
 	}
+}
 
+void inline_node__delete(struct inline_node *node)
+{
+	inline_node__clear_frames(node);
 	free(node);
 }
 

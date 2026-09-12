@@ -148,6 +148,7 @@ static struct fuse_req *fuse_request_alloc(struct fuse_mount *fm, gfp_t flags)
 
 static void fuse_request_free(struct fuse_req *req)
 {
+	WARN_ON(!list_empty(&req->intr_entry));
 	kmem_cache_free(fuse_req_cachep, req);
 }
 
@@ -447,6 +448,29 @@ static void flush_bg_queue(struct fuse_conn *fc)
 	}
 }
 
+void fuse_request_bg_finish(struct fuse_conn *fc, struct fuse_req *req)
+{
+	lockdep_assert_held(&fc->bg_lock);
+
+	clear_bit(FR_BACKGROUND, &req->flags);
+	if (fc->num_background == fc->max_background) {
+		fc->blocked = 0;
+		wake_up(&fc->blocked_waitq);
+	} else if (!fc->blocked) {
+		/*
+		 * Wake up next waiter, if any.  It's okay to use
+		 * waitqueue_active(), as we've already synced up
+		 * fc->blocked with waiters with the wake_up() call
+		 * above.
+		 */
+		if (waitqueue_active(&fc->blocked_waitq))
+			wake_up(&fc->blocked_waitq);
+	}
+
+	fc->num_background--;
+	fc->active_background--;
+}
+
 /*
  * This function is called when a request is finished.  Either a reply
  * has arrived or it was aborted (and not yet sent) or some error
@@ -479,23 +503,7 @@ void fuse_request_end(struct fuse_req *req)
 	WARN_ON(test_bit(FR_SENT, &req->flags));
 	if (test_bit(FR_BACKGROUND, &req->flags)) {
 		spin_lock(&fc->bg_lock);
-		clear_bit(FR_BACKGROUND, &req->flags);
-		if (fc->num_background == fc->max_background) {
-			fc->blocked = 0;
-			wake_up(&fc->blocked_waitq);
-		} else if (!fc->blocked) {
-			/*
-			 * Wake up next waiter, if any.  It's okay to use
-			 * waitqueue_active(), as we've already synced up
-			 * fc->blocked with waiters with the wake_up() call
-			 * above.
-			 */
-			if (waitqueue_active(&fc->blocked_waitq))
-				wake_up(&fc->blocked_waitq);
-		}
-
-		fc->num_background--;
-		fc->active_background--;
+		fuse_request_bg_finish(fc, req);
 		flush_bg_queue(fc);
 		spin_unlock(&fc->bg_lock);
 	} else {
@@ -1037,6 +1045,10 @@ static int fuse_try_move_folio(struct fuse_copy_state *cs, struct folio **foliop
 	if (WARN_ON(folio_test_mlocked(oldfolio)))
 		goto out_fallback_unlock;
 
+	err = lock_request(cs->req);
+	if (err)
+		goto out_fallback_unlock;
+
 	replace_page_cache_folio(oldfolio, newfolio);
 
 	folio_get(newfolio);
@@ -1050,20 +1062,7 @@ static int fuse_try_move_folio(struct fuse_copy_state *cs, struct folio **foliop
 	 */
 	pipe_buf_release(cs->pipe, buf);
 
-	err = 0;
-	spin_lock(&cs->req->waitq.lock);
-	if (test_bit(FR_ABORTED, &cs->req->flags))
-		err = -ENOENT;
-	else
-		*foliop = newfolio;
-	spin_unlock(&cs->req->waitq.lock);
-
-	if (err) {
-		folio_unlock(newfolio);
-		folio_put(newfolio);
-		goto out_put_old;
-	}
-
+	*foliop = newfolio;
 	folio_unlock(oldfolio);
 	/* Drop ref for ap->pages[] array */
 	folio_put(oldfolio);
@@ -1115,7 +1114,7 @@ static int fuse_ref_folio(struct fuse_copy_state *cs, struct folio *folio,
 	cs->nr_segs++;
 	cs->len = 0;
 
-	return 0;
+	return lock_request(cs->req);
 }
 
 /*
@@ -1548,31 +1547,29 @@ out_end:
 
 static int fuse_dev_open(struct inode *inode, struct file *file)
 {
-	/*
-	 * The fuse device's file's private_data is used to hold
-	 * the fuse_conn(ection) when it is mounted, and is used to
-	 * keep track of whether the file has been mounted already.
-	 */
-	file->private_data = NULL;
+	struct fuse_dev *fud = fuse_dev_alloc();
+
+	if (!fud)
+		return -ENOMEM;
+
+	file->private_data = fud;
 	return 0;
 }
 
 struct fuse_dev *fuse_get_dev(struct file *file)
 {
-	struct fuse_dev *fud = __fuse_get_dev(file);
+	struct fuse_dev *fud = fuse_file_to_fud(file);
 	int err;
 
-	if (likely(fud))
-		return fud;
+	if (unlikely(!fuse_dev_fc_get(fud))) {
+		/* only block waiting for mount if sync init was requested */
+		if (!fud->sync_init)
+			return ERR_PTR(-EPERM);
 
-	err = wait_event_interruptible(fuse_dev_waitq,
-				       READ_ONCE(file->private_data) != FUSE_DEV_SYNC_INIT);
-	if (err)
-		return ERR_PTR(err);
-
-	fud = __fuse_get_dev(file);
-	if (!fud)
-		return ERR_PTR(-EPERM);
+		err = wait_event_interruptible(fuse_dev_waitq, fuse_dev_fc_get(fud) != NULL);
+		if (err)
+			return ERR_PTR(err);
+	}
 
 	return fud;
 }
@@ -1773,10 +1770,9 @@ static int fuse_notify_store(struct fuse_conn *fc, unsigned int size,
 	struct address_space *mapping;
 	u64 nodeid;
 	int err;
-	pgoff_t index;
-	unsigned int offset;
 	unsigned int num;
 	loff_t file_size;
+	loff_t pos;
 	loff_t end;
 
 	if (size < sizeof(outarg))
@@ -1789,7 +1785,12 @@ static int fuse_notify_store(struct fuse_conn *fc, unsigned int size,
 	if (size - sizeof(outarg) != outarg.size)
 		return -EINVAL;
 
+	if (outarg.offset >= MAX_LFS_FILESIZE)
+		return -EINVAL;
+
 	nodeid = outarg.nodeid;
+	pos = outarg.offset;
+	num = min(outarg.size, MAX_LFS_FILESIZE - pos);
 
 	down_read(&fc->killsb);
 
@@ -1803,33 +1804,29 @@ static int fuse_notify_store(struct fuse_conn *fc, unsigned int size,
 	}
 
 	mapping = inode->i_mapping;
-	index = outarg.offset >> PAGE_SHIFT;
-	offset = outarg.offset & ~PAGE_MASK;
 	file_size = i_size_read(inode);
-	end = outarg.offset + outarg.size;
+	end = pos + num;
 	if (end > file_size) {
 		file_size = end;
-		fuse_write_update_attr(inode, file_size, outarg.size);
+		fuse_write_update_attr(inode, file_size, num);
 	}
 
-	num = outarg.size;
 	while (num) {
 		struct folio *folio;
 		unsigned int folio_offset;
 		unsigned int nr_bytes;
-		unsigned int nr_pages;
+		pgoff_t index = pos >> PAGE_SHIFT;
 
 		folio = filemap_grab_folio(mapping, index);
 		err = PTR_ERR(folio);
 		if (IS_ERR(folio))
 			goto out_iput;
 
-		folio_offset = ((index - folio->index) << PAGE_SHIFT) + offset;
+		folio_offset = offset_in_folio(folio, pos);
 		nr_bytes = min(num, folio_size(folio) - folio_offset);
-		nr_pages = (offset + nr_bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
 		err = fuse_copy_folio(cs, &folio, folio_offset, nr_bytes, 0);
-		if (!folio_test_uptodate(folio) && !err && offset == 0 &&
+		if (!folio_test_uptodate(folio) && !err && folio_offset == 0 &&
 		    (nr_bytes == folio_size(folio) || file_size == end)) {
 			folio_zero_segment(folio, nr_bytes, folio_size(folio));
 			folio_mark_uptodate(folio);
@@ -1840,9 +1837,8 @@ static int fuse_notify_store(struct fuse_conn *fc, unsigned int size,
 		if (err)
 			goto out_iput;
 
+		pos += nr_bytes;
 		num -= nr_bytes;
-		offset = 0;
-		index += nr_pages;
 	}
 
 	err = 0;
@@ -1874,7 +1870,6 @@ static int fuse_retrieve(struct fuse_mount *fm, struct inode *inode,
 {
 	int err;
 	struct address_space *mapping = inode->i_mapping;
-	pgoff_t index;
 	loff_t file_size;
 	unsigned int num;
 	unsigned int offset;
@@ -1885,17 +1880,18 @@ static int fuse_retrieve(struct fuse_mount *fm, struct inode *inode,
 	size_t args_size = sizeof(*ra);
 	struct fuse_args_pages *ap;
 	struct fuse_args *args;
+	loff_t pos = outarg->offset;
 
-	offset = outarg->offset & ~PAGE_MASK;
+	offset = offset_in_page(pos);
 	file_size = i_size_read(inode);
 
 	num = min(outarg->size, fc->max_write);
-	if (outarg->offset > file_size)
+	if (pos > file_size)
 		num = 0;
-	else if (outarg->offset + num > file_size)
-		num = file_size - outarg->offset;
+	else if (num > file_size - pos)
+		num = file_size - pos;
 
-	num_pages = (num + offset + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	num_pages = DIV_ROUND_UP(num + offset, PAGE_SIZE);
 	num_pages = min(num_pages, fc->max_pages);
 	num = min(num, num_pages << PAGE_SHIFT);
 
@@ -1916,13 +1912,11 @@ static int fuse_retrieve(struct fuse_mount *fm, struct inode *inode,
 	args->in_pages = true;
 	args->end = fuse_retrieve_end;
 
-	index = outarg->offset >> PAGE_SHIFT;
-
 	while (num && ap->num_folios < num_pages) {
 		struct folio *folio;
 		unsigned int folio_offset;
 		unsigned int nr_bytes;
-		unsigned int nr_pages;
+		pgoff_t index = pos >> PAGE_SHIFT;
 
 		folio = filemap_get_folio(mapping, index);
 		if (IS_ERR(folio))
@@ -1932,19 +1926,17 @@ static int fuse_retrieve(struct fuse_mount *fm, struct inode *inode,
 			break;
 		}
 
-		folio_offset = ((index - folio->index) << PAGE_SHIFT) + offset;
+		folio_offset = offset_in_folio(folio, pos);
 		nr_bytes = min(folio_size(folio) - folio_offset, num);
-		nr_pages = (offset + nr_bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
 		ap->folios[ap->num_folios] = folio;
 		ap->descs[ap->num_folios].offset = folio_offset;
 		ap->descs[ap->num_folios].length = nr_bytes;
 		ap->num_folios++;
 
-		offset = 0;
+		pos += nr_bytes;
 		num -= nr_bytes;
 		total_len += nr_bytes;
-		index += nr_pages;
 	}
 	ra->inarg.offset = outarg->offset;
 	ra->inarg.size = total_len;
@@ -1977,6 +1969,9 @@ static int fuse_notify_retrieve(struct fuse_conn *fc, unsigned int size,
 		return err;
 
 	fuse_copy_finish(cs);
+
+	if (outarg.offset >= MAX_LFS_FILESIZE)
+		return -EINVAL;
 
 	down_read(&fc->killsb);
 	err = -ENOENT;
@@ -2047,6 +2042,14 @@ static void fuse_resend(struct fuse_conn *fc)
 		fuse_dev_end_requests(&to_queue);
 		return;
 	}
+	/*
+	 * Remove interrupt entries for resent requests to prevent stale
+	 * intr_entry on fiq->interrupts after the request is re-queued.
+	 */
+	list_for_each_entry(req, &to_queue, list) {
+		if (test_bit(FR_INTERRUPTED, &req->flags))
+			list_del_init(&req->intr_entry);
+	}
 	/* iq and pq requests are both oldest to newest */
 	list_splice(&to_queue, &fiq->pending);
 	fuse_dev_wake_and_unlock(fiq);
@@ -2091,7 +2094,7 @@ static int fuse_notify_prune(struct fuse_conn *fc, unsigned int size,
 	if (err)
 		return err;
 
-	if (size - sizeof(outarg) != outarg.count * sizeof(u64))
+	if (size - sizeof(outarg) != array_size(outarg.count, sizeof(u64)))
 		return -EINVAL;
 
 	for (; outarg.count; outarg.count -= num) {
@@ -2111,6 +2114,13 @@ static int fuse_notify_prune(struct fuse_conn *fc, unsigned int size,
 static int fuse_notify(struct fuse_conn *fc, enum fuse_notify_code code,
 		       unsigned int size, struct fuse_copy_state *cs)
 {
+	/*
+	 * Only allow notifications during while the connection is in an
+	 * initialized and connected state
+	 */
+	if (!fc->initialized || !fc->connected)
+		return -EINVAL;
+
 	/* Don't try to move folios (yet) */
 	cs->move_folios = false;
 
@@ -2553,13 +2563,15 @@ void fuse_wait_aborted(struct fuse_conn *fc)
 
 int fuse_dev_release(struct inode *inode, struct file *file)
 {
-	struct fuse_dev *fud = __fuse_get_dev(file);
+	struct fuse_dev *fud = fuse_file_to_fud(file);
+	/* Pairs with cmpxchg() in fuse_dev_install() */
+	struct fuse_conn *fc = xchg(&fud->fc, FUSE_DEV_FC_DISCONNECTED);
 
-	if (fud) {
-		struct fuse_conn *fc = fud->fc;
+	if (fc) {
 		struct fuse_pqueue *fpq = &fud->pq;
 		LIST_HEAD(to_end);
 		unsigned int i;
+		bool last;
 
 		spin_lock(&fpq->lock);
 		WARN_ON(!list_empty(&fpq->io));
@@ -2569,13 +2581,19 @@ int fuse_dev_release(struct inode *inode, struct file *file)
 
 		fuse_dev_end_requests(&to_end);
 
+		spin_lock(&fc->lock);
+		list_del(&fud->entry);
 		/* Are we the last open device? */
-		if (atomic_dec_and_test(&fc->dev_count)) {
+		last = list_empty(&fc->devices);
+		spin_unlock(&fc->lock);
+
+		if (last) {
 			WARN_ON(fc->iq.fasync != NULL);
 			fuse_abort_conn(fc);
 		}
-		fuse_dev_free(fud);
+		fuse_conn_put(fc);
 	}
+	fuse_dev_put(fud);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(fuse_dev_release);
@@ -2591,27 +2609,10 @@ static int fuse_dev_fasync(int fd, struct file *file, int on)
 	return fasync_helper(fd, file, on, &fud->fc->iq.fasync);
 }
 
-static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
-{
-	struct fuse_dev *fud;
-
-	if (__fuse_get_dev(new))
-		return -EINVAL;
-
-	fud = fuse_dev_alloc_install(fc);
-	if (!fud)
-		return -ENOMEM;
-
-	new->private_data = fud;
-	atomic_inc(&fc->dev_count);
-
-	return 0;
-}
-
 static long fuse_dev_ioctl_clone(struct file *file, __u32 __user *argp)
 {
 	int oldfd;
-	struct fuse_dev *fud;
+	struct fuse_dev *fud, *new_fud;
 
 	if (get_user(oldfd, argp))
 		return -EFAULT;
@@ -2631,8 +2632,13 @@ static long fuse_dev_ioctl_clone(struct file *file, __u32 __user *argp)
 	if (IS_ERR(fud))
 		return PTR_ERR(fud);
 
-	guard(mutex)(&fuse_mutex);
-	return fuse_device_clone(fud->fc, file);
+	new_fud = fuse_file_to_fud(file);
+	if (fuse_dev_fc_get(new_fud))
+		return -EINVAL;
+
+	fuse_dev_install(new_fud, fud->fc);
+
+	return 0;
 }
 
 static long fuse_dev_ioctl_backing_open(struct file *file,
@@ -2673,10 +2679,11 @@ static long fuse_dev_ioctl_backing_close(struct file *file, __u32 __user *argp)
 static long fuse_dev_ioctl_sync_init(struct file *file)
 {
 	int err = -EINVAL;
+	struct fuse_dev *fud = fuse_file_to_fud(file);
 
 	mutex_lock(&fuse_mutex);
-	if (!__fuse_get_dev(file)) {
-		WRITE_ONCE(file->private_data, FUSE_DEV_SYNC_INIT);
+	if (!fuse_dev_fc_get(fud)) {
+		fud->sync_init = true;
 		err = 0;
 	}
 	mutex_unlock(&fuse_mutex);

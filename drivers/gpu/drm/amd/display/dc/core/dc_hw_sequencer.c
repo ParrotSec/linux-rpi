@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Advanced Micro Devices, Inc.
+ * Copyright 2015-2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -40,7 +40,6 @@
 #include "dcn10/dcn10_hubbub.h"
 #include "dce/dmub_hw_lock_mgr.h"
 
-#define NUM_ELEMENTS(a) (sizeof(a) / sizeof((a)[0]))
 #define MAX_NUM_MCACHE 8
 
 /* used as index in array of black_color_format */
@@ -58,7 +57,8 @@ enum dc_color_space_type {
 	COLOR_SPACE_RGB_LIMITED_TYPE,
 	COLOR_SPACE_YCBCR601_TYPE,
 	COLOR_SPACE_YCBCR709_TYPE,
-	COLOR_SPACE_YCBCR2020_TYPE,
+	COLOR_SPACE_YCBCR2020_LIMITED_TYPE,
+	COLOR_SPACE_YCBCR2020_FULL_TYPE,
 	COLOR_SPACE_YCBCR601_LIMITED_TYPE,
 	COLOR_SPACE_YCBCR709_LIMITED_TYPE,
 	COLOR_SPACE_YCBCR709_BLACK_TYPE,
@@ -110,9 +110,15 @@ static const struct out_csc_color_matrix_type output_csc_matrix[] = {
 		{ 0xE00, 0xF349, 0xFEB7, 0x1000,
 		  0x6CE, 0x16E3, 0x24F,  0x200,
 		  0xFCCB, 0xF535, 0xE00, 0x1000} },
-	{ COLOR_SPACE_YCBCR2020_TYPE,
+	/* Corrected. Not included in the TODO above. */
+	{ COLOR_SPACE_YCBCR2020_LIMITED_TYPE,
+		{ 0x0E04, 0xF31D, 0xFEDF, 0x1004,
+		  0x0733, 0x1294, 0x01A0, 0x0201,
+		  0xFC16, 0xF5E6, 0x0E04, 0x1004} },
+	/* Corrected. Not included in the TODO above. */
+	{ COLOR_SPACE_YCBCR2020_FULL_TYPE,
 		{ 0x1000, 0xF149, 0xFEB7, 0x1004,
-		  0x0868, 0x15B2, 0x01E6, 0x201,
+		  0x0868, 0x15B2, 0x01E6, 0,
 		  0xFB88, 0xF478, 0x1000, 0x1004} },
 	{ COLOR_SPACE_YCBCR709_BLACK_TYPE,
 		{ 0x0000, 0x0000, 0x0000, 0x1000,
@@ -179,14 +185,14 @@ static bool is_ycbcr709_type(
 	return ret;
 }
 
-static bool is_ycbcr2020_type(
-	enum dc_color_space color_space)
+static bool is_ycbcr2020_limited_type(enum dc_color_space color_space)
 {
-	bool ret = false;
+	return color_space == COLOR_SPACE_2020_YCBCR_LIMITED;
+}
 
-	if (color_space == COLOR_SPACE_2020_YCBCR_LIMITED || color_space == COLOR_SPACE_2020_YCBCR_FULL)
-		ret = true;
-	return ret;
+static bool is_ycbcr2020_full_type(enum dc_color_space color_space)
+{
+	return color_space == COLOR_SPACE_2020_YCBCR_FULL;
 }
 
 static bool is_ycbcr709_limited_type(
@@ -215,8 +221,10 @@ static enum dc_color_space_type get_color_space_type(enum dc_color_space color_s
 		type = COLOR_SPACE_YCBCR601_LIMITED_TYPE;
 	else if (is_ycbcr709_limited_type(color_space))
 		type = COLOR_SPACE_YCBCR709_LIMITED_TYPE;
-	else if (is_ycbcr2020_type(color_space))
-		type = COLOR_SPACE_YCBCR2020_TYPE;
+	else if (is_ycbcr2020_limited_type(color_space))
+		type = COLOR_SPACE_YCBCR2020_LIMITED_TYPE;
+	else if (is_ycbcr2020_full_type(color_space))
+		type = COLOR_SPACE_YCBCR2020_FULL_TYPE;
 	else if (color_space == COLOR_SPACE_YCBCR709)
 		type = COLOR_SPACE_YCBCR709_BLACK_TYPE;
 	else if (color_space == COLOR_SPACE_YCBCR709_BLACK)
@@ -230,7 +238,7 @@ const uint16_t *find_color_matrix(enum dc_color_space color_space,
 	int i;
 	enum dc_color_space_type type;
 	const uint16_t *val = NULL;
-	int arr_size = NUM_ELEMENTS(output_csc_matrix);
+	int arr_size = ARRAY_SIZE(output_csc_matrix);
 
 	type = get_color_space_type(color_space);
 	for (i = 0; i < arr_size; i++)
@@ -249,6 +257,7 @@ void color_space_to_black_color(
 	enum dc_color_space colorspace,
 	struct tg_color *black_color)
 {
+	(void)dc;
 	switch (colorspace) {
 	case COLOR_SPACE_YCBCR601:
 	case COLOR_SPACE_YCBCR709:
@@ -846,6 +855,16 @@ void hwss_build_fast_sequence(struct dc *dc,
 					block_sequence[*num_steps].func = DPP_PROGRAM_BIAS_AND_SCALE;
 					(*num_steps)++;
 				}
+				if (current_mpc_pipe->plane_state->update_flags.bits.cm_hist_change) {
+					block_sequence[*num_steps].params.control_cm_hist_params.dpp
+						= current_mpc_pipe->plane_res.dpp;
+					block_sequence[*num_steps].params.control_cm_hist_params.cm_hist_control
+						= current_mpc_pipe->plane_state->cm_hist_control;
+					block_sequence[*num_steps].params.control_cm_hist_params.color_space
+						= current_mpc_pipe->plane_state->color_space;
+					block_sequence[*num_steps].func = DPP_PROGRAM_CM_HIST;
+					(*num_steps)++;
+				}
 			}
 			if (hws->funcs.set_output_transfer_func && current_mpc_pipe->stream->update_flags.bits.out_tf) {
 				block_sequence[*num_steps].params.set_output_transfer_func_params.dc = dc;
@@ -1028,6 +1047,9 @@ void hwss_execute_sequence(struct dc *dc,
 			break;
 		case HUBP_PROGRAM_MCACHE_ID:
 			hwss_program_mcache_id_and_split_coordinate(params);
+			break;
+		case DPP_PROGRAM_CM_HIST:
+			hwss_program_cm_hist(params);
 			break;
 		case PROGRAM_CURSOR_UPDATE_NOW:
 			dc->hwss.program_cursor_offload_now(
@@ -2052,6 +2074,16 @@ void hwss_program_mcache_id_and_split_coordinate(union block_sequence_params *pa
 
 	hubp->funcs->hubp_program_mcache_id_and_split_coordinate(hubp, mcache_regs);
 
+}
+
+void hwss_program_cm_hist(union block_sequence_params *params)
+{
+	struct dpp *dpp = params->control_cm_hist_params.dpp;
+
+	if (dpp && dpp->funcs->dpp_cm_hist_control)
+		dpp->funcs->dpp_cm_hist_control(dpp,
+			params->control_cm_hist_params.cm_hist_control,
+			params->control_cm_hist_params.color_space);
 }
 
 void get_surface_tile_visual_confirm_color(
@@ -3370,6 +3402,20 @@ void hwss_add_opp_program_bit_depth_reduction(struct block_sequence_state *seq_s
 	}
 }
 
+void hwss_add_dpp_program_cm_hist(struct block_sequence_state *seq_state,
+		struct dpp *dpp,
+		struct cm_hist_control cm_hist_control,
+		enum dc_color_space color_space)
+{
+	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
+		seq_state->steps[*seq_state->num_steps].func = DPP_PROGRAM_CM_HIST;
+		seq_state->steps[*seq_state->num_steps].params.control_cm_hist_params.dpp = dpp;
+		seq_state->steps[*seq_state->num_steps].params.control_cm_hist_params.cm_hist_control = cm_hist_control;
+		seq_state->steps[*seq_state->num_steps].params.control_cm_hist_params.color_space = color_space;
+		(*seq_state->num_steps)++;
+	}
+}
+
 void hwss_add_dc_ip_request_cntl(struct block_sequence_state *seq_state,
 		struct dc *dc,
 		bool enable)
@@ -4069,5 +4115,26 @@ void hwss_add_tg_get_frame_count(struct block_sequence_state *seq_state,
 		seq_state->steps[*seq_state->num_steps].params.tg_get_frame_count_params.tg = tg;
 		seq_state->steps[*seq_state->num_steps].params.tg_get_frame_count_params.frame_count = frame_count;
 		(*seq_state->num_steps)++;
+	}
+}
+
+
+void get_refresh_rate_confirm_color(struct pipe_ctx *pipe_ctx, struct tg_color *color)
+{
+	uint32_t color_value = MAX_TG_COLOR_VALUE;
+	unsigned int refresh_rate = 0;
+	uint32_t scaling_factor = 0;
+	if (pipe_ctx && pipe_ctx->stream && color) {
+		refresh_rate = (pipe_ctx->stream->timing.pix_clk_100hz * 100) / (pipe_ctx->stream->adjust.v_total_max * pipe_ctx->stream->timing.h_total);
+
+		uint32_t min_refresh_rate = pipe_ctx->stream->timing.min_refresh_in_uhz / 1000000;
+		uint32_t max_refresh_rate = pipe_ctx->stream->timing.max_refresh_in_uhz / 1000000;
+
+		if (max_refresh_rate - min_refresh_rate)
+			scaling_factor = MAX_TG_COLOR_VALUE * (refresh_rate - min_refresh_rate) / (max_refresh_rate - min_refresh_rate);
+
+		pipe_ctx->visual_confirm_color.color_r_cr = color_value;
+		pipe_ctx->visual_confirm_color.color_g_y = scaling_factor;
+		pipe_ctx->visual_confirm_color.color_b_cb = color_value;
 	}
 }

@@ -16,7 +16,7 @@ static void eiointc_set_sw_coreisr(struct loongarch_eiointc *s)
 		ipnum = (s->ipmap >> (irq / 32 * 8)) & 0xff;
 		if (!(s->status & BIT(EIOINTC_ENABLE_INT_ENCODE))) {
 			ipnum = count_trailing_zeros(ipnum);
-			ipnum = (ipnum >= 0 && ipnum < 4) ? ipnum : 0;
+			ipnum = ipnum < 4 ? ipnum : 0;
 		}
 
 		cpuid = ((u8 *)s->coremap)[irq];
@@ -41,7 +41,7 @@ static void eiointc_update_irq(struct loongarch_eiointc *s, int irq, int level)
 	ipnum = (s->ipmap >> (irq / 32 * 8)) & 0xff;
 	if (!(s->status & BIT(EIOINTC_ENABLE_INT_ENCODE))) {
 		ipnum = count_trailing_zeros(ipnum);
-		ipnum = (ipnum >= 0 && ipnum < 4) ? ipnum : 0;
+		ipnum = ipnum < 4 ? ipnum : 0;
 	}
 
 	cpu = s->sw_coremap[irq];
@@ -645,10 +645,14 @@ static int kvm_eiointc_create(struct kvm_device *dev, u32 type)
 
 	device = &s->device_vext;
 	kvm_iodevice_init(device, &kvm_eiointc_virt_ops);
+	mutex_lock(&kvm->slots_lock);
 	ret = kvm_io_bus_register_dev(kvm, KVM_IOCSR_BUS,
 			EIOINTC_VIRT_BASE, EIOINTC_VIRT_SIZE, device);
+	mutex_unlock(&kvm->slots_lock);
 	if (ret < 0) {
+		mutex_lock(&kvm->slots_lock);
 		kvm_io_bus_unregister_dev(kvm, KVM_IOCSR_BUS, &s->device);
+		mutex_unlock(&kvm->slots_lock);
 		kfree(s);
 		return ret;
 	}
@@ -667,8 +671,10 @@ static void kvm_eiointc_destroy(struct kvm_device *dev)
 
 	kvm = dev->kvm;
 	eiointc = kvm->arch.eiointc;
+	mutex_lock(&kvm->slots_lock);
 	kvm_io_bus_unregister_dev(kvm, KVM_IOCSR_BUS, &eiointc->device);
 	kvm_io_bus_unregister_dev(kvm, KVM_IOCSR_BUS, &eiointc->device_vext);
+	mutex_unlock(&kvm->slots_lock);
 	kfree(eiointc);
 	kfree(dev);
 }

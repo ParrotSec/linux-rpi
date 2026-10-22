@@ -347,7 +347,7 @@ int rtw_generate_ie(struct registry_priv *pregistrypriv)
 
 	/* HT Cap. */
 	if ((pregistrypriv->wireless_mode & WIRELESS_11_24N) &&
-	    (pregistrypriv->ht_enable == true)) {
+	    pregistrypriv->ht_enable) {
 		/* todo: */
 	}
 
@@ -601,7 +601,6 @@ int rtw_get_wapi_ie(u8 *in_ie, uint in_len, u8 *wapi_ie, u16 *wapi_len)
 
 			if (wapi_len)
 				*wapi_len = in_ie[cnt + 1] + 2;
-
 		}
 
 		cnt += in_ie[cnt + 1] + 2;   /* get next */
@@ -737,6 +736,10 @@ u8 *rtw_get_wps_attr(u8 *wps_ie, uint wps_ielen, u16 target_attr_id, u8 *buf_att
 		u16 attr_id = get_unaligned_be16(attr_ptr);
 		u16 attr_data_len = get_unaligned_be16(attr_ptr + 2);
 		u16 attr_len = attr_data_len + 4;
+
+		/* Reject attributes whose claimed length runs past the IE */
+		if (attr_ptr + attr_len > wps_ie + wps_ielen)
+			break;
 
 		if (attr_id == target_attr_id) {
 			target_attr_ptr = attr_ptr;
@@ -1145,6 +1148,9 @@ int rtw_action_frame_parse(const u8 *frame, u32 frame_len, u8 *category, u8 *act
 	u16 fc;
 	u8 c;
 	u8 a = ACT_PUBLIC_MAX;
+
+	if (frame_len < sizeof(struct ieee80211_hdr_3addr) + 2)
+		return false;
 
 	fc = le16_to_cpu(((struct ieee80211_hdr_3addr *)frame)->frame_control);
 

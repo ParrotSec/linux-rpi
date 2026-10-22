@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <linux/bitops.h>
+#include <string.h>
 #include "build-id.h"
 #include "debuginfo.h"
 #include "mutex.h"
@@ -20,6 +21,40 @@ struct perf_env;
 
 #define DSO__NAME_KALLSYMS	"[kernel.kallsyms]"
 #define DSO__NAME_KCORE		"[kernel.kcore]"
+#define DSO__NAME_GUEST_KALLSYMS		"[guest.kernel.kallsyms]"
+#define DSO__NAME_GUEST_KALLSYMS_PID_PREFIX	"[guest.kernel.kallsyms."
+
+/*
+ * Validate names of the form "[guest.kernel.kallsyms.<pid>]", where
+ * <pid> is the PID of the guest VM and varies per guest, so it
+ * cannot be matched with strcmp() against a fixed string.
+ *
+ * Every character after the fixed prefix must be a decimal digit,
+ * with ']' immediately terminating the digit run and nothing
+ * following it. This rules out '/', "..", or any other character
+ * being smuggled into the name.
+ */
+static inline bool is_guest_kallsyms_pid_name(const char *name)
+{
+	const size_t prefix_len = sizeof(DSO__NAME_GUEST_KALLSYMS_PID_PREFIX) - 1;
+	size_t digits;
+
+	if (strncmp(name, DSO__NAME_GUEST_KALLSYMS_PID_PREFIX, prefix_len) != 0)
+		return false;
+
+	digits = strspn(name + prefix_len, "0123456789");
+	if (digits == 0)
+		return false;
+
+	/* ']' must terminate the digit run, with nothing trailing it */
+	if (name[prefix_len + digits] != ']')
+		return false;
+
+	if (name[prefix_len + digits + 1] != '\0')
+		return false;
+
+	return true;
+}
 
 /**
  * enum dso_binary_type - The kind of DSO generally associated with a memory
@@ -866,8 +901,18 @@ int dso__data_file_size(struct dso *dso, struct machine *machine);
 off_t dso__data_size(struct dso *dso, struct machine *machine);
 ssize_t dso__data_read_offset(struct dso *dso, struct machine *machine,
 			      u64 offset, u8 *data, ssize_t size);
-uint16_t dso__read_e_machine(struct dso *optional_dso, int fd, uint32_t *e_flags);
-uint16_t dso__e_machine(struct dso *dso, struct machine *machine, uint32_t *e_flags);
+uint16_t dso__read_e_machine_endian(struct dso *optional_dso, int fd, uint32_t *e_flags,
+				    bool *is_big_endian);
+static inline uint16_t dso__read_e_machine(struct dso *optional_dso, int fd, uint32_t *e_flags)
+{
+	return dso__read_e_machine_endian(optional_dso, fd, e_flags, NULL);
+}
+uint16_t dso__e_machine_endian(struct dso *dso, struct machine *machine, uint32_t *e_flags,
+			       bool *is_big_endian);
+static inline uint16_t dso__e_machine(struct dso *dso, struct machine *machine, uint32_t *e_flags)
+{
+	return dso__e_machine_endian(dso, machine, e_flags, NULL);
+}
 ssize_t dso__data_read_addr(struct dso *dso, struct map *map,
 			    struct machine *machine, u64 addr,
 			    u8 *data, ssize_t size);
@@ -914,8 +959,28 @@ static inline bool dso__is_kcore(const struct dso *dso)
 static inline bool dso__is_kallsyms(const struct dso *dso)
 {
 	enum dso_binary_type bt = dso__binary_type(dso);
+	const char *name;
 
-	return bt == DSO_BINARY_TYPE__KALLSYMS || bt == DSO_BINARY_TYPE__GUEST_KALLSYMS;
+	if (bt == DSO_BINARY_TYPE__KALLSYMS || bt == DSO_BINARY_TYPE__GUEST_KALLSYMS)
+		return true;
+
+	if (bt != DSO_BINARY_TYPE__NOT_FOUND)
+		return false;
+
+	if (!dso__kernel(dso))
+		return false;
+
+	name = dso__long_name(dso);
+	if (!name)
+		return false;
+
+	if (!strcmp(name, DSO__NAME_KALLSYMS))
+		return true;
+
+	if (!strcmp(name, DSO__NAME_GUEST_KALLSYMS))
+		return true;
+
+	return is_guest_kallsyms_pid_name(name);
 }
 
 bool dso__is_object_file(const struct dso *dso);

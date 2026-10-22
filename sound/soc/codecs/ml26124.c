@@ -224,7 +224,6 @@ static const struct reg_default ml26124_reg[] = {
 	/* Analog Path Control Register */
 	{0x54, 0x00},	/* Speaker AMP Output Control */
 	{0x5a, 0x00},	/* Mic IF Control */
-	{0xe8, 0x01},	/* Mic Select Control */
 
 	/* Audio Interface Control Register */
 	{0x60, 0x00},	/* SAI-Trans Control */
@@ -287,6 +286,9 @@ static const struct reg_default ml26124_reg[] = {
 	{0xd0, 0x01},	/* VIDEO AMP Gain Control */
 	{0xd2, 0x01},	/* VIDEO AMP Setup 1 */
 	{0xd4, 0x01},	/* VIDEO AMP Control2 */
+
+	/* Analog Path Control Register */
+	{0xe8, 0x01},	/* Mic Select Control */
 };
 
 /* Get sampling rate value of sampling rate setting register (0x0) */
@@ -573,7 +575,7 @@ static int ml26124_i2c_probe(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id ml26124_i2c_id[] = {
-	{ "ml26124" },
+	{ .name = "ml26124" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ml26124_i2c_id);

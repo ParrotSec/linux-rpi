@@ -7,11 +7,11 @@
 #include <linux/mfd/rohm-bd71828.h>
 #include <linux/mfd/rohm-bd72720.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/power_supply.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
 
 /* common defines */
 #define BD7182x_MASK_VBAT_U			0x1f
@@ -25,6 +25,7 @@
 #define BD71815_MASK_CONF_XSTB			BIT(1)
 #define BD7182x_MASK_BAT_STAT			0x3f
 #define BD7182x_MASK_ILIM			0x3f
+#define BD71828_MASK_ILIM_DCIN_EN		BIT(6)
 #define BD7182x_MASK_DCIN_STAT			0x07
 
 #define BD7182x_MASK_WDT_AUTO			0x40
@@ -190,12 +191,13 @@ static int bd71828_get_current_ds_adc(struct bd71828_power *pwr, int *curr, int 
 {
 	__be16 tmp_curr;
 	char *tmp = (char *)&tmp_curr;
-	int dir = 1;
 	int regs[] = { pwr->regs->ibat, pwr->regs->ibat_avg };
 	int *vals[] = { curr, curr_avg };
 	int ret, i;
 
-	for (dir = 1, i = 0; i < ARRAY_SIZE(regs); i++) {
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		int dir = 1;
+
 		ret = regmap_bulk_read(pwr->regmap, regs[i], &tmp_curr,
 				       sizeof(tmp_curr));
 		if (ret)
@@ -223,12 +225,12 @@ static int bd71815_get_temp(struct bd71828_power *pwr, int *temp)
 	if (ret)
 		return ret;
 
-	t = 200 - t;
-
 	if (t > 200) {
 		dev_err(pwr->dev, "Failed to read battery temperature\n");
 		return -ENODATA;
 	}
+
+	*temp = 200 - t;
 
 	return 0;
 }
@@ -453,8 +455,10 @@ static int bd71828_charger_get_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
 		ret = get_chg_online(pwr, &online);
-		if (!ret)
-			val->intval = online;
+		if (ret)
+			return ret;
+
+		val->intval = online;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		ret = bd7182x_read16_himask(pwr, pwr->regs->vdcin,
@@ -637,7 +641,6 @@ static const enum power_supply_property bd71828_charger_props[] = {
 
 static const enum power_supply_property bd71828_battery_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
-	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_PRESENT,
@@ -1099,10 +1102,75 @@ static int bd7182x_get_rsens(struct bd71828_power *pwr)
 	return 0;
 }
 
+static ssize_t auto_dcin_limit_show(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
+{
+	struct bd71828_power *pwr = dev_get_drvdata(dev->parent);
+	int ret;
+	unsigned int v;
+
+	ret = regmap_read(pwr->regmap, pwr->regs->dcin_set, &v);
+	if (ret)
+		return ret;
+
+	return sysfs_emit(buf, "%d\n", !!(v & BD71828_MASK_ILIM_DCIN_EN));
+}
+
+static ssize_t auto_dcin_limit_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t len)
+{
+	struct bd71828_power *pwr = dev_get_drvdata(dev->parent);
+	int ret;
+	bool v;
+
+	ret = kstrtobool(buf, &v);
+	if (ret < 0)
+		return ret;
+
+	ret = regmap_update_bits(pwr->regmap, BD71828_REG_DCIN_SET,
+				 BD71828_MASK_ILIM_DCIN_EN,
+				 v ? BD71828_MASK_ILIM_DCIN_EN : 0);
+	if (ret < 0)
+		return ret;
+
+	return len;
+}
+
+static DEVICE_ATTR_RW(auto_dcin_limit);
+
+static struct attribute *bd71828_ac_sysfs_attrs[] = {
+	&dev_attr_auto_dcin_limit.attr,
+	NULL,
+};
+
+static bool bd71828_ac_sysfs_group_visible(struct kobject *kobj)
+{
+	struct device *dev = kobj_to_dev(kobj);
+	struct bd71828_power *pwr = dev_get_drvdata(dev->parent);
+
+	return !!pwr->regs->dcin_set;
+}
+
+DEFINE_SIMPLE_SYSFS_GROUP_VISIBLE(bd71828_ac_sysfs);
+
+static const struct attribute_group bd71828_ac_sysfs_group = {
+	.attrs = bd71828_ac_sysfs_attrs,
+	.is_visible = SYSFS_GROUP_VISIBLE(bd71828_ac_sysfs)
+};
+
+static const struct attribute_group *bd71828_ac_sysfs_groups[] = {
+	&bd71828_ac_sysfs_group,
+	NULL
+};
+
 static int bd71828_power_probe(struct platform_device *pdev)
 {
 	struct bd71828_power *pwr;
-	struct power_supply_config ac_cfg = {};
+	struct power_supply_config ac_cfg = {
+		.attr_grp = bd71828_ac_sysfs_groups,
+	};
 	struct power_supply_config bat_cfg = {};
 	int ret;
 
@@ -1151,7 +1219,9 @@ static int bd71828_power_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, ret, "sense resistor missing\n");
 
 	dev_set_drvdata(&pdev->dev, pwr);
-	bd71828_init_hardware(pwr);
+	ret = bd71828_init_hardware(pwr);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "hardware init failed\n");
 
 	bat_cfg.drv_data	= pwr;
 	bat_cfg.fwnode		= dev_fwnode(&pdev->dev);
@@ -1184,10 +1254,10 @@ static int bd71828_power_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id bd71828_charger_id[] = {
-	{ "bd71815-power", ROHM_CHIP_TYPE_BD71815 },
-	{ "bd71828-power", ROHM_CHIP_TYPE_BD71828 },
-	{ "bd72720-power", ROHM_CHIP_TYPE_BD72720 },
-	{ },
+	{ .name = "bd71815-power", .driver_data = ROHM_CHIP_TYPE_BD71815 },
+	{ .name = "bd71828-power", .driver_data = ROHM_CHIP_TYPE_BD71828 },
+	{ .name = "bd72720-power", .driver_data = ROHM_CHIP_TYPE_BD72720 },
+	{ }
 };
 MODULE_DEVICE_TABLE(platform, bd71828_charger_id);
 

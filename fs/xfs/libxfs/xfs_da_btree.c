@@ -130,7 +130,7 @@ xfs_da_state_reset(
 	state->mp = state->args->dp->i_mount;
 }
 
-static inline int xfs_dabuf_nfsb(struct xfs_mount *mp, int whichfork)
+inline int xfs_dabuf_nfsb(struct xfs_mount *mp, int whichfork)
 {
 	if (whichfork == XFS_DATA_FORK)
 		return mp->m_dir_geo->fsbcount;
@@ -2780,7 +2780,7 @@ invalid_mapping:
 		error = -EFSCORRUPTED;
 		if (xfs_error_level >= XFS_ERRLEVEL_LOW) {
 			xfs_alert(mp, "%s: bno %u inode %llu",
-					__func__, bno, dp->i_ino);
+					__func__, bno, I_INO(dp));
 
 			for (i = 0; i < nirecs; i++) {
 				xfs_alert(mp,

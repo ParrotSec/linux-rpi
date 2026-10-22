@@ -21,6 +21,7 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/vmalloc.h>
+#include <linux/delay.h>
 
 #include <asm/machine.h>
 #include <asm/ccwdev.h>
@@ -1697,8 +1698,10 @@ void dasd_int_handler(struct ccw_device *cdev, unsigned long intparm,
 			return;
 		}
 		if (rq_data_dir(req) == READ) {
-			device->discipline->ese_read(cqr, irb);
-			cqr->status = DASD_CQR_SUCCESS;
+			if (device->discipline->ese_read(cqr, irb))
+				cqr->status = DASD_CQR_ERROR;
+			else
+				cqr->status = DASD_CQR_SUCCESS;
 			cqr->stopclk = now;
 			dasd_device_clear_timer(device);
 			dasd_schedule_device_bh(device);
@@ -2511,6 +2514,13 @@ static inline int _dasd_term_running_cqr(struct dasd_device *device)
 	if (list_empty(&device->ccw_queue))
 		return 0;
 	cqr = list_entry(device->ccw_queue.next, struct dasd_ccw_req, devlist);
+	/*
+	 * Path verification requests must not be terminated. They are critical
+	 * for bringing paths back online. Terminating them would cause rc=-EIO
+	 * because CLEARED requests skip the retry path.
+	 */
+	if (test_bit(DASD_CQR_VERIFY_PATH, &cqr->flags))
+		return -EAGAIN;
 	rc = device->discipline->term_IO(cqr);
 	if (!rc)
 		/*
@@ -2535,7 +2545,11 @@ int dasd_sleep_on_immediatly(struct dasd_ccw_req *cqr)
 		return -EIO;
 	}
 	spin_lock_irq(get_ccwdev_lock(device->cdev));
-	rc = _dasd_term_running_cqr(device);
+	while ((rc = _dasd_term_running_cqr(device)) == -EAGAIN) {
+		spin_unlock_irq(get_ccwdev_lock(device->cdev));
+		msleep(1);
+		spin_lock_irq(get_ccwdev_lock(device->cdev));
+	}
 	if (rc) {
 		spin_unlock_irq(get_ccwdev_lock(device->cdev));
 		return rc;

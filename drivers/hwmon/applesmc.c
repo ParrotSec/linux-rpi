@@ -1249,12 +1249,17 @@ static void applesmc_release_light_sensor(void)
 
 static int applesmc_create_key_backlight(void)
 {
+	int ret;
+
 	if (!smcreg.has_key_backlight)
 		return 0;
 	applesmc_led_wq = create_singlethread_workqueue("applesmc-led");
 	if (!applesmc_led_wq)
 		return -ENOMEM;
-	return led_classdev_register(&pdev->dev, &applesmc_backlight);
+	ret = led_classdev_register(&pdev->dev, &applesmc_backlight);
+	if (ret)
+		destroy_workqueue(applesmc_led_wq);
+	return ret;
 }
 
 static void applesmc_release_key_backlight(void)
@@ -1305,6 +1310,7 @@ static const struct dmi_system_id applesmc_whitelist[] __initconst = {
 	},
 	{ .ident = NULL }
 };
+MODULE_DEVICE_TABLE(dmi, applesmc_whitelist);
 
 static int __init applesmc_init(void)
 {
@@ -1416,4 +1422,3 @@ module_exit(applesmc_exit);
 MODULE_AUTHOR("Nicolas Boichat");
 MODULE_DESCRIPTION("Apple SMC");
 MODULE_LICENSE("GPL v2");
-MODULE_DEVICE_TABLE(dmi, applesmc_whitelist);

@@ -3,10 +3,12 @@
 
 #include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/pm_runtime.h>
 #include <linux/spinlock_types.h>
 #include <linux/workqueue.h>
 
-#include <drm/drm_encoder.h>
+#include <drm/drm_device.h>
+#include <drm/drm_exec.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/gpu_scheduler.h>
@@ -293,12 +295,36 @@ to_v3d_fence(struct dma_fence *fence)
 #define V3D_CORE_READ(core, offset) readl(v3d->core_regs[core] + offset)
 #define V3D_CORE_WRITE(core, offset, val) writel(val, v3d->core_regs[core] + offset)
 
+#define V3D_MAX_JOBS_PER_SUBMISSION 3
+
+/* Per-ioctl submission context */
+struct v3d_submit {
+	struct v3d_dev *v3d;
+
+	struct drm_file *file_priv;
+
+	/* DRM exec context for this submission. */
+	struct drm_exec exec;
+
+	/* Ordered array of jobs forming the submission chain. Jobs are
+	 * appended via v3d_submit_add_job(), then chained and pushed to
+	 * the scheduler by v3d_submit_jobs().
+	 */
+	struct v3d_job *jobs[V3D_MAX_JOBS_PER_SUBMISSION];
+
+	/* Number of jobs currently in @jobs. */
+	u32 job_count;
+};
+
 struct v3d_job {
 	struct drm_sched_job base;
 
 	struct kref refcount;
 
 	struct v3d_dev *v3d;
+
+	/* The queue that the job was submitted on. */
+	enum v3d_queue queue;
 
 	/* This is the array of BOs that were looked up at the start
 	 * of submission.
@@ -330,6 +356,13 @@ struct v3d_job {
 
 	/* Callback for the freeing of the job on refcount going to 0. */
 	void (*free)(struct kref *ref);
+
+	bool has_pm_ref;
+
+	/* Whether the job needs implicit dependencies, i.e. must wait for
+	 * other contexts still writing its BOs.
+	 */
+	bool has_implicit_dep;
 };
 
 struct v3d_bin_job {
@@ -407,6 +440,11 @@ struct v3d_indirect_csd_info {
 	/* Clean cache job associated to the Indirect CSD job */
 	struct v3d_job *clean_job;
 
+	/* Indirect CSD args, stashed by the extension parser and later used
+	 * to create the CSD job from them.
+	 */
+	struct drm_v3d_submit_csd args;
+
 	/* Offset within the BO where the workgroup counts are stored */
 	u32 offset;
 
@@ -422,7 +460,7 @@ struct v3d_indirect_csd_info {
 	struct drm_gem_object *indirect;
 
 	/* Context of the Indirect CSD job */
-	struct ww_acquire_ctx acquire_ctx;
+	struct drm_exec exec;
 };
 
 struct v3d_timestamp_query_info {
@@ -571,8 +609,11 @@ struct dma_fence *v3d_fence_create(struct v3d_dev *v3d, enum v3d_queue q);
 
 /* v3d_gem.c */
 extern bool super_pages;
+void v3d_init_hw_state(struct v3d_dev *v3d);
 int v3d_gem_init(struct drm_device *dev);
 void v3d_gem_destroy(struct drm_device *dev);
+void v3d_idle_axi(struct v3d_dev *v3d, int core);
+void v3d_idle_gca(struct v3d_dev *v3d);
 void v3d_reset_sms(struct v3d_dev *v3d);
 void v3d_reset(struct v3d_dev *v3d);
 void v3d_invalidate_caches(struct v3d_dev *v3d);
@@ -601,6 +642,20 @@ int v3d_mmu_flush_all(struct v3d_dev *v3d);
 int v3d_mmu_set_page_table(struct v3d_dev *v3d);
 void v3d_mmu_insert_ptes(struct v3d_bo *bo);
 void v3d_mmu_remove_ptes(struct v3d_bo *bo);
+
+/* v3d_power.c */
+int v3d_power_suspend(struct device *dev);
+int v3d_power_resume(struct device *dev);
+
+static __always_inline int v3d_pm_runtime_get(struct v3d_dev *v3d)
+{
+	return pm_runtime_resume_and_get(v3d->drm.dev);
+}
+
+static __always_inline int v3d_pm_runtime_put(struct v3d_dev *v3d)
+{
+	return pm_runtime_put_autosuspend(v3d->drm.dev);
+}
 
 /* v3d_sched.c */
 void v3d_timestamp_query_info_free(struct v3d_timestamp_query_info *query_info,

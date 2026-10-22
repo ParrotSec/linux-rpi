@@ -217,6 +217,7 @@ struct sbs_info {
 	u32				flags;
 	int				technology;
 	char				strings[NR_STRING_BUFFERS][I2C_SMBUS_BLOCK_MAX + 1];
+	char				serial[5];
 };
 
 static char *sbs_get_string_buf(struct sbs_info *chip,
@@ -821,18 +822,18 @@ static int sbs_get_battery_capacity(struct i2c_client *client,
 	return 0;
 }
 
-static char sbs_serial[5];
 static int sbs_get_battery_serial_number(struct i2c_client *client,
 	union power_supply_propval *val)
 {
+	struct sbs_info *chip = i2c_get_clientdata(client);
 	int ret;
 
 	ret = sbs_read_word_data(client, sbs_data[REG_SERIAL_NUMBER].addr);
 	if (ret < 0)
 		return ret;
 
-	sprintf(sbs_serial, "%04x", ret);
-	val->strval = sbs_serial;
+	sprintf(chip->serial, "%04x", ret);
+	val->strval = chip->serial;
 
 	return 0;
 }
@@ -1254,10 +1255,10 @@ static SIMPLE_DEV_PM_OPS(sbs_pm_ops, sbs_suspend, NULL);
 #endif
 
 static const struct i2c_device_id sbs_id[] = {
-	{ "bq20z65", SBS_FLAGS_TI_BQ20ZX5 },
-	{ "bq20z75", SBS_FLAGS_TI_BQ20ZX5 },
-	{ "sbs-battery", 0 },
-	{}
+	{ .name = "bq20z65", .driver_data = SBS_FLAGS_TI_BQ20ZX5 },
+	{ .name = "bq20z75", .driver_data = SBS_FLAGS_TI_BQ20ZX5 },
+	{ .name = "sbs-battery", .driver_data = 0 },
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, sbs_id);
 

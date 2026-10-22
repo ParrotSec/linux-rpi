@@ -12,7 +12,6 @@
 #include <linux/errno.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/of.h>
 #include <linux/pm_runtime.h>
 #include <linux/serdev.h>
@@ -273,6 +272,7 @@ static int h5_close(struct hci_uart *hu)
 	if (!hu->serdev)
 		kfree(h5);
 
+	hu->priv = NULL;
 	return 0;
 }
 
@@ -1023,8 +1023,10 @@ static void h5_btrtl_open(struct h5 *h5)
 
 static void h5_btrtl_close(struct h5 *h5)
 {
-	if (!test_bit(H5_WAKEUP_DISABLE, &h5->flags))
+	if (!test_bit(H5_WAKEUP_DISABLE, &h5->flags)) {
+		pm_runtime_dont_use_autosuspend(&h5->hu->serdev->dev);
 		pm_runtime_disable(&h5->hu->serdev->dev);
+	}
 
 	gpiod_set_value_cansleep(h5->device_wake_gpio, 0);
 	gpiod_set_value_cansleep(h5->enable_gpio, 0);

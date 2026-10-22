@@ -114,6 +114,7 @@
 #define REG_VID_CHA_HORIZONTAL_FRONT_PORCH	0x38
 #define REG_VID_CHA_VERTICAL_FRONT_PORCH	0x3a
 #define REG_VID_CHA_TEST_PATTERN		0x3c
+#define  REG_VID_CHA_TEST_PATTERN_EN		BIT(4)
 /* IRQ registers */
 #define REG_IRQ_GLOBAL				0xe0
 #define  REG_IRQ_GLOBAL_IRQ_EN			BIT(0)
@@ -133,6 +134,9 @@
 #define  REG_IRQ_STAT_CHA_LLP_ERR		BIT(3)
 #define  REG_IRQ_STAT_CHA_SOT_BIT_ERR		BIT(2)
 #define  REG_IRQ_STAT_CHA_PLL_UNLOCK		BIT(0)
+
+static bool sn65dsi83_test_pattern;
+module_param_named(test_pattern, sn65dsi83_test_pattern, bool, 0644);
 
 enum sn65dsi83_channel {
 	CHANNEL_A,
@@ -399,7 +403,7 @@ retry:
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
 
-	return 0;
+	return err;
 }
 
 static void sn65dsi83_reset_work(struct work_struct *ws)
@@ -415,11 +419,13 @@ static void sn65dsi83_reset_work(struct work_struct *ws)
 	ret = sn65dsi83_reset_pipe(ctx);
 	if (ret) {
 		dev_err(ctx->dev, "reset pipe failed %pe\n", ERR_PTR(ret));
-		return;
+		goto bridge_exit;
 	}
+
 	if (ctx->irq)
 		enable_irq(ctx->irq);
 
+bridge_exit:
 	drm_bridge_exit(idx);
 }
 
@@ -514,7 +520,7 @@ static void sn65dsi83_release_resources(void *data)
 }
 
 static void sn65dsi83_atomic_pre_enable(struct drm_bridge *bridge,
-					struct drm_atomic_state *state)
+					struct drm_atomic_commit *state)
 {
 	struct sn65dsi83 *ctx = bridge_to_sn65dsi83(bridge);
 	const unsigned int dual_factor = ctx->lvds_dual_link ? 2 : 1;
@@ -523,6 +529,7 @@ static void sn65dsi83_atomic_pre_enable(struct drm_bridge *bridge,
 	const struct drm_display_mode *mode;
 	struct drm_connector *connector;
 	struct drm_crtc *crtc;
+	bool test_pattern = sn65dsi83_test_pattern;
 	bool lvds_format_24bpp;
 	bool lvds_format_jeida;
 	unsigned int pval;
@@ -645,7 +652,11 @@ static void sn65dsi83_atomic_pre_enable(struct drm_bridge *bridge,
 			  REG_LVDS_LANE_CHB_LVDS_TERM : 0));
 	regmap_write(ctx->regmap, REG_LVDS_CM, 0x00);
 
-	le16val = cpu_to_le16(mode->hdisplay);
+	/*
+	 * Active line length needs to be halved for test pattern
+	 * generation in dual LVDS output.
+	 */
+	le16val = cpu_to_le16(mode->hdisplay / (test_pattern ? dual_factor : 1));
 	regmap_bulk_write(ctx->regmap, REG_VID_CHA_ACTIVE_LINE_LENGTH_LOW,
 			  &le16val, 2);
 	le16val = cpu_to_le16(mode->vdisplay);
@@ -668,7 +679,8 @@ static void sn65dsi83_atomic_pre_enable(struct drm_bridge *bridge,
 		     (mode->hsync_start - mode->hdisplay) / dual_factor);
 	regmap_write(ctx->regmap, REG_VID_CHA_VERTICAL_FRONT_PORCH,
 		     mode->vsync_start - mode->vdisplay);
-	regmap_write(ctx->regmap, REG_VID_CHA_TEST_PATTERN, 0x00);
+	regmap_write(ctx->regmap, REG_VID_CHA_TEST_PATTERN,
+		     test_pattern ? REG_VID_CHA_TEST_PATTERN_EN : 0);
 
 	/* Enable PLL */
 	regmap_write(ctx->regmap, REG_RC_PLL_EN, REG_RC_PLL_EN_PLL_EN);
@@ -696,7 +708,7 @@ err_exit:
 }
 
 static void sn65dsi83_atomic_enable(struct drm_bridge *bridge,
-				    struct drm_atomic_state *state)
+				    struct drm_atomic_commit *state)
 {
 	struct sn65dsi83 *ctx = bridge_to_sn65dsi83(bridge);
 	unsigned int pval;
@@ -728,7 +740,7 @@ static void sn65dsi83_atomic_enable(struct drm_bridge *bridge,
 }
 
 static void sn65dsi83_atomic_disable(struct drm_bridge *bridge,
-				     struct drm_atomic_state *state)
+				     struct drm_atomic_commit *state)
 {
 	struct sn65dsi83 *ctx = bridge_to_sn65dsi83(bridge);
 	int idx;

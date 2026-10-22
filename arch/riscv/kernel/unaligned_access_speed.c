@@ -6,7 +6,6 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/jump_label.h>
-#include <linux/kthread.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
 #include <linux/types.h>
@@ -26,8 +25,6 @@ DEFINE_PER_CPU(long, vector_misaligned_access) = RISCV_HWPROBE_MISALIGNED_VECTOR
 
 static long unaligned_scalar_speed_param = RISCV_HWPROBE_MISALIGNED_SCALAR_UNKNOWN;
 static long unaligned_vector_speed_param = RISCV_HWPROBE_MISALIGNED_VECTOR_UNKNOWN;
-
-static cpumask_t fast_misaligned_access;
 
 static u64 __maybe_unused
 measure_cycles(void (*func)(void *dst, const void *src, size_t len),
@@ -131,13 +128,10 @@ static int check_unaligned_access(struct page *page)
 	 * Set the value of fast_misaligned_access of a CPU. These operations
 	 * are atomic to avoid race conditions.
 	 */
-	if (ret) {
+	if (ret)
 		per_cpu(misaligned_access_speed, cpu) = RISCV_HWPROBE_MISALIGNED_SCALAR_FAST;
-		cpumask_set_cpu(cpu, &fast_misaligned_access);
-	} else {
+	else
 		per_cpu(misaligned_access_speed, cpu) = RISCV_HWPROBE_MISALIGNED_SCALAR_SLOW;
-		cpumask_clear_cpu(cpu, &fast_misaligned_access);
-	}
 
 	return 0;
 }
@@ -192,47 +186,22 @@ static void __init check_unaligned_access_speed_all_cpus(void)
 
 DEFINE_STATIC_KEY_FALSE(fast_unaligned_access_speed_key);
 
-static void modify_unaligned_access_branches(cpumask_t *mask, int weight)
+static void modify_unaligned_access_branches(const cpumask_t *mask)
 {
-	if (cpumask_weight(mask) == weight)
+	bool fast = true;
+	int cpu;
+
+	for_each_cpu(cpu, mask) {
+		if (per_cpu(misaligned_access_speed, cpu) != RISCV_HWPROBE_MISALIGNED_SCALAR_FAST) {
+			fast = false;
+			break;
+		}
+	}
+
+	if (fast)
 		static_branch_enable_cpuslocked(&fast_unaligned_access_speed_key);
 	else
 		static_branch_disable_cpuslocked(&fast_unaligned_access_speed_key);
-}
-
-static void set_unaligned_access_static_branches_except_cpu(int cpu)
-{
-	/*
-	 * Same as set_unaligned_access_static_branches, except excludes the
-	 * given CPU from the result. When a CPU is hotplugged into an offline
-	 * state, this function is called before the CPU is set to offline in
-	 * the cpumask, and thus the CPU needs to be explicitly excluded.
-	 */
-
-	cpumask_t fast_except_me;
-
-	cpumask_and(&fast_except_me, &fast_misaligned_access, cpu_online_mask);
-	cpumask_clear_cpu(cpu, &fast_except_me);
-
-	modify_unaligned_access_branches(&fast_except_me, num_online_cpus() - 1);
-}
-
-static void set_unaligned_access_static_branches(void)
-{
-	/*
-	 * This will be called after check_unaligned_access_all_cpus so the
-	 * result of unaligned access speed for all CPUs will be available.
-	 *
-	 * To avoid the number of online cpus changing between reading
-	 * cpu_online_mask and calling num_online_cpus, cpus_read_lock must be
-	 * held before calling this function.
-	 */
-
-	cpumask_t fast_and_online;
-
-	cpumask_and(&fast_and_online, &fast_misaligned_access, cpu_online_mask);
-
-	modify_unaligned_access_branches(&fast_and_online, num_online_cpus());
 }
 
 static int riscv_online_cpu(unsigned int cpu)
@@ -266,14 +235,19 @@ static int riscv_online_cpu(unsigned int cpu)
 #endif
 
 exit:
-	set_unaligned_access_static_branches();
+	modify_unaligned_access_branches(cpu_online_mask);
 
 	return 0;
 }
 
 static int riscv_offline_cpu(unsigned int cpu)
 {
-	set_unaligned_access_static_branches_except_cpu(cpu);
+	cpumask_t mask;
+
+	cpumask_copy(&mask, cpu_online_mask);
+	cpumask_clear_cpu(cpu, &mask);
+
+	modify_unaligned_access_branches(&mask);
 
 	return 0;
 }
@@ -313,18 +287,9 @@ free:
 	__free_pages(page, MISALIGNED_BUFFER_ORDER);
 }
 
-/* Measure unaligned access speed on all CPUs present at boot in parallel. */
-static int vec_check_unaligned_access_speed_all_cpus(void *unused __always_unused)
-{
-	schedule_on_each_cpu(check_vector_unaligned_access);
-	riscv_hwprobe_complete_async_probe();
-
-	return 0;
-}
 #else /* CONFIG_RISCV_PROBE_VECTOR_UNALIGNED_ACCESS */
-static int vec_check_unaligned_access_speed_all_cpus(void *unused __always_unused)
+static void check_vector_unaligned_access(struct work_struct *work __always_unused)
 {
-	return 0;
 }
 #endif
 
@@ -412,12 +377,7 @@ static int __init check_unaligned_access_all_cpus(void)
 			per_cpu(vector_misaligned_access, cpu) = unaligned_vector_speed_param;
 	} else if (!check_vector_unaligned_access_emulated_all_cpus() &&
 		   IS_ENABLED(CONFIG_RISCV_PROBE_VECTOR_UNALIGNED_ACCESS)) {
-		riscv_hwprobe_register_async_probe();
-		if (IS_ERR(kthread_run(vec_check_unaligned_access_speed_all_cpus,
-				       NULL, "vec_check_unaligned_access_speed_all_cpus"))) {
-			pr_warn("Failed to create vec_unalign_check kthread\n");
-			riscv_hwprobe_complete_async_probe();
-		}
+		schedule_on_each_cpu(check_vector_unaligned_access);
 	}
 
 	/*
@@ -430,7 +390,7 @@ static int __init check_unaligned_access_all_cpus(void)
 				  riscv_online_cpu_vec, NULL);
 
 	cpus_read_lock();
-	set_unaligned_access_static_branches();
+	modify_unaligned_access_branches(cpu_online_mask);
 	cpus_read_unlock();
 
 	return 0;

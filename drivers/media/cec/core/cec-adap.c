@@ -965,7 +965,7 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 	 */
 	mutex_unlock(&adap->lock);
 	err = wait_for_completion_killable(&data->c);
-	cancel_delayed_work_sync(&data->work);
+	disable_delayed_work_sync(&data->work);
 	mutex_lock(&adap->lock);
 
 	if (err)
@@ -1098,6 +1098,15 @@ static const u8 cec_msg_size[256] = {
 	[CEC_MSG_REQUEST_CURRENT_LATENCY] = 4 | BCAST,
 	[CEC_MSG_REPORT_CURRENT_LATENCY] = 6 | BCAST,
 	[CEC_MSG_CDC_MESSAGE] = 2 | BCAST,
+	[CEC_MSG_REQUEST_LIP_SUPPORT] = 4 | DIRECTED,
+	[CEC_MSG_REPORT_LIP_SUPPORT] = 6 | DIRECTED,
+	[CEC_MSG_REQUEST_AUDIO_AND_VIDEO_LATENCY] = 6 | DIRECTED,
+	[CEC_MSG_REPORT_AUDIO_AND_VIDEO_LATENCY] = 6 | DIRECTED,
+	[CEC_MSG_REQUEST_AUDIO_LATENCY] = 3 | DIRECTED,
+	[CEC_MSG_REPORT_AUDIO_LATENCY] = 4 | DIRECTED,
+	[CEC_MSG_REQUEST_VIDEO_LATENCY] = 5 | DIRECTED,
+	[CEC_MSG_REPORT_VIDEO_LATENCY] = 4 | DIRECTED,
+	[CEC_MSG_UPDATE_SQID] = 6 | DIRECTED,
 };
 
 /* Called by the CEC adapter if a message is received */
@@ -2210,9 +2219,13 @@ static int cec_receive_notify(struct cec_adapter *adap, struct cec_msg *msg,
 		 * Unprocessed messages are aborted if userspace isn't doing
 		 * any processing either.
 		 */
+		mutex_lock(&adap->lock);
 		if (!is_broadcast && !is_reply && !adap->follower_cnt &&
-		    !adap->cec_follower && msg->msg[1] != CEC_MSG_FEATURE_ABORT)
+		    !adap->cec_follower && msg->msg[1] != CEC_MSG_FEATURE_ABORT) {
+			mutex_unlock(&adap->lock);
 			return cec_feature_abort(adap, msg);
+		}
+		mutex_unlock(&adap->lock);
 		break;
 	}
 
@@ -2225,10 +2238,12 @@ skip_processing:
 	 * Send to the exclusive follower if there is one, otherwise send
 	 * to all followers.
 	 */
+	mutex_lock(&adap->lock);
 	if (adap->cec_follower)
 		cec_queue_msg_fh(adap->cec_follower, msg);
 	else
 		cec_queue_msg_followers(adap, msg);
+	mutex_unlock(&adap->lock);
 	return 0;
 }
 

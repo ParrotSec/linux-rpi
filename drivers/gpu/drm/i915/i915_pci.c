@@ -24,6 +24,7 @@
 
 #include <drm/drm_color_mgmt.h>
 #include <drm/drm_drv.h>
+#include <drm/intel/pci_config.h>
 #include <drm/intel/pciids.h>
 
 #include "display/intel_display_driver.h"
@@ -35,7 +36,6 @@
 #include "i915_drv.h"
 #include "i915_pci.h"
 #include "i915_reg.h"
-#include "intel_pci_config.h"
 
 __diag_push();
 __diag_ignore_all("-Woverride-init", "Allow field initialization overrides for device info");
@@ -957,6 +957,9 @@ static int i915_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct intel_device_info *intel_info =
 		(struct intel_device_info *) ent->driver_data;
 	int err;
+
+	if (!intel_info)
+		return -ENODEV;
 
 	if (intel_info->require_force_probe && !id_forced(pdev->device)) {
 		dev_info(&pdev->dev,

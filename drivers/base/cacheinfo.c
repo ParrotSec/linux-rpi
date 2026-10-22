@@ -17,6 +17,7 @@
 #include <linux/init.h>
 #include <linux/of.h>
 #include <linux/sched.h>
+#include <linux/sched/topology.h>
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/sysfs.h>
@@ -66,6 +67,24 @@ bool last_level_cache_is_valid(unsigned int cpu)
 
 	return (llc->attributes & CACHE_ID) || !!llc->fw_token;
 
+}
+
+/*
+ * Get the cacheinfo of the LLC associated with @cpu.
+ * Derived from update_per_cpu_data_slice_size_cpu().
+ */
+struct cacheinfo *get_cpu_cacheinfo_llc(unsigned int cpu)
+{
+	struct cacheinfo *llc;
+
+	if (!last_level_cache_is_valid(cpu))
+		return NULL;
+
+	llc = per_cpu_cacheinfo_idx(cpu, cache_leaves(cpu) - 1);
+	if (llc->type != CACHE_TYPE_DATA && llc->type != CACHE_TYPE_UNIFIED)
+		return NULL;
+
+	return llc;
 }
 
 bool last_level_cache_is_shared(unsigned int cpu_x, unsigned int cpu_y)
@@ -382,9 +401,14 @@ static int cache_setup_properties(unsigned int cpu)
 	else if (!acpi_disabled)
 		ret = cache_setup_acpi(cpu);
 
-	// Assume there is no cache information available in DT/ACPI from now.
-	if (ret && use_arch_cache_info())
+	/*
+	 * No DT/ACPI cache nodes; fall back to arch-derived topology (e.g.
+	 * arm64 CLIDR_EL1) and clear the error to avoid a spurious warning.
+	 */
+	if (ret && use_arch_cache_info()) {
 		use_arch_info = true;
+		ret = 0;
+	}
 
 	return ret;
 }
@@ -1016,8 +1040,10 @@ static int cacheinfo_cpu_online(unsigned int cpu)
 	rc = cache_add_dev(cpu);
 	if (rc)
 		goto err;
-	if (cpu_map_shared_cache(true, cpu, &cpu_map))
+	if (cpu_map_shared_cache(true, cpu, &cpu_map)) {
 		update_per_cpu_data_slice_size(true, cpu, cpu_map);
+		sched_update_llc_bytes(cpu_map);
+	}
 	return 0;
 err:
 	free_cache_attributes(cpu);
@@ -1034,8 +1060,11 @@ static int cacheinfo_cpu_pre_down(unsigned int cpu)
 		cpu_cache_sysfs_exit(cpu);
 
 	free_cache_attributes(cpu);
-	if (nr_shared > 1)
+	if (nr_shared > 1) {
 		update_per_cpu_data_slice_size(false, cpu, cpu_map);
+		sched_update_llc_bytes(cpu_map);
+	}
+
 	return 0;
 }
 

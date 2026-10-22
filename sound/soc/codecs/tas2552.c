@@ -31,25 +31,25 @@
 
 static const struct reg_default tas2552_reg_defs[] = {
 	{TAS2552_CFG_1, 0x22},
+	{TAS2552_CFG_2, 0xef},
 	{TAS2552_CFG_3, 0x80},
 	{TAS2552_DOUT, 0x00},
-	{TAS2552_OUTPUT_DATA, 0xc0},
-	{TAS2552_PDM_CFG, 0x01},
-	{TAS2552_PGA_GAIN, 0x00},
-	{TAS2552_BOOST_APT_CTRL, 0x0f},
-	{TAS2552_RESERVED_0D, 0xbe},
-	{TAS2552_LIMIT_RATE_HYS, 0x08},
-	{TAS2552_CFG_2, 0xef},
 	{TAS2552_SER_CTRL_1, 0x00},
 	{TAS2552_SER_CTRL_2, 0x00},
+	{TAS2552_OUTPUT_DATA, 0xc0},
 	{TAS2552_PLL_CTRL_1, 0x10},
 	{TAS2552_PLL_CTRL_2, 0x00},
 	{TAS2552_PLL_CTRL_3, 0x00},
 	{TAS2552_BTIP, 0x8f},
 	{TAS2552_BTS_CTRL, 0x80},
+	{TAS2552_RESERVED_0D, 0xbe},
+	{TAS2552_LIMIT_RATE_HYS, 0x08},
 	{TAS2552_LIMIT_RELEASE, 0x04},
 	{TAS2552_LIMIT_INT_COUNT, 0x00},
+	{TAS2552_PDM_CFG, 0x01},
+	{TAS2552_PGA_GAIN, 0x00},
 	{TAS2552_EDGE_RATE_CTRL, 0x40},
+	{TAS2552_BOOST_APT_CTRL, 0x0f},
 	{TAS2552_VBAT_DATA, 0x00},
 };
 
@@ -745,7 +745,7 @@ static void tas2552_i2c_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id tas2552_id[] = {
-	{ "tas2552" },
+	{ .name = "tas2552" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tas2552_id);

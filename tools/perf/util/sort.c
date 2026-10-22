@@ -1,40 +1,45 @@
 // SPDX-License-Identifier: GPL-2.0
+#include "sort.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <regex.h>
 #include <stdlib.h>
+
+#include <elf.h>
+#include <linux/kernel.h>
 #include <linux/mman.h>
+#include <linux/string.h>
 #include <linux/time64.h>
+
+#include <regex.h>
+
+#include "annotate-data.h"
+#include "annotate.h"
+#include "branch.h"
+#include "cacheline.h"
+#include "cgroup.h"
+#include "comm.h"
 #include "debug.h"
 #include "dso.h"
-#include "sort.h"
-#include "hist.h"
-#include "cacheline.h"
-#include "comm.h"
-#include "map.h"
-#include "maps.h"
-#include "symbol.h"
-#include "map_symbol.h"
-#include "branch.h"
-#include "thread.h"
-#include "evsel.h"
+#include "event.h"
 #include "evlist.h"
-#include "srcline.h"
-#include "strlist.h"
-#include "strbuf.h"
+#include "evsel.h"
+#include "hist.h"
+#include "machine.h"
+#include "map.h"
+#include "map_symbol.h"
+#include "maps.h"
 #include "mem-events.h"
 #include "mem-info.h"
-#include "annotate.h"
-#include "annotate-data.h"
-#include "event.h"
-#include "time-utils.h"
-#include "cgroup.h"
-#include "machine.h"
 #include "session.h"
+#include "srcline.h"
+#include "strbuf.h"
+#include "strlist.h"
+#include "symbol.h"
+#include "thread.h"
+#include "time-utils.h"
 #include "trace-event.h"
-#include <linux/kernel.h>
-#include <linux/string.h>
 
 #ifdef HAVE_LIBTRACEEVENT
 #include <event-parse.h>
@@ -464,7 +469,7 @@ int64_t _sort__sym_cmp(struct symbol *sym_l, struct symbol *sym_r)
 	if (sym_l == sym_r)
 		return 0;
 
-	if (sym_l->inlined || sym_r->inlined) {
+	if (symbol__inlined(sym_l) || symbol__inlined(sym_r)) {
 		int ret = strcmp(sym_l->name, sym_r->name);
 
 		if (ret)
@@ -531,7 +536,7 @@ static int _hist_entry__sym_snprintf(struct map_symbol *ms,
 
 	ret += repsep_snprintf(bf + ret, size - ret, "[%c] ", level);
 	if (sym && map) {
-		if (sym->type == STT_OBJECT) {
+		if (symbol__type(sym) == STT_OBJECT) {
 			ret += repsep_snprintf(bf + ret, size - ret, "%s", sym->name);
 			ret += repsep_snprintf(bf + ret, size - ret, "+0x%llx",
 					ip - map__unmap_ip(map, sym->start));
@@ -539,7 +544,7 @@ static int _hist_entry__sym_snprintf(struct map_symbol *ms,
 			ret += repsep_snprintf(bf + ret, size - ret, "%.*s",
 					       width - ret,
 					       sym->name);
-			if (sym->inlined)
+			if (symbol__inlined(sym))
 				ret += repsep_snprintf(bf + ret, size - ret,
 						       " (inlined)");
 		}
@@ -1478,7 +1483,7 @@ static int _hist_entry__addr_snprintf(struct map_symbol *ms,
 
 	ret += repsep_snprintf(bf + ret, size - ret, "[%c] ", level);
 	if (sym && map) {
-		if (sym->type == STT_OBJECT) {
+		if (symbol__type(sym) == STT_OBJECT) {
 			ret += repsep_snprintf(bf + ret, size - ret, "%s", sym->name);
 			ret += repsep_snprintf(bf + ret, size - ret, "+0x%llx",
 					ip - map__unmap_ip(map, sym->start));
@@ -2673,9 +2678,10 @@ struct sort_dimension {
 
 static int arch_support_sort_key(const char *sort_key, struct perf_env *env)
 {
-	const char *arch = perf_env__arch(env);
+	uint16_t e_machine = perf_env__e_machine(env, /*e_eflags=*/NULL);
 
-	if (!strcmp("x86", arch) || !strcmp("powerpc", arch)) {
+	if (e_machine == EM_X86_64 || e_machine == EM_386 || e_machine == EM_PPC64 ||
+	    e_machine == EM_PPC) {
 		if (!strcmp(sort_key, "p_stage_cyc"))
 			return 1;
 		if (!strcmp(sort_key, "local_p_stage_cyc"))
@@ -2686,14 +2692,14 @@ static int arch_support_sort_key(const char *sort_key, struct perf_env *env)
 
 static const char *arch_perf_header_entry(const char *se_header, struct perf_env *env)
 {
-	const char *arch = perf_env__arch(env);
+	uint16_t e_machine = perf_env__e_machine(env, /*e_eflags=*/NULL);
 
-	if (!strcmp("x86", arch)) {
+	if (e_machine == EM_X86_64 || e_machine == EM_386) {
 		if (!strcmp(se_header, "Local Pipeline Stage Cycle"))
 			return "Local Retire Latency";
 		else if (!strcmp(se_header, "Pipeline Stage Cycle"))
 			return "Retire Latency";
-	} else if (!strcmp("powerpc", arch)) {
+	} else if (e_machine == EM_PPC64 || e_machine == EM_PPC) {
 		if (!strcmp(se_header, "Local INSTR Latency"))
 			return "Finish Cyc";
 		else if (!strcmp(se_header, "INSTR Latency"))
@@ -3099,7 +3105,7 @@ static int __sort_dimension__add_hpp_sort(struct sort_dimension *sd,
 	struct hpp_sort_entry *hse = __sort_dimension__alloc_hpp(sd, level);
 
 	if (hse == NULL)
-		return -1;
+		return -ENOMEM;
 
 	perf_hpp_list__register_sort_field(list, &hse->hpp);
 	return 0;
@@ -3112,7 +3118,7 @@ static int __sort_dimension__add_hpp_output(struct sort_dimension *sd,
 	struct hpp_sort_entry *hse = __sort_dimension__alloc_hpp(sd, level);
 
 	if (hse == NULL)
-		return -1;
+		return -ENOMEM;
 
 	perf_hpp_list__column_register(list, &hse->hpp);
 	return 0;
@@ -3481,7 +3487,7 @@ static struct evsel *find_evsel(struct evlist *evlist, char *event_name)
 	if (event_name[0] == '%') {
 		int nr = strtol(event_name+1, NULL, 0);
 
-		if (nr > evlist->core.nr_entries)
+		if (nr > evlist__nr_entries(evlist))
 			return NULL;
 
 		evsel = evlist__first(evlist);
@@ -3736,14 +3742,18 @@ static int __sort_dimension__add(struct sort_dimension *sd,
 				 struct perf_hpp_list *list,
 				 int level)
 {
+	int ret;
+
 	if (sd->taken)
 		return 0;
 
-	if (__sort_dimension__add_hpp_sort(sd, list, level) < 0)
-		return -1;
+	ret = __sort_dimension__add_hpp_sort(sd, list, level);
+	if (ret < 0)
+		return ret;
 
-	if (__sort_dimension__update(sd, list) < 0)
-		return -1;
+	ret = __sort_dimension__update(sd, list);
+	if (ret < 0)
+		return ret;
 
 	sd->taken = 1;
 
@@ -3761,7 +3771,7 @@ static int __hpp_dimension__add(struct hpp_dimension *hd,
 
 	fmt = __hpp_dimension__alloc_hpp(hd, level);
 	if (!fmt)
-		return -1;
+		return -ENOMEM;
 
 	hd->taken = 1;
 	hd->was_taken = 1;
@@ -3773,14 +3783,18 @@ static int __sort_dimension__add_output(struct perf_hpp_list *list,
 					struct sort_dimension *sd,
 					int level)
 {
+	int ret;
+
 	if (sd->taken)
 		return 0;
 
-	if (__sort_dimension__add_hpp_output(sd, list, level) < 0)
-		return -1;
+	ret = __sort_dimension__add_hpp_output(sd, list, level);
+	if (ret < 0)
+		return ret;
 
-	if (__sort_dimension__update(sd, list) < 0)
-		return -1;
+	ret = __sort_dimension__update(sd, list);
+	if (ret < 0)
+		return ret;
 
 	sd->taken = 1;
 	return 0;
@@ -3797,7 +3811,7 @@ static int __hpp_dimension__add_output(struct perf_hpp_list *list,
 
 	fmt = __hpp_dimension__alloc_hpp(hd, level);
 	if (!fmt)
-		return -1;
+		return -ENOMEM;
 
 	hd->taken = 1;
 	perf_hpp_list__column_register(list, fmt);
@@ -3863,8 +3877,7 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 				    strlen(tok)))
 			return -EINVAL;
 
-		__sort_dimension__add(sd, list, level);
-		return 0;
+		return __sort_dimension__add(sd, list, level);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(memory_sort_dimensions); i++) {
@@ -3876,8 +3889,7 @@ int sort_dimension__add(struct perf_hpp_list *list, const char *tok,
 		if (sort__mode != SORT_MODE__MEMORY)
 			return -EINVAL;
 
-		__sort_dimension__add(sd, list, level);
-		return 0;
+		return __sort_dimension__add(sd, list, level);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(hpp_sort_dimensions); i++) {
@@ -3967,15 +3979,25 @@ static int setup_sort_list(struct perf_hpp_list *list, char *str,
 			}
 
 			ret = sort_dimension__add(list, tok, evlist, env, level);
-			if (ret == -EINVAL) {
+			switch (ret) {
+			case 0:
+				break;
+			case -EINVAL:
 				if (!cacheline_size() && !strncasecmp(tok, "dcacheline", strlen(tok)))
 					ui__error("The \"dcacheline\" --sort key needs to know the cacheline size and it couldn't be determined on this system");
 				else
 					ui__error("Invalid --sort key: `%s'", tok);
-				break;
-			} else if (ret == -ESRCH) {
+				goto out;
+			case -ESRCH:
 				ui__error("Unknown --sort key: `%s'", tok);
-				break;
+				goto out;
+			default: {
+				char buf[STRERR_BUFSIZE];
+
+				ui__error("%s for --sort key: `%s'",
+					  str_error_r(-ret, buf, sizeof(buf)), tok);
+				goto out;
+			}
 			}
 			prev_level = level;
 		}
@@ -3983,6 +4005,7 @@ static int setup_sort_list(struct perf_hpp_list *list, char *str,
 		level = next_level;
 	} while (tmp);
 
+out:
 	return ret;
 }
 
@@ -4309,15 +4332,26 @@ static int setup_output_list(struct perf_hpp_list *list, char *str)
 	for (tok = strtok_r(str, ", ", &tmp);
 			tok; tok = strtok_r(NULL, ", ", &tmp)) {
 		ret = output_field_add(list, tok, &level);
-		if (ret == -EINVAL) {
+		switch (ret) {
+		case 0:
+			break;
+		case -EINVAL:
 			ui__error("Invalid --fields key: `%s'", tok);
-			break;
-		} else if (ret == -ESRCH) {
+			goto out;
+		case -ESRCH:
 			ui__error("Unknown --fields key: `%s'", tok);
-			break;
+			goto out;
+		default: {
+			char buf[STRERR_BUFSIZE];
+
+			ui__error("%s for --fields key: `%s'",
+				  str_error_r(-ret, buf, sizeof(buf)), tok);
+			goto out;
+		}
 		}
 	}
 
+out:
 	return ret;
 }
 

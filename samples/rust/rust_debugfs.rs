@@ -117,13 +117,14 @@ kernel::acpi_device_table!(
 
 impl platform::Driver for RustDebugFs {
     type IdInfo = ();
+    type Data<'bound> = Self;
     const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = None;
     const ACPI_ID_TABLE: Option<acpi::IdTable<Self::IdInfo>> = Some(&ACPI_TABLE);
 
-    fn probe(
-        pdev: &platform::Device<Core>,
-        _info: Option<&Self::IdInfo>,
-    ) -> impl PinInit<Self, Error> {
+    fn probe<'bound>(
+        pdev: &'bound platform::Device<Core<'_>>,
+        _info: Option<&'bound Self::IdInfo>,
+    ) -> impl PinInit<Self, Error> + 'bound {
         RustDebugFs::new(pdev).pin_chain(|this| {
             this.counter.store(91, Relaxed);
             {
@@ -146,7 +147,9 @@ impl RustDebugFs {
         dir.read_write_file(c"pair", new_mutex!(Inner { x: 3, y: 10 }))
     }
 
-    fn new(pdev: &platform::Device<Core>) -> impl PinInit<Self, Error> + '_ {
+    fn new<'a, 'b>(
+        pdev: &'a platform::Device<Core<'b>>,
+    ) -> impl PinInit<Self, Error> + use<'a, 'b> {
         let debugfs = Dir::new(c"sample_debugfs");
         let dev = pdev.as_ref();
 

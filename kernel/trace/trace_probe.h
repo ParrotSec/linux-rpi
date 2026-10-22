@@ -238,8 +238,8 @@ struct probe_arg {
 };
 
 struct probe_entry_arg {
-	struct fetch_insn	*code;
 	unsigned int		size;	/* The entry data size */
+	struct fetch_insn	code[] __counted_by(size);
 };
 
 struct trace_uprobe_filter {
@@ -255,6 +255,8 @@ struct trace_probe_event {
 	struct trace_event_call		call;
 	struct list_head 		files;
 	struct list_head		probes;
+	char				**field_strings;
+	int				nr_field_strings;
 	struct trace_uprobe_filter	filter[];
 };
 

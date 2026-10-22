@@ -457,7 +457,6 @@ void neigh_changeaddr(struct neigh_table *tbl, struct net_device *dev)
 	neigh_flush_dev(tbl, dev, false);
 	spin_unlock_bh(&tbl->lock);
 }
-EXPORT_SYMBOL(neigh_changeaddr);
 
 static int __neigh_ifdown(struct neigh_table *tbl, struct net_device *dev,
 			  bool skip_perm)
@@ -484,14 +483,12 @@ int neigh_carrier_down(struct neigh_table *tbl, struct net_device *dev)
 	__neigh_ifdown(tbl, dev, true);
 	return 0;
 }
-EXPORT_SYMBOL(neigh_carrier_down);
 
 int neigh_ifdown(struct neigh_table *tbl, struct net_device *dev)
 {
 	__neigh_ifdown(tbl, dev, false);
 	return 0;
 }
-EXPORT_SYMBOL(neigh_ifdown);
 
 static struct neighbour *neigh_alloc(struct neigh_table *tbl,
 				     struct net_device *dev,
@@ -1652,13 +1649,11 @@ int neigh_connected_output(struct neighbour *neigh, struct sk_buff *skb)
 	}
 	return err;
 }
-EXPORT_SYMBOL(neigh_connected_output);
 
 int neigh_direct_output(struct neighbour *neigh, struct sk_buff *skb)
 {
 	return dev_queue_xmit(skb);
 }
-EXPORT_SYMBOL(neigh_direct_output);
 
 static void neigh_managed_work(struct work_struct *work)
 {
@@ -1880,7 +1875,6 @@ void neigh_table_init(int index, struct neigh_table *tbl)
 
 	rcu_assign_pointer(neigh_tables[index], tbl);
 }
-EXPORT_SYMBOL(neigh_table_init);
 
 /*
  * Only called from ndisc_cleanup(), which means this is dead code
@@ -1914,7 +1908,6 @@ int neigh_table_clear(int index, struct neigh_table *tbl)
 
 	return 0;
 }
-EXPORT_SYMBOL(neigh_table_clear);
 
 static struct neigh_table *neigh_find_table(int family)
 {
@@ -2366,6 +2359,13 @@ static const struct nla_policy nl_neightbl_policy[NDTA_MAX+1] = {
 	[NDTA_PARMS]		= { .type = NLA_NESTED },
 };
 
+#define NTBL_PARM_MS_MAX	(24 * 60 * 60 * MSEC_PER_SEC)
+
+static const struct netlink_range_validation nl_ntbl_parm_ms_range = {
+	.min = 1,
+	.max = NTBL_PARM_MS_MAX,
+};
+
 static const struct nla_policy nl_ntbl_parm_policy[NDTPA_MAX+1] = {
 	[NDTPA_IFINDEX]			= { .type = NLA_U32 },
 	[NDTPA_QUEUE_LEN]		= { .type = NLA_U32 },
@@ -2382,7 +2382,8 @@ static const struct nla_policy nl_ntbl_parm_policy[NDTPA_MAX+1] = {
 	[NDTPA_ANYCAST_DELAY]		= { .type = NLA_U64 },
 	[NDTPA_PROXY_DELAY]		= { .type = NLA_U64 },
 	[NDTPA_LOCKTIME]		= { .type = NLA_U64 },
-	[NDTPA_INTERVAL_PROBE_TIME_MS]	= { .type = NLA_U64, .min = 1 },
+	[NDTPA_INTERVAL_PROBE_TIME_MS]	= NLA_POLICY_FULL_RANGE(NLA_U64,
+								&nl_ntbl_parm_ms_range),
 };
 
 static int neightbl_set(struct sk_buff *skb, struct nlmsghdr *nlh,
@@ -2586,9 +2587,10 @@ static int neightbl_dump_info(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	const struct nlmsghdr *nlh = cb->nlh;
 	struct net *net = sock_net(skb->sk);
+	int default_skip = cb->args[2];
+	int neigh_skip = cb->args[1];
 	int family, tidx, nidx = 0;
 	int tbl_skip = cb->args[0];
-	int neigh_skip = cb->args[1];
 	struct neigh_table *tbl;
 
 	if (cb->strict_check) {
@@ -2612,15 +2614,19 @@ static int neightbl_dump_info(struct sk_buff *skb, struct netlink_callback *cb)
 		if (tidx < tbl_skip || (family && tbl->family != family))
 			continue;
 
-		if (neightbl_fill_info(skb, tbl, NETLINK_CB(cb->skb).portid,
+		if (!default_skip &&
+		    neightbl_fill_info(skb, tbl, NETLINK_CB(cb->skb).portid,
 				       nlh->nlmsg_seq, RTM_NEWNEIGHTBL,
 				       NLM_F_MULTI) < 0)
 			break;
 
-		nidx = 0;
-		p = list_next_entry(&tbl->parms, list);
-		list_for_each_entry_from_rcu(p, &tbl->parms_list, list) {
+		default_skip = 1;
+
+		list_for_each_entry_rcu(p, &tbl->parms_list, list) {
 			if (!net_eq(neigh_parms_net(p), net))
+				continue;
+
+			if (!p->dev || p->dev == blackhole_netdev)
 				continue;
 
 			if (nidx < neigh_skip)
@@ -2637,12 +2643,15 @@ static int neightbl_dump_info(struct sk_buff *skb, struct netlink_callback *cb)
 		}
 
 		neigh_skip = 0;
+		nidx = 0;
+		default_skip = 0;
 	}
 out:
 	rcu_read_unlock();
 
 	cb->args[0] = tidx;
 	cb->args[1] = nidx;
+	cb->args[2] = default_skip;
 
 	return skb->len;
 }
@@ -3676,12 +3685,13 @@ static int neigh_proc_dointvec_ms_jiffies_positive(const struct ctl_table *ctl, 
 						   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table tmp = *ctl;
-	int ret;
+	int ret, min, max;
 
-	int min = msecs_to_jiffies(1);
+	min = msecs_to_jiffies(1);
+	max = msecs_to_jiffies(NTBL_PARM_MS_MAX);
 
 	tmp.extra1 = &min;
-	tmp.extra2 = NULL;
+	tmp.extra2 = &max;
 
 	ret = proc_dointvec_ms_jiffies_minmax(&tmp, write, buffer, lenp, ppos);
 	neigh_proc_update(ctl, write);

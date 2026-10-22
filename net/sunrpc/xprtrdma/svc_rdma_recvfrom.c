@@ -242,6 +242,10 @@ void svc_rdma_recv_ctxt_put(struct svcxprt_rdma *rdma,
  * Ensure that the recv_ctxt is released whether or not a Reply
  * was sent. For example, the client could close the connection,
  * or svc_process could drop an RPC, before the Reply is sent.
+ *
+ * Also drain any send_ctxts queued for deferred release so that
+ * DMA unmap and page release run in nfsd thread context between
+ * RPCs rather than on the Send completion path.
  */
 void svc_rdma_release_ctxt(struct svc_xprt *xprt, void *vctxt)
 {
@@ -251,6 +255,8 @@ void svc_rdma_release_ctxt(struct svc_xprt *xprt, void *vctxt)
 
 	if (ctxt)
 		svc_rdma_recv_ctxt_put(rdma, ctxt);
+
+	svc_rdma_send_ctxts_drain(rdma);
 }
 
 static bool svc_rdma_refresh_recvs(struct svcxprt_rdma *rdma,
@@ -384,6 +390,9 @@ dropped:
  * svc_rdma_flush_recv_queues - Drain pending Receive work
  * @rdma: svcxprt_rdma being shut down
  *
+ * Caller must guarantee that @rdma's Send and Recv Completion
+ * Queues are empty (e.g., via ib_drain_qp()), so that no completion
+ * handlers can still produce work on the queues being drained.
  */
 void svc_rdma_flush_recv_queues(struct svcxprt_rdma *rdma)
 {
@@ -431,11 +440,14 @@ static void svc_rdma_build_arg_xdr(struct svc_rqst *rqstp,
  *	    to the first byte past the Read list. rc_read_pcl and
  *	    rc_call_pcl cl_count fields are set to the number of
  *	    Read segments in the list.
- *  %false: Read list is corrupt. @rctxt's xdr_stream is left in an
- *	    unknown state.
+ *  %false: Read list is corrupt or exceeds the page budget. @rctxt's
+ *	    xdr_stream is left in an unknown state.
  */
 static bool xdr_count_read_segments(struct svc_rdma_recv_ctxt *rctxt, __be32 *p)
 {
+	unsigned int maxlen = rctxt->rc_maxpages << PAGE_SHIFT;
+	unsigned int total_len = 0;
+
 	rctxt->rc_call_pcl.cl_count = 0;
 	rctxt->rc_read_pcl.cl_count = 0;
 	while (xdr_item_is_present(p)) {
@@ -449,6 +461,11 @@ static bool xdr_count_read_segments(struct svc_rdma_recv_ctxt *rctxt, __be32 *p)
 
 		xdr_decode_read_segment(p, &position, &handle,
 					    &length, &offset);
+		if (length > maxlen)
+			return false;
+		total_len += length;
+		if (PAGE_ALIGN(total_len) > maxlen)
+			return false;
 		if (position) {
 			if (position & 3)
 				return false;
@@ -499,10 +516,13 @@ static bool xdr_check_write_chunk(struct svc_rdma_recv_ctxt *rctxt)
 		return false;
 
 	/* Before trusting the segcount value enough to use it in
-	 * a computation, perform a simple range check. This is an
-	 * arbitrary but sensible limit (ie, not architectural).
+	 * a computation, perform a simple range check. A zero
+	 * segcount describes no remote buffer and is rejected so
+	 * downstream consumers never see a degenerate ch_segcount==0
+	 * chunk. The upper bound is an arbitrary but sensible limit
+	 * (ie, not architectural).
 	 */
-	if (unlikely(segcount > rctxt->rc_maxpages))
+	if (segcount == 0 || unlikely(segcount > rctxt->rc_maxpages))
 		return false;
 
 	p = xdr_inline_decode(&rctxt->rc_stream,

@@ -10,6 +10,7 @@
 #include <linux/vmalloc.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
+#include <linux/dcache.h>
 
 #include "glob.h"
 #include "vfs_cache.h"
@@ -37,6 +38,8 @@ static struct ksmbd_file_table global_ft;
 static atomic_long_t fd_limit;
 static struct kmem_cache *filp_cache;
 
+static int ksmbd_mark_fp_closed(struct ksmbd_file *fp);
+
 #define OPLOCK_NONE      0
 #define OPLOCK_EXCLUSIVE 1
 #define OPLOCK_BATCH     2
@@ -63,7 +66,7 @@ static const struct ksmbd_const_name ksmbd_lease_const_names[] = {
 static const struct ksmbd_const_name ksmbd_oplock_const_names[] = {
 	{SMB2_OPLOCK_LEVEL_NONE, "OPLOCK_NONE"},
 	{SMB2_OPLOCK_LEVEL_II, "OPLOCK_II"},
-	{SMB2_OPLOCK_LEVEL_EXCLUSIVE, "OPLOCK_EXECL"},
+	{SMB2_OPLOCK_LEVEL_EXCLUSIVE, "OPLOCK_EXCLUSIVE"},
 	{SMB2_OPLOCK_LEVEL_BATCH, "OPLOCK_BATCH"},
 };
 
@@ -73,14 +76,14 @@ static int proc_show_files(struct seq_file *m, void *v)
 	unsigned int id;
 	struct oplock_info *opinfo;
 
-	seq_printf(m, "#%-10s %-10s %-10s %-10s %-15s %-10s %-10s %s\n",
+	seq_printf(m, "#%-10s %-18s %-18s %-10s %-16s %-10s %-10s %s\n",
 		   "<tree id>", "<pid>", "<vid>", "<refcnt>",
 		   "<oplock>", "<daccess>", "<saccess>",
 		   "<name>");
 
 	read_lock(&global_ft.lock);
 	idr_for_each_entry(global_ft.idr, fp, id) {
-		seq_printf(m, "%#-10x %#-10llx %#-10llx %#-10x",
+		seq_printf(m, " %#-10x %#-18llx %#-18llx %#-10x",
 			   fp->tcon ? fp->tcon->id : 0,
 			   fp->persistent_id,
 			   fp->volatile_id,
@@ -90,6 +93,7 @@ static int proc_show_files(struct seq_file *m, void *v)
 		opinfo = rcu_dereference(fp->f_opinfo);
 		if (opinfo) {
 			const struct ksmbd_const_name *const_names;
+			const char *name;
 			int count;
 			unsigned int level;
 
@@ -103,11 +107,14 @@ static int proc_show_files(struct seq_file *m, void *v)
 				level = opinfo->level;
 			}
 			rcu_read_unlock();
-			ksmbd_proc_show_const_name(m, " %-15s",
-						   const_names, count, level);
+			name = ksmbd_proc_const_name(const_names, count, level);
+			if (name)
+				seq_printf(m, " %-16s", name);
+			else
+				seq_printf(m, " 0x%-14x", level);
 		} else {
 			rcu_read_unlock();
-			seq_printf(m, " %-15s", " ");
+			seq_printf(m, " %-16s", " ");
 		}
 
 		seq_printf(m, " %#010x %#010x %s\n",
@@ -121,7 +128,8 @@ static int proc_show_files(struct seq_file *m, void *v)
 
 static int create_proc_files(void)
 {
-	ksmbd_proc_create("files", proc_show_files, NULL);
+	if (!ksmbd_proc_create("files", proc_show_files, NULL))
+		return -ENOMEM;
 	return 0;
 }
 #else
@@ -131,6 +139,16 @@ static int create_proc_files(void) { return 0; }
 static bool durable_scavenger_running;
 static DEFINE_MUTEX(durable_scavenger_lock);
 static wait_queue_head_t dh_wq;
+
+bool ksmbd_durable_scavenger_active(void)
+{
+	bool active;
+
+	mutex_lock(&durable_scavenger_lock);
+	active = durable_scavenger_running;
+	mutex_unlock(&durable_scavenger_lock);
+	return active;
+}
 
 void ksmbd_set_fd_limit(unsigned long limit)
 {
@@ -249,6 +267,33 @@ void ksmbd_clear_inode_pending_delete(struct ksmbd_file *fp)
 	down_write(&ci->m_lock);
 	ci->m_flags &= ~S_DEL_PENDING;
 	up_write(&ci->m_lock);
+}
+
+bool ksmbd_has_stream_without_delete_share(struct ksmbd_file *fp)
+{
+	struct ksmbd_file *prev_fp;
+	struct ksmbd_inode *ci = fp->f_ci;
+	bool ret = false;
+
+	if (ksmbd_stream_fd(fp))
+		return false;
+
+	down_read(&ci->m_lock);
+	list_for_each_entry(prev_fp, &ci->m_fp_list, node) {
+		if (prev_fp == fp || !ksmbd_stream_fd(prev_fp))
+			continue;
+
+		if (file_inode(fp->filp) != file_inode(prev_fp->filp))
+			continue;
+
+		if (!(prev_fp->saccess & FILE_SHARE_DELETE_LE)) {
+			ret = true;
+			break;
+		}
+	}
+	up_read(&ci->m_lock);
+
+	return ret;
 }
 
 void ksmbd_fd_set_delete_on_close(struct ksmbd_file *fp,
@@ -467,6 +512,7 @@ static void __ksmbd_close_fd(struct ksmbd_file_table *ft, struct ksmbd_file *fp)
 {
 	struct file *filp;
 	struct ksmbd_lock *smb_lock, *tmp_lock;
+	struct ksmbd_work *cn_work;
 
 	fd_limit_close();
 	ksmbd_remove_durable_fd(fp);
@@ -480,8 +526,9 @@ static void __ksmbd_close_fd(struct ksmbd_file_table *ft, struct ksmbd_file *fp)
 	if (!IS_ERR_OR_NULL(filp))
 		fput(filp);
 
-	/* because the reference count of fp is 0, it is guaranteed that
-	 * there are not accesses to fp->lock_list.
+	/*
+	 * The zero fp reference count serializes access to fp->lock_list, but
+	 * the VFS may still have blocked requests chained below these locks.
 	 */
 	list_for_each_entry_safe(smb_lock, tmp_lock, &fp->lock_list, flist) {
 		struct ksmbd_conn *conn = smb_lock->conn;
@@ -494,9 +541,56 @@ static void __ksmbd_close_fd(struct ksmbd_file_table *ft, struct ksmbd_file *fp)
 			ksmbd_conn_put(conn);
 		}
 
-		list_del(&smb_lock->flist);
+		list_del_init(&smb_lock->flist);
+		ksmbd_vfs_posix_lock_unblock(smb_lock->fl);
 		locks_free_lock(smb_lock->fl);
 		kfree(smb_lock);
+	}
+
+	/*
+	 * Complete any CHANGE_NOTIFY left pending on this handle now that
+	 * it is closed. KSMBD never completes CHANGE_NOTIFY spontaneously
+	 * (no real change-notification backend), only on close -- matching
+	 * genuine SMB2/macOS smbfs semantics and avoiding the Finder
+	 * "directory changed, re-enumerate everything" loop.
+	 *
+	 * smb2_notify() on another connection can be adding to
+	 * notify_pendings under fp->f_lock at the same time this handle is
+	 * closed, and a client-sent CANCEL can concurrently be racing to
+	 * claim the same entry via smb2_notify_cancel_fn() (smb2pdu.c).
+	 * Pop one entry at a time under the lock via list_del_init() rather
+	 * than a bulk list_splice_init(): list_del_init() leaves the node
+	 * self-linked ("empty"), which is what the cancel path checks under
+	 * the same lock to tell whether it lost the race -- a bulk splice
+	 * would instead relink every entry into a shared local list, so an
+	 * entry claimed here would still read as "not empty" to a racing
+	 * cancel_fn, and both sides could end up freeing the same work.
+	 * ksmbd_conn_write() can sleep (it takes conn's write mutex), so it
+	 * must not be called while fp->f_lock is held -- release the lock
+	 * before processing each popped entry, then reacquire it for the
+	 * next.
+	 */
+	for (;;) {
+		spin_lock(&fp->f_lock);
+		if (list_empty(&fp->notify_pendings)) {
+			spin_unlock(&fp->f_lock);
+			break;
+		}
+		cn_work = list_first_entry(&fp->notify_pendings,
+					   struct ksmbd_work, notify_entry);
+		list_del_init(&cn_work->notify_entry);
+		spin_unlock(&fp->f_lock);
+
+		ksmbd_conn_write(cn_work);
+		/*
+		 * release_async_work() removes cn_work from
+		 * conn->async_requests, frees cancel_argv, and releases+zeroes
+		 * async_id -- all needed before ksmbd_free_work_struct(), which
+		 * only releases async_id itself if still nonzero (i.e. if this
+		 * hadn't already been done).
+		 */
+		release_async_work(cn_work);
+		ksmbd_free_work_struct(cn_work);
 	}
 
 	/*
@@ -517,6 +611,78 @@ static void __ksmbd_close_fd(struct ksmbd_file_table *ft, struct ksmbd_file *fp)
 	kmem_cache_free(filp_cache, fp);
 }
 
+/**
+ * ksmbd_close_disconnected_durable_delete_on_close() - drop a delete-on-close
+ *	file kept present only by disconnected durable handles
+ * @dentry:	dentry of the file being opened
+ *
+ * A durable handle opened with delete-on-close is preserved across a
+ * disconnect so it can be reclaimed by a durable reconnect.  When a new
+ * (non-reconnect) open arrives for the same name instead, the disconnected
+ * handle has to give way.  Close such handles so their delete-on-close is
+ * applied and the file is removed once the last handle is gone, letting the
+ * new open create a fresh file.
+ *
+ * The caller's inode reference is dropped before closing so that the final
+ * close can promote S_DEL_ON_CLS to S_DEL_PENDING and unlink the file.
+ *
+ * Return:	true if a disconnected durable handle was closed.
+ */
+bool ksmbd_close_disconnected_durable_delete_on_close(struct dentry *dentry)
+{
+	struct ksmbd_inode *ci;
+	struct ksmbd_file *fp, *tmp;
+	LIST_HEAD(dispose);
+	bool closed = false;
+
+	ci = ksmbd_inode_lookup_lock(dentry);
+	if (!ci)
+		return false;
+
+	down_write(&ci->m_lock);
+	if (ci->m_flags & (S_DEL_ON_CLS | S_DEL_ON_CLS_STREAM | S_DEL_PENDING)) {
+		list_for_each_entry_safe(fp, tmp, &ci->m_fp_list, node) {
+			if (fp->conn || !fp->is_durable ||
+			    fp->f_state != FP_INITED)
+				continue;
+
+			/*
+			 * Claim the close before unlinking fp from m_fp_list.
+			 * refcount == 1 means only the durable lifetime ref is
+			 * left. Add a transient ref so final close can drop both.
+			 */
+			write_lock(&global_ft.lock);
+			if (atomic_read(&fp->refcount) == 1) {
+				atomic_inc(&fp->refcount);
+				__ksmbd_remove_durable_fd(fp);
+				ksmbd_mark_fp_closed(fp);
+				list_move_tail(&fp->node, &dispose);
+			}
+			write_unlock(&global_ft.lock);
+		}
+	}
+	up_write(&ci->m_lock);
+
+	/*
+	 * Drop our lookup reference before closing so the last __ksmbd_close_fd()
+	 * can drop m_count to zero and unlink the delete-on-close file.  The
+	 * collected handles still hold the transient reference taken above, so
+	 * ci stays valid until they are closed below.
+	 */
+	ksmbd_inode_put(ci);
+
+	while (!list_empty(&dispose)) {
+		fp = list_first_entry(&dispose, struct ksmbd_file, node);
+		list_del_init(&fp->node);
+		if (atomic_sub_and_test(2, &fp->refcount)) {
+			__ksmbd_close_fd(NULL, fp);
+			closed = true;
+		}
+	}
+
+	return closed;
+}
+
 static struct ksmbd_file *ksmbd_fp_get(struct ksmbd_file *fp)
 {
 	if (fp->f_state != FP_INITED)
@@ -525,6 +691,11 @@ static struct ksmbd_file *ksmbd_fp_get(struct ksmbd_file *fp)
 	if (!atomic_inc_not_zero(&fp->refcount))
 		return NULL;
 	return fp;
+}
+
+struct ksmbd_file *ksmbd_file_get(struct ksmbd_file *fp)
+{
+	return ksmbd_fp_get(fp);
 }
 
 static struct ksmbd_file *__ksmbd_lookup_fd(struct ksmbd_file_table *ft,
@@ -570,10 +741,23 @@ static void set_close_state_blocked_works(struct ksmbd_file *fp)
 	spin_lock(&fp->f_lock);
 	list_for_each_entry(cancel_work, &fp->blocked_works,
 				 fp_entry) {
-		cancel_work->state = KSMBD_WORK_CLOSED;
-		cancel_work->cancel_fn(cancel_work->cancel_argv);
+		if (xchg(&cancel_work->state, KSMBD_WORK_CLOSED) ==
+		    KSMBD_WORK_ACTIVE)
+			cancel_work->cancel_fn(cancel_work->cancel_argv);
 	}
 	spin_unlock(&fp->f_lock);
+}
+
+void ksmbd_wake_session_blocked_works(struct ksmbd_session *sess)
+{
+	struct ksmbd_file_table *ft = &sess->file_table;
+	struct ksmbd_file *fp;
+	unsigned int id;
+
+	read_lock(&ft->lock);
+	idr_for_each_entry(ft->idr, fp, id)
+		set_close_state_blocked_works(fp);
+	read_unlock(&ft->lock);
 }
 
 int ksmbd_close_fd(struct ksmbd_work *work, u64 id)
@@ -678,7 +862,8 @@ struct ksmbd_file *ksmbd_lookup_durable_fd(unsigned long long id)
 	struct ksmbd_file *fp;
 
 	fp = __ksmbd_lookup_fd(&global_ft, id);
-	if (fp && (fp->conn ||
+	if (fp && (fp->durable_reconnect_disabled ||
+		   fp->conn ||
 		   (fp->durable_scavenger_timeout &&
 		    (fp->durable_scavenger_timeout <
 		     jiffies_to_msecs(jiffies))))) {
@@ -695,6 +880,127 @@ void ksmbd_put_durable_fd(struct ksmbd_file *fp)
 		return;
 
 	__ksmbd_close_fd(NULL, fp);
+}
+
+bool ksmbd_has_other_active_fd(struct ksmbd_file *fp)
+{
+	struct ksmbd_file *lfp;
+	struct ksmbd_inode *ci = fp->f_ci;
+	bool ret = false;
+
+	down_read(&ci->m_lock);
+	list_for_each_entry(lfp, &ci->m_fp_list, node) {
+		if (lfp == fp)
+			continue;
+
+		if (lfp->f_state == FP_INITED &&
+		    (READ_ONCE(lfp->conn) || READ_ONCE(lfp->tcon))) {
+			ret = true;
+			break;
+		}
+	}
+	up_read(&ci->m_lock);
+
+	return ret;
+}
+
+static struct ksmbd_file *ksmbd_lookup_fd_app_instance_id(char *app_instance_id)
+{
+	struct ksmbd_file *fp = NULL;
+	unsigned int id;
+
+	if (!memchr_inv(app_instance_id, 0, SMB2_CREATE_GUID_SIZE))
+		return NULL;
+
+	read_lock(&global_ft.lock);
+	idr_for_each_entry(global_ft.idr, fp, id) {
+		if (!memcmp(fp->app_instance_id, app_instance_id,
+			    SMB2_CREATE_GUID_SIZE)) {
+			fp = ksmbd_fp_get(fp);
+			break;
+		}
+	}
+	read_unlock(&global_ft.lock);
+
+	return fp;
+}
+
+int ksmbd_close_fd_app_instance_id(char *app_instance_id)
+{
+	struct ksmbd_file_table *ft;
+	struct ksmbd_file *fp;
+	struct oplock_info *opinfo;
+	int n_to_drop = 0;
+
+	fp = ksmbd_lookup_fd_app_instance_id(app_instance_id);
+	if (!fp)
+		return 0;
+
+	opinfo = opinfo_get(fp);
+	if (!opinfo)
+		goto out;
+
+	down_read(&fp->f_ci->m_lock);
+	if (!opinfo->conn) {
+		up_read(&fp->f_ci->m_lock);
+		goto out;
+	}
+
+	ft = &opinfo->sess->file_table;
+	write_lock(&ft->lock);
+	if (fp->f_state == FP_INITED && has_file_id(fp->volatile_id)) {
+		idr_remove(ft->idr, fp->volatile_id);
+		fp->volatile_id = KSMBD_NO_FID;
+		n_to_drop = ksmbd_mark_fp_closed(fp);
+	}
+	write_unlock(&ft->lock);
+	up_read(&fp->f_ci->m_lock);
+	opinfo_put(opinfo);
+	opinfo = NULL;
+
+	if (!n_to_drop)
+		goto out;
+
+	down_write(&fp->f_ci->m_lock);
+	list_del_init(&fp->node);
+	up_write(&fp->f_ci->m_lock);
+
+	if (atomic_sub_and_test(n_to_drop, &fp->refcount)) {
+		if (fp->conn)
+			atomic_dec(&fp->conn->stats.open_files_count);
+		__ksmbd_close_fd(NULL, fp);
+	}
+	return 0;
+
+out:
+	if (opinfo)
+		opinfo_put(opinfo);
+	ksmbd_put_durable_fd(fp);
+	return 0;
+}
+
+int ksmbd_invalidate_durable_fd(unsigned long long id)
+{
+	struct ksmbd_file *fp;
+
+	fp = ksmbd_lookup_global_fd(id);
+	if (!fp)
+		return -ENOENT;
+
+	fp->durable_reconnect_disabled = true;
+
+	if (fp->conn) {
+		ksmbd_put_durable_fd(fp);
+		return -ENOENT;
+	}
+
+	fp->durable_timeout = 1;
+	fp->durable_scavenger_timeout = jiffies_to_msecs(jiffies);
+	ksmbd_put_durable_fd(fp);
+	if (waitqueue_active(&dh_wq))
+		wake_up(&dh_wq);
+
+	return -ENOENT;
 }
 
 struct ksmbd_file *ksmbd_lookup_fd_cguid(char *cguid)
@@ -742,6 +1048,30 @@ struct ksmbd_file *ksmbd_lookup_fd_inode(struct dentry *dentry)
 	return NULL;
 }
 
+bool ksmbd_has_open_files(struct dentry *dentry)
+{
+	struct ksmbd_file *fp;
+	unsigned int id;
+	bool ret = false;
+
+	read_lock(&global_ft.lock);
+	idr_for_each_entry(global_ft.idr, fp, id) {
+		struct dentry *fp_dentry = fp->filp->f_path.dentry;
+
+		if (fp->f_state != FP_INITED)
+			continue;
+		if (fp_dentry == dentry)
+			continue;
+		if (is_subdir(fp_dentry, dentry)) {
+			ret = true;
+			break;
+		}
+	}
+	read_unlock(&global_ft.lock);
+
+	return ret;
+}
+
 #define OPEN_ID_TYPE_VOLATILE_ID	(0)
 #define OPEN_ID_TYPE_PERSISTENT_ID	(1)
 
@@ -766,7 +1096,8 @@ static int __open_id(struct ksmbd_file_table *ft, struct ksmbd_file *fp,
 
 	idr_preload(KSMBD_DEFAULT_GFP);
 	write_lock(&ft->lock);
-	ret = idr_alloc_cyclic(ft->idr, fp, 0, INT_MAX - 1, GFP_NOWAIT);
+	ret = idr_alloc_cyclic(ft->idr, fp, KSMBD_START_FID, INT_MAX - 1,
+			       GFP_NOWAIT);
 	if (ret >= 0) {
 		id = ret;
 		ret = 0;
@@ -801,6 +1132,7 @@ struct ksmbd_file *ksmbd_open_fd(struct ksmbd_work *work, struct file *filp)
 	INIT_LIST_HEAD(&fp->blocked_works);
 	INIT_LIST_HEAD(&fp->node);
 	INIT_LIST_HEAD(&fp->lock_list);
+	INIT_LIST_HEAD(&fp->notify_pendings);
 	spin_lock_init(&fp->f_lock);
 	mutex_init(&fp->readdir_lock);
 	atomic_set(&fp->refcount, 1);
@@ -937,6 +1269,7 @@ __close_file_table_ids(struct ksmbd_session *sess,
 			 * global_ft.
 			 */
 			idr_remove(ft->idr, id);
+			fp->durable_volatile_id = fp->volatile_id;
 			fp->volatile_id = KSMBD_NO_FID;
 			write_unlock(&ft->lock);
 
@@ -1116,10 +1449,10 @@ static int ksmbd_durable_scavenger(void *dummy)
 		if (try_to_freeze())
 			continue;
 
-		remaining_jiffies = wait_event_timeout(dh_wq,
+		remaining_jiffies = wait_event_interruptible_timeout(dh_wq,
 				   ksmbd_durable_scavenger_alive() == false,
 				   __msecs_to_jiffies(min_timeout));
-		if (remaining_jiffies)
+		if ((long)remaining_jiffies > 0)
 			min_timeout = jiffies_to_msecs(remaining_jiffies);
 		else
 			min_timeout = DURABLE_HANDLE_MAX_TIMEOUT;
@@ -1196,9 +1529,12 @@ void ksmbd_launch_ksmbd_durable_scavenger(void)
 
 	server_conf.dh_task = kthread_run(ksmbd_durable_scavenger,
 				     (void *)NULL, "ksmbd-durable-scavenger");
-	if (IS_ERR(server_conf.dh_task))
+	if (IS_ERR(server_conf.dh_task)) {
 		pr_err("cannot start conn thread, err : %ld\n",
 		       PTR_ERR(server_conf.dh_task));
+		server_conf.dh_task = NULL;
+		durable_scavenger_running = false;
+	}
 	mutex_unlock(&durable_scavenger_lock);
 }
 
@@ -1221,7 +1557,7 @@ void ksmbd_stop_durable_scavenger(void)
 }
 
 /*
- * ksmbd_vfs_copy_durable_owner - Copy owner info for durable reconnect
+ * ksmbd_vfs_set_durable_owner - Store owner info for durable replay/reconnect
  * @fp: ksmbd file pointer to store owner info
  * @user: user pointer to copy from
  *
@@ -1230,8 +1566,8 @@ void ksmbd_stop_durable_scavenger(void)
  *
  * Return: 0 on success, or negative error code on failure
  */
-static int ksmbd_vfs_copy_durable_owner(struct ksmbd_file *fp,
-		struct ksmbd_user *user)
+int ksmbd_vfs_set_durable_owner(struct ksmbd_file *fp,
+				struct ksmbd_user *user)
 {
 	char *name;
 
@@ -1302,7 +1638,7 @@ static bool session_fd_check(struct ksmbd_tree_connect *tcon,
 	if (WARN_ON_ONCE(!fp->conn))
 		return false;
 
-	if (ksmbd_vfs_copy_durable_owner(fp, user))
+	if (ksmbd_vfs_set_durable_owner(fp, user))
 		return false;
 
 	/*
@@ -1313,11 +1649,13 @@ static bool session_fd_check(struct ksmbd_tree_connect *tcon,
 	conn = fp->conn;
 	ci = fp->f_ci;
 	down_write(&ci->m_lock);
-	list_for_each_entry_rcu(op, &ci->m_op_list, op_entry) {
+	list_for_each_entry_rcu(op, &ci->m_op_list, op_entry,
+				lockdep_is_held(&ci->m_lock)) {
 		if (op->conn != conn)
 			continue;
 		ksmbd_conn_put(op->conn);
 		op->conn = NULL;
+		op->sess = NULL;
 	}
 	up_write(&ci->m_lock);
 
@@ -1368,7 +1706,8 @@ void ksmbd_close_session_fds(struct ksmbd_work *work)
 
 int ksmbd_init_global_file_table(void)
 {
-	create_proc_files();
+	if (create_proc_files())
+		pr_warn("Unable to create files procfs entry\n");
 	return ksmbd_init_file_table(&global_ft);
 }
 
@@ -1468,10 +1807,12 @@ int ksmbd_reopen_durable_fd(struct ksmbd_work *work, struct ksmbd_file *fp)
 
 	ci = fp->f_ci;
 	down_write(&ci->m_lock);
-	list_for_each_entry_rcu(op, &ci->m_op_list, op_entry) {
-		if (op->conn)
+	list_for_each_entry_rcu(op, &ci->m_op_list, op_entry,
+				lockdep_is_held(&ci->m_lock)) {
+		if (op->conn || op->o_fp != fp)
 			continue;
 		op->conn = ksmbd_conn_get(fp->conn);
+		op->sess = work->sess;
 	}
 	up_write(&ci->m_lock);
 

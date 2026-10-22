@@ -616,6 +616,8 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata, bool going_do
 		RCU_INIT_POINTER(sdata->vif.bss_conf.chanctx_conf, NULL);
 		/* see comment in the default case below */
 		ieee80211_free_keys(sdata, true);
+		/* increased by AP value on ifup, so reset on ifdown */
+		sdata->crypto_tx_tailroom_needed_cnt = 0;
 		/* no need to tell driver */
 		break;
 	case NL80211_IFTYPE_MONITOR:
@@ -654,6 +656,12 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata, bool going_do
 
 			spin_unlock_bh(&sdata->u.nan.de.func_lock);
 		}
+
+		/*
+		 * Free the remaining keys that might be associated with the
+		 * NAN interface, e.g., IGTK and BIGTK used for Tx.
+		 */
+		ieee80211_free_keys(sdata, true);
 		break;
 	case NL80211_IFTYPE_NAN_DATA:
 		RCU_INIT_POINTER(sdata->u.nan_data.nmi, NULL);
@@ -918,9 +926,33 @@ static void ieee80211_teardown_sdata(struct ieee80211_sub_if_data *sdata)
 	}
 }
 
+/*
+ * The netdev can be unregistered without mac80211 doing it, e.g. by the netdev
+ * core when cfg80211 couldn't move it out of a network namespace that's being
+ * destroyed. Drop it from the interface list either way.
+ */
+static void ieee80211_unlist_sdata(struct ieee80211_sub_if_data *sdata)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_sub_if_data *iter;
+
+	ASSERT_RTNL();
+
+	list_for_each_entry(iter, &local->interfaces, list) {
+		if (iter != sdata)
+			continue;
+		guard(mutex)(&local->iflist_mtx);
+		list_del_rcu(&sdata->list);
+		return;
+	}
+}
+
 static void ieee80211_uninit(struct net_device *dev)
 {
-	ieee80211_teardown_sdata(IEEE80211_DEV_TO_SUB_IF(dev));
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+
+	ieee80211_unlist_sdata(sdata);
+	ieee80211_teardown_sdata(sdata);
 }
 
 static int ieee80211_netdev_setup_tc(struct net_device *dev,
@@ -928,6 +960,9 @@ static int ieee80211_netdev_setup_tc(struct net_device *dev,
 {
 	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
 	struct ieee80211_local *local = sdata->local;
+
+	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
+		return -EOPNOTSUPP;
 
 	return drv_net_setup_tc(local, sdata, dev, type, type_data);
 }
@@ -958,13 +993,13 @@ static u16 ieee80211_monitor_select_queue(struct net_device *dev,
 	/* reset flags and info before parsing radiotap header */
 	memset(info, 0, sizeof(*info));
 
-	if (!ieee80211_parse_tx_radiotap(skb, dev))
+	if (!ieee80211_parse_tx_radiotap(skb, dev, NULL))
 		return 0; /* doesn't matter, frame will be dropped */
 
 	len_rthdr = ieee80211_get_radiotap_len(skb->data);
 	hdr = (struct ieee80211_hdr *)(skb->data + len_rthdr);
-	if (skb->len < len_rthdr + 2 ||
-	    skb->len < len_rthdr + ieee80211_hdrlen(hdr->frame_control))
+	if (skb_headlen(skb) < len_rthdr + 2 ||
+	    skb_headlen(skb) < len_rthdr + ieee80211_hdrlen(hdr->frame_control))
 		return 0; /* doesn't matter, frame will be dropped */
 
 	return ieee80211_select_queue_80211(sdata, skb, hdr);
@@ -1406,6 +1441,7 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
 	case NL80211_IFTYPE_P2P_DEVICE:
 	case NL80211_IFTYPE_OCB:
 	case NL80211_IFTYPE_NAN:
+	case NL80211_IFTYPE_PD:
 		/* no special treatment */
 		break;
 	case NL80211_IFTYPE_NAN_DATA:
@@ -1538,7 +1574,8 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
 						FIF_PROBE_REQ);
 
 		if (sdata->vif.type != NL80211_IFTYPE_P2P_DEVICE &&
-		    sdata->vif.type != NL80211_IFTYPE_NAN)
+		    sdata->vif.type != NL80211_IFTYPE_NAN &&
+		    sdata->vif.type != NL80211_IFTYPE_PD)
 			changed |= ieee80211_reset_erp_info(sdata);
 		ieee80211_link_info_change_notify(sdata, &sdata->deflink,
 						  changed);
@@ -1554,6 +1591,7 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
 			break;
 		case NL80211_IFTYPE_P2P_DEVICE:
 		case NL80211_IFTYPE_NAN:
+		case NL80211_IFTYPE_PD:
 			break;
 		default:
 			/* not reached */
@@ -1594,8 +1632,12 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
  err_del_interface:
 	drv_remove_interface(local, sdata);
  err_stop:
-	if (!local->open_count)
+	if (!local->open_count) {
+		ieee80211_led_radio(local, false);
+		ieee80211_mod_tpt_led_trig(local, 0,
+					   IEEE80211_TPT_LEDTRIG_FL_RADIO);
 		drv_stop(local, false);
+	}
 	if (sdata->vif.type == NL80211_IFTYPE_NAN_DATA)
 		RCU_INIT_POINTER(sdata->u.nan_data.nmi, NULL);
 	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
@@ -1719,50 +1761,6 @@ static void ieee80211_iface_process_skb(struct ieee80211_local *local,
 		default:
 			break;
 		}
-	} else if (ieee80211_is_action(mgmt->frame_control) &&
-		   mgmt->u.action.category == WLAN_CATEGORY_PROTECTED_EHT) {
-		if (sdata->vif.type == NL80211_IFTYPE_AP) {
-			switch (mgmt->u.action.action_code) {
-			case WLAN_PROTECTED_EHT_ACTION_EML_OP_MODE_NOTIF:
-				ieee80211_rx_eml_op_mode_notif(sdata, skb);
-				break;
-			default:
-				break;
-			}
-		} else if (sdata->vif.type == NL80211_IFTYPE_STATION) {
-			switch (mgmt->u.action.action_code) {
-			case WLAN_PROTECTED_EHT_ACTION_TTLM_REQ:
-				ieee80211_process_neg_ttlm_req(sdata, mgmt,
-							       skb->len);
-				break;
-			case WLAN_PROTECTED_EHT_ACTION_TTLM_RES:
-				ieee80211_process_neg_ttlm_res(sdata, mgmt,
-							       skb->len);
-				break;
-			case WLAN_PROTECTED_EHT_ACTION_TTLM_TEARDOWN:
-				ieee80211_process_ttlm_teardown(sdata);
-				break;
-			case WLAN_PROTECTED_EHT_ACTION_LINK_RECONFIG_RESP:
-				ieee80211_process_ml_reconf_resp(sdata, mgmt,
-								 skb->len);
-				break;
-			case WLAN_PROTECTED_EHT_ACTION_EPCS_ENABLE_RESP:
-				ieee80211_process_epcs_ena_resp(sdata, mgmt,
-								skb->len);
-				break;
-			case WLAN_PROTECTED_EHT_ACTION_EPCS_ENABLE_TEARDOWN:
-				ieee80211_process_epcs_teardown(sdata, mgmt,
-								skb->len);
-				break;
-			default:
-				break;
-			}
-		}
-	} else if (ieee80211_is_ext(mgmt->frame_control)) {
-		if (sdata->vif.type == NL80211_IFTYPE_STATION)
-			ieee80211_sta_rx_queued_ext(sdata, skb);
-		else
-			WARN_ON(1);
 	} else if (ieee80211_is_data_qos(mgmt->frame_control)) {
 		struct ieee80211_hdr *hdr = (void *)mgmt;
 		struct sta_info *sta;
@@ -1794,8 +1792,11 @@ static void ieee80211_iface_process_skb(struct ieee80211_local *local,
 				true);
 		}
 	} else switch (sdata->vif.type) {
+	case NL80211_IFTYPE_AP:
+		ieee80211_ap_rx_queued_frame(sdata, skb);
+		break;
 	case NL80211_IFTYPE_STATION:
-		ieee80211_sta_rx_queued_mgmt(sdata, skb);
+		ieee80211_sta_rx_queued_frame(sdata, skb);
 		break;
 	case NL80211_IFTYPE_ADHOC:
 		ieee80211_ibss_rx_queued_mgmt(sdata, skb);
@@ -1994,6 +1995,7 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 		sdata->vif.bss_conf.bssid = sdata->vif.addr;
 		break;
 	case NL80211_IFTYPE_NAN_DATA:
+	case NL80211_IFTYPE_PD:
 		break;
 	case NL80211_IFTYPE_UNSPECIFIED:
 	case NL80211_IFTYPE_WDS:
@@ -2286,7 +2288,12 @@ int ieee80211_if_add(struct ieee80211_local *local, const char *name,
 
 		sdata->dev = NULL;
 		strscpy(sdata->name, name, IFNAMSIZ);
-		ieee80211_assign_perm_addr(local, wdev->address, type);
+
+		if (is_valid_ether_addr(params->macaddr))
+			memcpy(wdev->address, params->macaddr, ETH_ALEN);
+		else
+			ieee80211_assign_perm_addr(local, wdev->address, type);
+
 		memcpy(sdata->vif.addr, wdev->address, ETH_ALEN);
 		ether_addr_copy(sdata->vif.bss_conf.addr, sdata->vif.addr);
 

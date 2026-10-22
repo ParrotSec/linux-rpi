@@ -620,11 +620,11 @@ static inline bool id_aa64pfr0_mpam(u64 pfr0)
 	return val > 0;
 }
 
-static inline bool id_aa64pfr1_mte(u64 pfr1)
+static inline bool id_aa64pfr1_mpamfrac(u64 pfr1)
 {
-	u32 val = cpuid_feature_extract_unsigned_field(pfr1, ID_AA64PFR1_EL1_MTE_SHIFT);
+	u32 val = cpuid_feature_extract_unsigned_field(pfr1, ID_AA64PFR1_EL1_MPAM_frac_SHIFT);
 
-	return val >= ID_AA64PFR1_EL1_MTE_MTE2;
+	return val > 0;
 }
 
 void __init setup_boot_cpu_features(void);

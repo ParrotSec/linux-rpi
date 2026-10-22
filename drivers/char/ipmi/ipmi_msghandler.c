@@ -1391,6 +1391,7 @@ static void _ipmi_destroy_user(struct ipmi_user *user)
 		}
 	}
 	mutex_unlock(&intf->cmd_rcvrs_mutex);
+	synchronize_rcu();
 	while (rcvrs) {
 		rcvr = rcvrs;
 		rcvrs = rcvr->next;
@@ -1610,13 +1611,11 @@ int ipmi_set_gets_events(struct ipmi_user *user, bool val)
 {
 	struct ipmi_smi      *intf = user->intf;
 	struct ipmi_recv_msg *msg, *msg2;
-	struct list_head     msgs;
+	LIST_HEAD(msgs);
 
 	user = acquire_ipmi_user(user);
 	if (!user)
 		return -ENODEV;
-
-	INIT_LIST_HEAD(&msgs);
 
 	mutex_lock(&intf->events_mutex);
 	if (user->gets_events == val)
@@ -3742,6 +3741,7 @@ int ipmi_add_smi(struct module         *owner,
 	sysfs_attr_init(&intf->maintenance_mode_devattr.attr);
 	rv = device_create_file(intf->si_dev, &intf->maintenance_mode_devattr);
 	if (rv) {
+		device_remove_file(intf->si_dev, &intf->nr_msgs_devattr);
 		device_remove_file(intf->si_dev, &intf->nr_users_devattr);
 		goto out_err_bmc_reg;
 	}
@@ -3759,12 +3759,14 @@ int ipmi_add_smi(struct module         *owner,
  out_err_bmc_reg:
 	ipmi_bmc_unregister(intf);
  out_err_started:
+	intf->in_shutdown = true;
 	if (intf->handlers->shutdown)
 		intf->handlers->shutdown(intf->send_info);
  out_err:
 	list_del(&intf->link);
 	mutex_unlock(&ipmi_interfaces_mutex);
 	mutex_unlock(&smi_watchers_mutex);
+	cancel_work_sync(&intf->smi_work);
 	kref_put(&intf->refcount, intf_free);
 
 	return rv;
@@ -3793,10 +3795,9 @@ static void cleanup_smi_msgs(struct ipmi_smi *intf)
 	struct seq_table *ent;
 	struct ipmi_smi_msg *msg;
 	struct list_head *entry;
-	struct list_head tmplist;
+	LIST_HEAD(tmplist);
 
 	/* Clear out our transmit queues and hold the messages. */
-	INIT_LIST_HEAD(&tmplist);
 	list_splice_tail(&intf->hp_xmit_msgs, &tmplist);
 	list_splice_tail(&intf->xmit_msgs, &tmplist);
 
@@ -4450,7 +4451,7 @@ static int handle_read_event_rsp(struct ipmi_smi *intf,
 				 struct ipmi_smi_msg *msg)
 {
 	struct ipmi_recv_msg *recv_msg, *recv_msg2;
-	struct list_head     msgs;
+	LIST_HEAD(msgs);
 	struct ipmi_user     *user;
 	int rv = 0, deliver_count = 0;
 
@@ -4464,8 +4465,6 @@ static int handle_read_event_rsp(struct ipmi_smi *intf,
 		/* An error getting the event, just ignore it. */
 		return 0;
 	}
-
-	INIT_LIST_HEAD(&msgs);
 
 	mutex_lock(&intf->events_mutex);
 
@@ -5107,7 +5106,7 @@ static void check_msg_timeout(struct ipmi_smi *intf, struct seq_table *ent,
 static bool ipmi_timeout_handler(struct ipmi_smi *intf,
 				 unsigned long timeout_period)
 {
-	struct list_head     timeouts;
+	LIST_HEAD(timeouts);
 	struct ipmi_recv_msg *msg, *msg2;
 	unsigned long        flags;
 	int                  i;
@@ -5126,7 +5125,6 @@ static bool ipmi_timeout_handler(struct ipmi_smi *intf,
 	 * have timed out, putting them in the timeouts
 	 * list.
 	 */
-	INIT_LIST_HEAD(&timeouts);
 	mutex_lock(&intf->seq_lock);
 	if (intf->ipmb_maintenance_mode_timeout) {
 		if (intf->ipmb_maintenance_mode_timeout <= timeout_period)

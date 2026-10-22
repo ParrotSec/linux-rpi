@@ -263,8 +263,10 @@ xqcheck_mod_live_ino_dqtrx(
 		dqa->tx_id = p->tx_id;
 		error = rhashtable_insert_fast(&xqc->shadow_dquot_acct,
 				&dqa->hash, xqcheck_dqacct_hash_params);
-		if (error)
+		if (error) {
+			kfree(dqa);
 			goto out_abort;
+		}
 	}
 
 	/* Find the shadow dqtrx (or an empty slot) here. */
@@ -399,7 +401,7 @@ xqcheck_collect_inode(
 	int			error = 0;
 
 	if (xfs_is_metadir_inode(ip) ||
-	    xfs_is_quota_inode(&tp->t_mountp->m_sb, ip->i_ino)) {
+	    xfs_is_quota_inode(&tp->t_mountp->m_sb, I_INO(ip))) {
 		/*
 		 * Quota files are never counted towards quota, so we do not
 		 * need to take the lock.  Files do not switch between the

@@ -9,17 +9,19 @@
 
 struct opts {
 	/* actions: */
-	bool cfi;
 	bool checksum;
+	const char *disas;
 	bool dump_orc;
 	bool hack_jump_label;
 	bool hack_noinstr;
 	bool hack_skylake;
 	bool ibt;
+	bool klp_symids;
 	bool mcount;
 	bool noabs;
 	bool noinstr;
 	bool orc;
+	int prefix;
 	bool retpoline;
 	bool rethunk;
 	bool unret;
@@ -27,14 +29,14 @@ struct opts {
 	bool stackval;
 	bool static_call;
 	bool uaccess;
-	int prefix;
-	const char *disas;
 
 	/* options: */
 	bool backtrace;
 	bool backup;
+	bool cfi;
 	const char *debug_checksum;
 	bool dryrun;
+	bool fineibt;
 	bool link;
 	bool mnop;
 	bool module;

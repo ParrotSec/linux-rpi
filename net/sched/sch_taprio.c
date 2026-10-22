@@ -308,10 +308,10 @@ static void taprio_update_queue_max_sdu(struct taprio_sched *q,
 
 		if (max_sdu != U32_MAX) {
 			sched->max_frm_len[tc] = max_sdu + dev->hard_header_len;
-			sched->max_sdu[tc] = max_sdu;
+			WRITE_ONCE(sched->max_sdu[tc], max_sdu);
 		} else {
 			sched->max_frm_len[tc] = U32_MAX; /* never oversized */
-			sched->max_sdu[tc] = 0;
+			WRITE_ONCE(sched->max_sdu[tc], 0);
 		}
 	}
 }
@@ -762,12 +762,13 @@ skip_peek_checks:
 
 static void taprio_next_tc_txq(struct net_device *dev, int tc, int *txq)
 {
-	int offset = dev->tc_to_txq[tc].offset;
-	int count = dev->tc_to_txq[tc].count;
+	struct netdev_tc_txq res;
+
+	res.combined = READ_ONCE(dev->tc_to_txq[tc].combined);
 
 	(*txq)++;
-	if (*txq == offset + count)
-		*txq = offset;
+	if (*txq == res.offset + res.count)
+		*txq = res.offset;
 }
 
 /* Prioritize higher traffic classes, and select among TXQs belonging to the
@@ -1299,7 +1300,7 @@ static void taprio_set_picos_per_byte(struct net_device *dev,
 	int picos_per_byte;
 	int err;
 
-	err = __ethtool_get_link_ksettings(dev, &ecmd);
+	err = netif_get_link_ksettings(dev, &ecmd);
 	if (err < 0)
 		goto skip;
 
@@ -1321,7 +1322,7 @@ skip:
 	atomic64_set(&q->picos_per_byte, picos_per_byte);
 	netdev_dbg(dev, "taprio: set %s's picos_per_byte to: %lld, linkspeed: %d\n",
 		   dev->name, (long long)atomic64_read(&q->picos_per_byte),
-		   ecmd.base.speed);
+		   speed);
 }
 
 static int taprio_dev_notifier(struct notifier_block *nb, unsigned long event,
@@ -1441,15 +1442,14 @@ static u32 tc_map_to_queue_mask(struct net_device *dev, u32 tc_mask)
 	u32 i, queue_mask = 0;
 
 	for (i = 0; i < dev->num_tc; i++) {
-		u32 offset, count;
+		struct netdev_tc_txq res;
 
 		if (!(tc_mask & BIT(i)))
 			continue;
 
-		offset = dev->tc_to_txq[i].offset;
-		count = dev->tc_to_txq[i].count;
+		res.combined = READ_ONCE(dev->tc_to_txq[i].combined);
 
-		queue_mask |= GENMASK(offset + count - 1, offset);
+		queue_mask |= GENMASK(res.offset + res.count - 1, res.offset);
 	}
 
 	return queue_mask;
@@ -1771,8 +1771,8 @@ static int taprio_parse_tc_entries(struct Qdisc *sch,
 	}
 
 	for (tc = 0; tc < TC_QOPT_MAX_QUEUE; tc++) {
-		q->max_sdu[tc] = max_sdu[tc];
-		q->fp[tc] = fp[tc];
+		WRITE_ONCE(q->max_sdu[tc], max_sdu[tc]);
+		WRITE_ONCE(q->fp[tc], fp[tc]);
 		if (fp[tc] != TC_FP_EXPRESS)
 			have_preemption = true;
 	}
@@ -1802,10 +1802,14 @@ static int taprio_mqprio_cmp(const struct net_device *dev,
 	if (!mqprio || mqprio->num_tc != dev->num_tc)
 		return -1;
 
-	for (i = 0; i < mqprio->num_tc; i++)
-		if (dev->tc_to_txq[i].count != mqprio->count[i] ||
-		    dev->tc_to_txq[i].offset != mqprio->offset[i])
+	for (i = 0; i < mqprio->num_tc; i++) {
+		struct netdev_tc_txq res;
+
+		res.combined = READ_ONCE(dev->tc_to_txq[i].combined);
+		if (res.count != mqprio->count[i] ||
+		    res.offset != mqprio->offset[i])
 			return -1;
+	}
 
 	for (i = 0; i <= TC_BITMASK; i++)
 		if (dev->prio_tc_map[i] != mqprio->prio_tc_map[i])
@@ -1852,12 +1856,14 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 		return -EINVAL;
 	}
 
-	if (q->flags != TAPRIO_FLAGS_INVALID && q->flags != taprio_flags) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "Changing 'flags' of a running schedule is not supported");
-		return -EOPNOTSUPP;
+	if (q->flags != taprio_flags) {
+		if (q->flags != TAPRIO_FLAGS_INVALID) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Changing 'flags' of a running schedule is not supported");
+			return -EOPNOTSUPP;
+		}
+		WRITE_ONCE(q->flags, taprio_flags);
 	}
-	q->flags = taprio_flags;
 
 	/* Needed for length_to_duration() during netlink attribute parsing */
 	taprio_set_picos_per_byte(dev, q, extack);
@@ -1940,7 +1946,8 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 			goto unlock;
 		}
 
-		q->txtime_delay = nla_get_u32(tb[TCA_TAPRIO_ATTR_TXTIME_DELAY]);
+		WRITE_ONCE(q->txtime_delay,
+			   nla_get_u32(tb[TCA_TAPRIO_ATTR_TXTIME_DELAY]));
 	}
 
 	if (!TXTIME_ASSIST_IS_ENABLED(q->flags) &&
@@ -2283,8 +2290,8 @@ error_nest:
 }
 
 static int taprio_dump_tc_entries(struct sk_buff *skb,
-				  struct taprio_sched *q,
-				  struct sched_gate_list *sched)
+				  const struct taprio_sched *q,
+				  const struct sched_gate_list *sched)
 {
 	struct nlattr *n;
 	int tc;
@@ -2298,10 +2305,11 @@ static int taprio_dump_tc_entries(struct sk_buff *skb,
 			goto nla_put_failure;
 
 		if (nla_put_u32(skb, TCA_TAPRIO_TC_ENTRY_MAX_SDU,
-				sched->max_sdu[tc]))
+				READ_ONCE(sched->max_sdu[tc])))
 			goto nla_put_failure;
 
-		if (nla_put_u32(skb, TCA_TAPRIO_TC_ENTRY_FP, q->fp[tc]))
+		if (nla_put_u32(skb, TCA_TAPRIO_TC_ENTRY_FP,
+				READ_ONCE(q->fp[tc])))
 			goto nla_put_failure;
 
 		nla_nest_end(skb, n);
@@ -2387,6 +2395,7 @@ static int taprio_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct sched_gate_list *oper, *admin;
 	struct tc_mqprio_qopt opt = { 0 };
 	struct nlattr *nest, *sched_nest;
+	u32 txtime_delay;
 
 	mqprio_qopt_reconstruct(dev, &opt);
 
@@ -2404,14 +2413,15 @@ static int taprio_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (q->flags && nla_put_u32(skb, TCA_TAPRIO_ATTR_FLAGS, q->flags))
 		goto options_error;
 
-	if (q->txtime_delay &&
-	    nla_put_u32(skb, TCA_TAPRIO_ATTR_TXTIME_DELAY, q->txtime_delay))
+	txtime_delay = READ_ONCE(q->txtime_delay);
+	if (txtime_delay &&
+	    nla_put_u32(skb, TCA_TAPRIO_ATTR_TXTIME_DELAY, txtime_delay))
 		goto options_error;
 
 	rcu_read_lock();
 
-	oper = rtnl_dereference(q->oper_sched);
-	admin = rtnl_dereference(q->admin_sched);
+	oper = rcu_dereference(q->oper_sched);
+	admin = rcu_dereference(q->admin_sched);
 
 	if (oper && taprio_dump_tc_entries(skb, q, oper))
 		goto options_error_rcu;

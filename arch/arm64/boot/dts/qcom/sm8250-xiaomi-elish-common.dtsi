@@ -28,7 +28,7 @@
 
 	/* required for bootloader to select correct board */
 	qcom,msm-id = <QCOM_ID_SM8250 0x20001>; /* SM8250 v2.1 */
-	qcom,board-id = <0x10008 0>;
+	qcom,board-id = <0x2f 0>;
 
 	aliases {
 		serial0 = &uart6;
@@ -724,6 +724,8 @@
 		power-role = "dual";
 		data-role = "dual";
 		self-powered;
+
+		vbus-supply = <&pm8150b_vbus>;
 
 		source-pdos = <PDO_FIXED(5000, 3000,
 					 PDO_FIXED_DUAL_ROLE |

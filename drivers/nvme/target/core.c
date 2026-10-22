@@ -558,7 +558,7 @@ static void nvmet_p2pmem_ns_add_p2p(struct nvmet_ctrl *ctrl,
 	if (ret < 0)
 		pci_dev_put(p2p_dev);
 
-	pr_info("using p2pmem on %s for nsid %d\n", pci_name(p2p_dev),
+	pr_info("using p2pmem on %s for nsid %u\n", pci_name(p2p_dev),
 		ns->nsid);
 }
 
@@ -610,7 +610,8 @@ int nvmet_ns_enable(struct nvmet_ns *ns)
 			goto out_dev_put;
 	}
 
-	if (percpu_ref_init(&ns->ref, nvmet_destroy_namespace, 0, GFP_KERNEL))
+	ret = percpu_ref_init(&ns->ref, nvmet_destroy_namespace, 0, GFP_KERNEL);
+	if (ret)
 		goto out_pr_exit;
 
 	nvmet_ns_changed(subsys, ns->nsid);
@@ -875,7 +876,7 @@ u16 nvmet_check_cqid(struct nvmet_ctrl *ctrl, u16 cqid, bool create)
 	if (!ctrl->cqs)
 		return NVME_SC_INTERNAL | NVME_STATUS_DNR;
 
-	if (cqid > ctrl->subsys->max_qid)
+	if (cqid > ctrl->max_qid)
 		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 
 	if ((create && ctrl->cqs[cqid]) || (!create && !ctrl->cqs[cqid]))
@@ -923,7 +924,7 @@ u16 nvmet_check_sqid(struct nvmet_ctrl *ctrl, u16 sqid,
 	if (!ctrl->sqs)
 		return NVME_SC_INTERNAL | NVME_STATUS_DNR;
 
-	if (sqid > ctrl->subsys->max_qid)
+	if (sqid > ctrl->max_qid)
 		return NVME_SC_QID_INVALID | NVME_STATUS_DNR;
 
 	if ((create && ctrl->sqs[sqid]) ||
@@ -977,7 +978,7 @@ void nvmet_sq_destroy(struct nvmet_sq *sq)
 	wait_for_completion(&sq->confirm_done);
 	wait_for_completion(&sq->free_done);
 	percpu_ref_exit(&sq->ref);
-	nvmet_auth_sq_free(sq);
+	nvmet_auth_sq_destroy(sq);
 	nvmet_cq_put(sq->cq);
 
 	/*
@@ -1309,7 +1310,7 @@ static int nvmet_req_alloc_p2pmem_sgls(struct pci_dev *p2p_dev,
 
 	return 0;
 out_free_sg:
-	pci_p2pmem_free_sgl(req->p2p_dev, req->sg);
+	pci_p2pmem_free_sgl(p2p_dev, req->sg);
 out_err:
 	return -ENOMEM;
 }
@@ -1640,6 +1641,8 @@ struct nvmet_ctrl *nvmet_alloc_ctrl(struct nvmet_alloc_ctrl_args *args)
 	INIT_DELAYED_WORK(&ctrl->ka_work, nvmet_keep_alive_timer);
 
 	memcpy(ctrl->hostnqn, args->hostnqn, NVMF_NQN_SIZE);
+	if (args->hostid)
+		uuid_copy(&ctrl->hostid, args->hostid);
 
 	kref_init(&ctrl->ref);
 	ctrl->subsys = subsys;
@@ -1651,23 +1654,6 @@ struct nvmet_ctrl *nvmet_alloc_ctrl(struct nvmet_alloc_ctrl_args *args)
 			sizeof(__le32), GFP_KERNEL);
 	if (!ctrl->changed_ns_list)
 		goto out_free_ctrl;
-
-	ctrl->sqs = kzalloc_objs(struct nvmet_sq *, subsys->max_qid + 1);
-	if (!ctrl->sqs)
-		goto out_free_changed_ns_list;
-
-	ctrl->cqs = kzalloc_objs(struct nvmet_cq *, subsys->max_qid + 1);
-	if (!ctrl->cqs)
-		goto out_free_sqs;
-
-	ret = ida_alloc_range(&cntlid_ida,
-			     subsys->cntlid_min, subsys->cntlid_max,
-			     GFP_KERNEL);
-	if (ret < 0) {
-		args->status = NVME_SC_CONNECT_CTRL_BUSY | NVME_STATUS_DNR;
-		goto out_free_cqs;
-	}
-	ctrl->cntlid = ret;
 
 	/*
 	 * Discovery controllers may use some arbitrary high value
@@ -1682,9 +1668,28 @@ struct nvmet_ctrl *nvmet_alloc_ctrl(struct nvmet_alloc_ctrl_args *args)
 	ctrl->err_counter = 0;
 	spin_lock_init(&ctrl->error_lock);
 
-	nvmet_start_keep_alive_timer(ctrl);
-
+	down_read(&nvmet_config_sem);
 	mutex_lock(&subsys->lock);
+
+	ctrl->max_qid = subsys->max_qid;
+
+	ctrl->sqs = kzalloc_objs(struct nvmet_sq *, ctrl->max_qid + 1);
+	if (!ctrl->sqs)
+		goto out_free_changed_ns_list;
+
+	ctrl->cqs = kzalloc_objs(struct nvmet_cq *, ctrl->max_qid + 1);
+	if (!ctrl->cqs)
+		goto out_free_sqs;
+
+	ret = ida_alloc_range(&cntlid_ida,
+			     subsys->cntlid_min, subsys->cntlid_max,
+			     GFP_KERNEL);
+	if (ret < 0) {
+		args->status = NVME_SC_CONNECT_CTRL_BUSY | NVME_STATUS_DNR;
+		goto out_free_cqs;
+	}
+	ctrl->cntlid = ret;
+
 	ret = nvmet_ctrl_init_pr(ctrl);
 	if (ret)
 		goto init_pr_fail;
@@ -1692,9 +1697,9 @@ struct nvmet_ctrl *nvmet_alloc_ctrl(struct nvmet_alloc_ctrl_args *args)
 	nvmet_setup_p2p_ns_map(ctrl, args->p2p_client);
 	nvmet_debugfs_ctrl_setup(ctrl);
 	mutex_unlock(&subsys->lock);
+	up_read(&nvmet_config_sem);
 
-	if (args->hostid)
-		uuid_copy(&ctrl->hostid, args->hostid);
+	nvmet_start_keep_alive_timer(ctrl);
 
 	dhchap_status = nvmet_setup_auth(ctrl, args->sq, false);
 	if (dhchap_status) {
@@ -1721,14 +1726,14 @@ struct nvmet_ctrl *nvmet_alloc_ctrl(struct nvmet_alloc_ctrl_args *args)
 	return ctrl;
 
 init_pr_fail:
-	mutex_unlock(&subsys->lock);
-	nvmet_stop_keep_alive_timer(ctrl);
 	ida_free(&cntlid_ida, ctrl->cntlid);
 out_free_cqs:
 	kfree(ctrl->cqs);
 out_free_sqs:
 	kfree(ctrl->sqs);
 out_free_changed_ns_list:
+	mutex_unlock(&subsys->lock);
+	up_read(&nvmet_config_sem);
 	kfree(ctrl->changed_ns_list);
 out_free_ctrl:
 	kfree(ctrl);

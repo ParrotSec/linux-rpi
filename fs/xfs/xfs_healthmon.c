@@ -245,7 +245,9 @@ xfs_healthmon_merge_events(
 	case XFS_HEALTHMON_DIOWRITE:
 	case XFS_HEALTHMON_DATALOST:
 		/* logically adjacent file ranges can merge */
-		if (existing->fino != new->fino || existing->fgen != new->fgen)
+		if (existing->fino != new->fino ||
+		    existing->fgen != new->fgen ||
+		    existing->error != new->error)
 			return false;
 
 		if (existing->fpos + existing->flen == new->fpos) {
@@ -272,12 +274,13 @@ __xfs_healthmon_insert(
 {
 	struct timespec64		now;
 
+	lockdep_assert_held(&hm->lock);
+
 	ktime_get_coarse_real_ts64(&now);
 	event->time_ns = (now.tv_sec * NSEC_PER_SEC) + now.tv_nsec;
 
 	event->next = hm->first_event;
-	if (!hm->first_event)
-		hm->first_event = event;
+	hm->first_event = event;
 	if (!hm->last_event)
 		hm->last_event = event;
 	xfs_healthmon_bump_events(hm);
@@ -293,6 +296,8 @@ __xfs_healthmon_push(
 	struct xfs_healthmon_event	*event)
 {
 	struct timespec64		now;
+
+	lockdep_assert_held(&hm->lock);
 
 	ktime_get_coarse_real_ts64(&now);
 	event->time_ns = (now.tv_sec * NSEC_PER_SEC) + now.tv_nsec;
@@ -330,8 +335,10 @@ xfs_healthmon_clear_lost_prev(
 	if (hm->events < XFS_HEALTHMON_MAX_EVENTS)
 		event = kmemdup(&lost_event, sizeof(struct xfs_healthmon_event),
 				GFP_NOFS);
-	if (!event)
+	if (!event) {
+		xfs_healthmon_bump_lost(hm);
 		return -ENOMEM;
+	}
 
 	__xfs_healthmon_push(hm, event);
 cleared:
@@ -415,8 +422,10 @@ xfs_healthmon_unmount(
 	 * There's nothing actionable for userspace after an unmount.  Once
 	 * we've inserted the unmount event, hm no longer owns that event.
 	 */
+	mutex_lock(&hm->lock);
 	__xfs_healthmon_insert(hm, hm->unmount_event);
 	hm->unmount_event = NULL;
+	mutex_unlock(&hm->lock);
 
 	xfs_healthmon_detach(hm);
 	xfs_healthmon_put(hm);
@@ -533,7 +542,7 @@ xfs_healthmon_report_inode(
 	struct xfs_healthmon_event	event = {
 		.type			= type,
 		.domain			= XFS_HEALTHMON_INODE,
-		.ino			= ip->i_ino,
+		.ino			= I_INO(ip),
 		.gen			= VFS_I(ip)->i_generation,
 	};
 	struct xfs_healthmon		*hm = xfs_healthmon_get(ip->i_mount);
@@ -646,7 +655,7 @@ xfs_healthmon_report_file_ioerror(
 	struct xfs_healthmon_event	event = {
 		.type			= file_ioerr_type(p->type),
 		.domain			= XFS_HEALTHMON_FILERANGE,
-		.fino			= ip->i_ino,
+		.fino			= I_INO(ip),
 		.fgen			= VFS_I(ip)->i_generation,
 		.fpos			= p->pos,
 		.flen			= p->len,
@@ -738,6 +747,13 @@ static const unsigned int type_map[] = {
 	[XFS_HEALTHMON_DATALOST]	= XFS_HEALTH_MONITOR_TYPE_DATALOST,
 };
 
+static inline bool
+xfs_healthmon_check_outbuffer_space(const struct xfs_healthmon *hm)
+{
+	return hm->bufhead + sizeof(struct xfs_health_monitor_event) <=
+		hm->bufsize;
+}
+
 /* Render event as a V0 structure */
 STATIC int
 xfs_healthmon_format_v0(
@@ -804,10 +820,10 @@ xfs_healthmon_format_v0(
 		break;
 	}
 
-	ASSERT(hm->bufhead + sizeof(hme) <= hm->bufsize);
+	ASSERT(xfs_healthmon_check_outbuffer_space(hm));
 
 	/* copy formatted object to the outbuf */
-	if (hm->bufhead + sizeof(hme) <= hm->bufsize) {
+	if (xfs_healthmon_check_outbuffer_space(hm)) {
 		memcpy(hm->buffer + hm->bufhead, &hme, sizeof(hme));
 		hm->bufhead += sizeof(hme);
 	}
@@ -890,7 +906,11 @@ xfs_healthmon_format_pop(
 {
 	struct xfs_healthmon_event *event;
 
-	if (hm->bufhead + sizeof(*event) > hm->bufsize)
+	/*
+	 * Don't bother if there's not enough space to format even one event in
+	 * the outbuffer.
+	 */
+	if (!xfs_healthmon_check_outbuffer_space(hm))
 		return NULL;
 
 	mutex_lock(&hm->lock);
@@ -1182,7 +1202,7 @@ xfs_ioc_health_monitor(
 	 */
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-	if (ip->i_ino != mp->m_sb.sb_rootino)
+	if (I_INO(ip) != mp->m_sb.sb_rootino)
 		return -EPERM;
 	if (current_user_ns() != &init_user_ns)
 		return -EPERM;

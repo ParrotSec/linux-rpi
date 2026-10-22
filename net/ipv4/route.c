@@ -1080,6 +1080,8 @@ static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
 
 			for (nhsel = 0; nhsel < fib_info_num_path(res.fi); nhsel++) {
 				nhc = fib_info_nhc(res.fi, nhsel);
+				if (!nhc)
+					break;
 				update_or_create_fnhe(nhc, fl4->daddr, 0, mtu, lock,
 						      jiffies + net->ipv4.ip_rt_mtu_expires);
 			}
@@ -1198,7 +1200,6 @@ out:
 	bh_unlock_sock(sk);
 	dst_release(odst);
 }
-EXPORT_SYMBOL_GPL(ipv4_sk_update_pmtu);
 
 void ipv4_redirect(struct sk_buff *skb, struct net *net,
 		   int oif, u8 protocol)
@@ -1230,7 +1231,6 @@ void ipv4_sk_redirect(struct sk_buff *skb, struct sock *sk)
 		ip_rt_put(rt);
 	}
 }
-EXPORT_SYMBOL_GPL(ipv4_sk_redirect);
 
 INDIRECT_CALLABLE_SCOPE struct dst_entry *ipv4_dst_check(struct dst_entry *dst,
 							 u32 cookie)
@@ -1728,7 +1728,6 @@ struct rtable *rt_dst_clone(struct net_device *dev, struct rtable *rt)
 	}
 	return new_rt;
 }
-EXPORT_SYMBOL(rt_dst_clone);
 
 /* called in rcu_read_lock() section */
 enum skb_drop_reason
@@ -3165,6 +3164,9 @@ int fib_dump_info_fnhe(struct sk_buff *skb, struct netlink_callback *cb,
 		struct fib_nh_common *nhc = fib_info_nhc(fi, nhsel);
 		struct fnhe_hash_bucket *bucket;
 		int err;
+
+		if (!nhc)
+			break;
 
 		if (nhc->nhc_flags & RTNH_F_DEAD)
 			continue;

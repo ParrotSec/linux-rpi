@@ -13,6 +13,49 @@
 #include "hal.h"
 #include "hal_tx.h"
 
+/*
+ * Convert an encrypted EAPOL frame from native-WiFi format to
+ * the layout expected by the firmware RAW encrypt pipeline:
+ *
+ *   [802.11 hdr][IV (zeroed)][LLC/SNAP][EAPOL payload][ICV (zeroed)]
+ *
+ * mac80211 delivers the frame as [802.11 hdr][LLC/SNAP][EAPOL payload].
+ * The MAC header length is read from the unmodified skb and is safe because
+ * ieee80211_hdrlen() only inspects the 2-byte frame_control field.
+ * pskb_expand_head() is used to grow both head (for the IV) and tail
+ * (for the ICV) in a single call and allocation.
+ */
+static int
+ath12k_wifi7_dp_tx_encap_eapol(struct sk_buff *skb,
+			       struct hal_tx_info *ti,
+			       struct ath12k_skb_cb *skb_cb)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	enum hal_encrypt_type enc_type =
+				ath12k_dp_tx_get_encrypt_type(skb_cb->cipher);
+	u16 mac_hdr_len = ieee80211_hdrlen(hdr->frame_control);
+	u8 iv_len = ath12k_dp_tx_crypto_iv_len(enc_type);
+	u8 icv_len = ath12k_dp_tx_crypto_icv_len(enc_type);
+
+	if (pskb_expand_head(skb, iv_len, icv_len, GFP_ATOMIC))
+		return -ENOMEM;
+
+	if (iv_len) {
+		skb_push(skb, iv_len);
+		memmove(skb->data, skb->data + iv_len, mac_hdr_len);
+		memset(skb->data + mac_hdr_len, 0, iv_len);
+	}
+
+	if (icv_len)
+		memset(skb_put(skb, icv_len), 0, icv_len);
+
+	ti->flags0 |= u32_encode_bits(1, HAL_TCL_DATA_CMD_INFO2_TO_FW);
+	ti->encap_type = HAL_TCL_ENCAP_TYPE_RAW;
+	ti->encrypt_type = enc_type;
+
+	return 0;
+}
+
 static void
 ath12k_wifi7_hal_tx_cmd_ext_desc_setup(struct ath12k_base *ab,
 				       struct hal_tx_msdu_ext_desc *tcl_ext_cmd,
@@ -57,10 +100,12 @@ static int ath12k_wifi7_dp_prepare_htt_metadata(struct sk_buff *skb)
 	return 0;
 }
 
+#define ATH12K_AST_HASH_MASK	0xF
+
 /* TODO: Remove the export once this file is built with wifi7 ko */
 int ath12k_wifi7_dp_tx(struct ath12k_pdev_dp *dp_pdev, struct ath12k_link_vif *arvif,
-		       struct sk_buff *skb, bool gsn_valid, int mcbc_gsn,
-		       bool is_mcast)
+		       struct ath12k_link_sta *arsta, struct sk_buff *skb,
+		       bool gsn_valid, int mcbc_gsn, bool is_mcast)
 {
 	struct ath12k_dp *dp = dp_pdev->dp;
 	struct ath12k_hal *hal = dp->hal;
@@ -78,6 +123,7 @@ int ath12k_wifi7_dp_tx(struct ath12k_pdev_dp *dp_pdev, struct ath12k_link_vif *a
 	struct ath12k_dp_vif *dp_vif = &ahvif->dp_vif;
 	struct ath12k_dp_link_vif *dp_link_vif;
 	struct dp_tx_ring *tx_ring;
+	struct ethhdr *eth = NULL;
 	u8 pool_id;
 	u8 hal_ring_id;
 	int ret;
@@ -88,6 +134,7 @@ int ath12k_wifi7_dp_tx(struct ath12k_pdev_dp *dp_pdev, struct ath12k_link_vif *a
 	u32 iova_mask = dp->hw_params->iova_mask;
 	bool is_diff_encap = false;
 	bool is_null_frame = false;
+	bool eapol_encap_done = false;
 
 	if (test_bit(ATH12K_FLAG_CRASH_FLUSH, &ab->dev_flags))
 		return -ESHUTDOWN;
@@ -95,6 +142,9 @@ int ath12k_wifi7_dp_tx(struct ath12k_pdev_dp *dp_pdev, struct ath12k_link_vif *a
 	if (!(info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP) &&
 	    !ieee80211_is_data(hdr->frame_control))
 		return -EOPNOTSUPP;
+
+	if (skb_cb->flags & ATH12K_SKB_HW_80211_ENCAP)
+		eth = (struct ethhdr *)skb->data;
 
 	pool_id = skb_get_queue_mapping(skb) & (ATH12K_HW_MAX_QUEUES - 1);
 
@@ -124,6 +174,19 @@ tcl_ring_sel:
 
 	ti.bank_id = dp_link_vif->bank_id;
 	ti.meta_data_flags = dp_link_vif->tcl_metadata;
+	ti.bss_ast_hash = dp_link_vif->ast_hash;
+	ti.bss_ast_idx = dp_link_vif->ast_idx;
+
+	if (eth && is_multicast_ether_addr(eth->h_dest) && arsta) {
+		ti.meta_data_flags = arsta->tcl_metadata;
+		ti.bss_ast_hash = arsta->ast_hash & ATH12K_AST_HASH_MASK;
+		ti.bss_ast_idx = arsta->ast_idx;
+		ti.lookup_override = true;
+	} else if (!eth && ieee80211_has_a4(hdr->frame_control) &&
+		   is_multicast_ether_addr(hdr->addr3) && arsta) {
+		ti.meta_data_flags = arsta->tcl_metadata;
+		ti.flags0 |= u32_encode_bits(1, HAL_TCL_DATA_CMD_INFO2_TO_FW);
+	}
 
 	if (dp_vif->tx_encap_type == HAL_TCL_ENCAP_TYPE_RAW &&
 	    test_bit(ATH12K_FLAG_HW_CRYPTO_DISABLED, &ab->dev_flags)) {
@@ -140,7 +203,7 @@ tcl_ring_sel:
 		msdu_ext_desc = true;
 	}
 
-	if (gsn_valid) {
+	if (gsn_valid && !ti.lookup_override) {
 		/* Reset and Initialize meta_data_flags with Global Sequence
 		 * Number (GSN) info.
 		 */
@@ -148,6 +211,14 @@ tcl_ring_sel:
 			u32_encode_bits(HTT_TCL_META_DATA_TYPE_GLOBAL_SEQ_NUM,
 					HTT_TCL_META_DATA_TYPE) |
 			u32_encode_bits(mcbc_gsn, HTT_TCL_META_DATA_GLOBAL_SEQ_NUM);
+
+		/*
+		 * Since NAWDS enabled for this vdev firmware expects
+		 * this flag to be set for sending 3-address multicast frame.
+		 */
+		ti.meta_data_flags |=
+			u32_encode_bits(arvif->nawds_enabled,
+					HTT_TCL_META_DATA_GLOBAL_SEQ_HOST_INSPECTED);
 	}
 
 	ti.encap_type = ath12k_dp_tx_get_encap_type(ab, skb);
@@ -158,11 +229,13 @@ tcl_ring_sel:
 	ti.lmac_id = dp_link_vif->lmac_id;
 
 	ti.vdev_id = dp_link_vif->vdev_id;
-	if (gsn_valid)
-		ti.vdev_id += HTT_TX_MLO_MCAST_HOST_REINJECT_BASE_VDEV_ID;
 
-	ti.bss_ast_hash = dp_link_vif->ast_hash;
-	ti.bss_ast_idx = dp_link_vif->ast_idx;
+	if (gsn_valid && !ti.lookup_override)
+		ti.vdev_id += HTT_TX_MLO_MCAST_HOST_REINJECT_BASE_VDEV_ID;
+	else if (arvif->nawds_enabled && is_mcast && !ti.lookup_override)
+		ti.meta_data_flags |=
+			u32_encode_bits(1, HTT_TCL_META_DATA_HOST_INSPECTED_MISSION);
+
 	ti.dscp_tid_tbl_idx = 0;
 
 	if (skb->ip_summed == CHECKSUM_PARTIAL &&
@@ -182,9 +255,27 @@ tcl_ring_sel:
 	case HAL_TCL_ENCAP_TYPE_NATIVE_WIFI:
 		is_null_frame = ieee80211_is_nullfunc(hdr->frame_control);
 		if (ahvif->vif->offload_flags & IEEE80211_OFFLOAD_ENCAP_ENABLED) {
-			if (skb->protocol == cpu_to_be16(ETH_P_PAE) || is_null_frame)
+			if ((skb->protocol == cpu_to_be16(ETH_P_PAE) &&
+			     !(skb_cb->flags & ATH12K_SKB_CIPHER_SET)) || is_null_frame)
 				is_diff_encap = true;
 
+			if (skb->protocol == cpu_to_be16(ETH_P_PAE) &&
+			    (skb_cb->flags & ATH12K_SKB_CIPHER_SET)) {
+				if (!eapol_encap_done) {
+					ret = ath12k_wifi7_dp_tx_encap_eapol(skb, &ti,
+									     skb_cb);
+					if (ret)
+						goto fail_remove_tx_buf;
+					hdr = (void *)skb->data;
+					eapol_encap_done = true;
+				} else {
+					ti.flags0 |= u32_encode_bits(1,
+							HAL_TCL_DATA_CMD_INFO2_TO_FW);
+					ti.encap_type = HAL_TCL_ENCAP_TYPE_RAW;
+					ti.encrypt_type =
+						ath12k_dp_tx_get_encrypt_type(skb_cb->cipher);
+				}
+			}
 			/* Firmware expects msdu ext descriptor for nwifi/raw packets
 			 * received in ETH mode. Without this, observed tx fail for
 			 * Multicast packets in ETH mode.

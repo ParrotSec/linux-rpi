@@ -304,7 +304,8 @@ static int
 mwifiex_cfg80211_remain_on_channel(struct wiphy *wiphy,
 				   struct wireless_dev *wdev,
 				   struct ieee80211_channel *chan,
-				   unsigned int duration, u64 *cookie)
+				   unsigned int duration, u64 *cookie,
+				   const u8 *rx_addr)
 {
 	struct mwifiex_private *priv = mwifiex_netdev_get_priv(wdev->netdev);
 	int ret;
@@ -4278,6 +4279,7 @@ mwifiex_cfg80211_authenticate(struct wiphy *wiphy,
 	struct mwifiex_adapter *adapter = priv->adapter;
 	struct sk_buff *skb;
 	u16 pkt_len, auth_alg;
+	size_t frame_len;
 	int ret;
 	struct mwifiex_ieee80211_mgmt *mgmt;
 	struct mwifiex_txinfo *tx_info;
@@ -4350,10 +4352,17 @@ mwifiex_cfg80211_authenticate(struct wiphy *wiphy,
 
 	mwifiex_cancel_scan(adapter);
 
-	pkt_len = (u16)req->ie_len + req->auth_data_len +
+	frame_len = req->ie_len + req->auth_data_len +
 		MWIFIEX_MGMT_HEADER_LEN + MWIFIEX_AUTH_BODY_LEN;
 	if (req->auth_data_len >= 4)
-		pkt_len -= 4;
+		frame_len -= 4;
+
+	if (frame_len > U16_MAX) {
+		mwifiex_dbg(priv->adapter, ERROR,
+			    "auth frame too long: %zu bytes\n", frame_len);
+		return -EINVAL;
+	}
+	pkt_len = frame_len;
 
 	skb = dev_alloc_skb(MWIFIEX_MIN_DATA_HEADER_LEN +
 			    MWIFIEX_MGMT_FRAME_HEADER_SIZE +

@@ -642,7 +642,7 @@ cleanup:
  */
 static int proc_check_stopped(int pid)
 {
-	char buf[PAGE_SIZE];
+	char buf[BUF_SIZE];
 	int len;
 
 	len = proc_read_text(pid, 0, "stat", buf, sizeof(buf));
@@ -1353,7 +1353,7 @@ static int test_cgfreezer_time_child(const char *root)
 	}
 
 	if (ctime <= ptime) {
-		debug("Expect ctime (%ld) <= ptime (%ld)\n", ctime, ptime);
+		debug("Expect ctime (%ld) > ptime (%ld)\n", ctime, ptime);
 		goto cleanup;
 	}
 
@@ -1491,9 +1491,9 @@ int main(int argc, char *argv[])
 	int i;
 
 	ksft_print_header();
-	ksft_set_plan(ARRAY_SIZE(tests));
 	if (cg_find_unified_root(root, sizeof(root), NULL))
 		ksft_exit_skip("cgroup v2 isn't mounted\n");
+	ksft_set_plan(ARRAY_SIZE(tests));
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		switch (tests[i].fn(root)) {
 		case KSFT_PASS:

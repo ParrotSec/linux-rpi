@@ -382,78 +382,97 @@ static int riscv_iommu_queue_wait(struct riscv_iommu_queue *queue,
 				 (int)(cons - index) > 0, 0, timeout_us);
 }
 
-/* Enqueue an entry and wait to be processed if timeout_us > 0
- *
- * Error handling for IOMMU hardware not responding in reasonable time
- * will be added as separate patch series along with other RAS features.
- * For now, only report hardware failure and continue.
- */
-static unsigned int riscv_iommu_queue_send(struct riscv_iommu_queue *queue,
-					   void *entry, size_t entry_size)
+static int riscv_iommu_queue_wait_for_space(struct riscv_iommu_queue *queue,
+						   unsigned int last)
+{
+	unsigned int head;
+	unsigned int tail;
+	unsigned int hw_head;
+	unsigned long flags;
+	int ret;
+
+	ret = riscv_iommu_readl_timeout(queue->iommu, Q_HEAD(queue), hw_head,
+					      !(hw_head & ~queue->mask) && hw_head != last,
+					      0, RISCV_IOMMU_QUEUE_TIMEOUT);
+	if (ret)
+		return ret;
+
+	raw_spin_lock_irqsave(&queue->lock, flags);
+	head = atomic_read(&queue->head);
+	tail = atomic_read(&queue->tail);
+	if ((tail - head) >= queue->mask) {
+		last = Q_ITEM(queue, head);
+		/*
+		 * Re-read hw_head under the lock so that it is consistent with
+		 * the freshly computed 'last'.  Using the pre-lock snapshot
+		 * could produce a stale value that wraps around relative to the
+		 * new 'last', advancing the shadow head past entries that have
+		 * not yet been consumed by the hardware.
+		 */
+		hw_head = riscv_iommu_readl(queue->iommu, Q_HEAD(queue));
+		if (!(hw_head & ~queue->mask) && hw_head != last)
+			atomic_add((hw_head - last) & queue->mask, &queue->head);
+	}
+	raw_spin_unlock_irqrestore(&queue->lock, flags);
+
+	return 0;
+}
+
+/* Enqueue an entry and publish it to the hardware queue. */
+static int riscv_iommu_queue_send(struct riscv_iommu_queue *queue,
+					  void *entry, size_t entry_size,
+					  unsigned int *out_prod)
 {
 	unsigned int prod;
 	unsigned int head;
-	unsigned int tail;
 	unsigned long flags;
+	int ret;
 
-	/* Do not preempt submission flow. */
-	local_irq_save(flags);
+	/* 1. Wait for space availability and reserve the next slot. */
+	for (;;) {
+		raw_spin_lock_irqsave(&queue->lock, flags);
 
-	/* 1. Allocate some space in the queue */
-	prod = atomic_inc_return(&queue->prod) - 1;
-	head = atomic_read(&queue->head);
+		prod = atomic_read(&queue->tail);
+		head = atomic_read(&queue->head);
 
-	/* 2. Wait for space availability. */
-	if ((prod - head) > queue->mask) {
-		if (readx_poll_timeout(atomic_read, &queue->head,
-				       head, (prod - head) < queue->mask,
-				       0, RISCV_IOMMU_QUEUE_TIMEOUT))
+		if ((prod - head) < queue->mask)
+			break;
+
+		head = Q_ITEM(queue, head);
+		raw_spin_unlock_irqrestore(&queue->lock, flags);
+
+		ret = riscv_iommu_queue_wait_for_space(queue, head);
+		if (ret)
 			goto err_busy;
-	} else if ((prod - head) == queue->mask) {
-		const unsigned int last = Q_ITEM(queue, head);
-
-		if (riscv_iommu_readl_timeout(queue->iommu, Q_HEAD(queue), head,
-					      !(head & ~queue->mask) && head != last,
-					      0, RISCV_IOMMU_QUEUE_TIMEOUT))
-			goto err_busy;
-		atomic_add((head - last) & queue->mask, &queue->head);
 	}
 
-	/* 3. Store entry in the ring buffer */
+	/* 2. Store entry in the ring buffer. */
 	memcpy(queue->base + Q_ITEM(queue, prod) * entry_size, entry, entry_size);
 
-	/* 4. Wait for all previous entries to be ready */
-	if (readx_poll_timeout(atomic_read, &queue->tail, tail, prod == tail,
-			       0, RISCV_IOMMU_QUEUE_TIMEOUT))
-		goto err_busy;
-
-	/*
-	 * 5. Make sure the ring buffer update (whether in normal or I/O memory) is
-	 *    completed and visible before signaling the tail doorbell to fetch
-	 *    the next command. 'fence ow, ow'
-	 */
+	/* 3. Make sure the entry is visible before updating the queue tail. */
 	dma_wmb();
 	riscv_iommu_writel(queue->iommu, Q_TAIL(queue), Q_ITEM(queue, prod + 1));
 
 	/*
-	 * 6. Make sure the doorbell write to the device has finished before updating
-	 *    the shadow tail index in normal memory. 'fence o, w'
+	 * 4. Make sure the doorbell write to the device has finished before
+	 *    updating the shadow tail index in normal memory. 'fence o, w'
 	 */
 #ifdef CONFIG_MMIOWB
 	mmiowb();
 #endif
-	atomic_inc(&queue->tail);
+	atomic_set(&queue->tail, prod + 1);
+	atomic_set(&queue->prod, prod + 1);
 
-	/* 7. Complete submission and restore local interrupts */
-	local_irq_restore(flags);
+	if (out_prod)
+		*out_prod = prod;
 
-	return prod;
+	raw_spin_unlock_irqrestore(&queue->lock, flags);
+	return 0;
 
 err_busy:
-	local_irq_restore(flags);
+	/* Report the failure and continue; full RAS recovery is not implemented. */
 	dev_err_once(queue->iommu->dev, "Hardware error: command enqueue failed\n");
-
-	return prod;
+	return ret;
 }
 
 /*
@@ -492,7 +511,7 @@ static irqreturn_t riscv_iommu_cmdq_process(int irq, void *data)
 static void riscv_iommu_cmd_send(struct riscv_iommu_device *iommu,
 				 struct riscv_iommu_command *cmd)
 {
-	riscv_iommu_queue_send(&iommu->cmdq, cmd, sizeof(*cmd));
+	riscv_iommu_queue_send(&iommu->cmdq, cmd, sizeof(*cmd), NULL);
 }
 
 /* Send IOFENCE.C command and wait for all scheduled commands to complete. */
@@ -501,9 +520,12 @@ static void riscv_iommu_cmd_sync(struct riscv_iommu_device *iommu,
 {
 	struct riscv_iommu_command cmd;
 	unsigned int prod;
+	int ret;
 
 	riscv_iommu_cmd_iofence(&cmd);
-	prod = riscv_iommu_queue_send(&iommu->cmdq, &cmd, sizeof(cmd));
+	ret = riscv_iommu_queue_send(&iommu->cmdq, &cmd, sizeof(cmd), &prod);
+	if (ret)
+		return;
 
 	if (!timeout_us)
 		return;
@@ -920,20 +942,120 @@ static void riscv_iommu_bond_unlink(struct riscv_iommu_domain *domain,
 	}
 }
 
-/*
- * Send IOTLB.INVAL for whole address space for ranges larger than 2MB.
- * This limit will be replaced with range invalidations, if supported by
- * the hardware, when RISC-V IOMMU architecture specification update for
- * range invalidations update will be available.
- */
-#define RISCV_IOMMU_IOTLB_INVAL_LIMIT	(2 << 20)
+struct riscv_iommu_tlbi {
+	u64 start;
+	u64 last;
+	bool non_leaf;
+	struct {
+		bool use_global;
+		u8 stride_lg2;
+		unsigned int num;
+	} single;
+	struct {
+		u8 sz_lg2;
+		u64 addr;
+	} range;
+};
+
+static void riscv_iommu_tlbi_calc(struct riscv_iommu_tlbi *tlbi,
+				  struct iommu_iotlb_gather *gather)
+{
+	u8 combined = gather->pt.leaf_levels_bitmap |
+		      gather->pt.table_levels_bitmap;
+	u64 num;
+
+	tlbi->non_leaf = gather->pt.table_levels_bitmap != 0;
+	tlbi->start = gather->start;
+	tlbi->last = gather->end;
+
+	/* No level information available */
+	if (!combined) {
+		tlbi->single.use_global = true;
+		tlbi->range.sz_lg2 = 0;
+		return;
+	}
+
+	/*
+	 * Calculate the smallest NAPOT range containing [start, last].
+	 * NAPOT encoding requires a power-of-two sized, naturally aligned
+	 * range. Over-invalidation is always safe.
+	 */
+	tlbi->range.sz_lg2 = fls64(tlbi->start ^ tlbi->last);
+	if (unlikely(tlbi->range.sz_lg2 >= 64)) {
+		tlbi->single.use_global = true;
+		tlbi->range.sz_lg2 = 0;
+		return;
+	}
+	tlbi->range.addr = tlbi->start & ~(BIT_U64(tlbi->range.sz_lg2) - 1);
+
+	/*
+	 * Calculate stride from the lowest changed level. RISC-V uses 4KiB
+	 * granule with 9 bits per level.
+	 */
+	tlbi->single.stride_lg2 = 9 * __ffs(combined) + 12;
+	num = (tlbi->last - tlbi->start + 1) >> tlbi->single.stride_lg2;
+	if (!num || num > 512) {
+		tlbi->single.use_global = true;
+	} else {
+		tlbi->single.num = num;
+		tlbi->single.use_global = false;
+	}
+}
+
+static void riscv_iommu_iotlb_inval_iommu(struct riscv_iommu_device *iommu,
+					  int pscid,
+					  struct riscv_iommu_tlbi *tlbi)
+{
+	bool use_nl = tlbi->non_leaf &&
+		      (iommu->caps & RISCV_IOMMU_CAPABILITIES_NL);
+	struct riscv_iommu_command cmd;
+	unsigned int i;
+
+	riscv_iommu_cmd_inval_vma(&cmd);
+	riscv_iommu_cmd_inval_set_pscid(&cmd, pscid);
+
+	/*
+	 * If non-leaf entries were changed and the IOMMU doesn't
+	 * support NL, we must fall back to global invalidation (AV=0).
+	 */
+	if (tlbi->non_leaf && !use_nl)
+		goto global;
+
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_S &&
+	    tlbi->range.sz_lg2 >= 13) {
+		riscv_iommu_cmd_inval_set_napot(&cmd, tlbi->range.addr,
+						tlbi->range.sz_lg2);
+		if (use_nl)
+			riscv_iommu_cmd_inval_set_nl(&cmd);
+		riscv_iommu_cmd_send(iommu, &cmd);
+	} else {
+		unsigned long iova;
+
+		if (tlbi->single.use_global)
+			goto global;
+
+		iova = tlbi->start;
+		for (i = 0; i < tlbi->single.num; i++) {
+			riscv_iommu_cmd_inval_set_addr(&cmd, iova);
+			if (use_nl)
+				riscv_iommu_cmd_inval_set_nl(&cmd);
+			riscv_iommu_cmd_send(iommu, &cmd);
+			iova += 1ULL << tlbi->single.stride_lg2;
+		}
+	}
+	return;
+global:
+	riscv_iommu_cmd_send(iommu, &cmd);
+}
 
 static void riscv_iommu_iotlb_inval(struct riscv_iommu_domain *domain,
-				    unsigned long start, unsigned long end)
+				    struct iommu_iotlb_gather *gather)
 {
-	struct riscv_iommu_bond *bond;
 	struct riscv_iommu_device *iommu, *prev;
-	struct riscv_iommu_command cmd;
+	struct riscv_iommu_bond *bond;
+	struct riscv_iommu_tlbi tlbi;
+
+	riscv_iommu_tlbi_calc(&tlbi, gather);
 
 	/*
 	 * For each IOMMU linked with this protection domain (via bonds->dev),
@@ -974,19 +1096,7 @@ static void riscv_iommu_iotlb_inval(struct riscv_iommu_domain *domain,
 		if (iommu == prev)
 			continue;
 
-		riscv_iommu_cmd_inval_vma(&cmd);
-		riscv_iommu_cmd_inval_set_pscid(&cmd, domain->pscid);
-		if (end - start < RISCV_IOMMU_IOTLB_INVAL_LIMIT - 1) {
-			unsigned long iova = start;
-
-			do {
-				riscv_iommu_cmd_inval_set_addr(&cmd, iova);
-				riscv_iommu_cmd_send(iommu, &cmd);
-			} while (!check_add_overflow(iova, PAGE_SIZE, &iova) &&
-				 iova < end);
-		} else {
-			riscv_iommu_cmd_send(iommu, &cmd);
-		}
+		riscv_iommu_iotlb_inval_iommu(iommu, domain->pscid, &tlbi);
 		prev = iommu;
 	}
 
@@ -1145,8 +1255,14 @@ static void riscv_iommu_iodir_update(struct riscv_iommu_device *iommu,
 static void riscv_iommu_iotlb_flush_all(struct iommu_domain *iommu_domain)
 {
 	struct riscv_iommu_domain *domain = iommu_domain_to_riscv(iommu_domain);
+	struct iommu_iotlb_gather gather = {
+		.start = 0,
+		.end = ULONG_MAX,
+		.pt.leaf_levels_bitmap = 0xFF,
+		.pt.table_levels_bitmap = 0xFE,
+	};
 
-	riscv_iommu_iotlb_inval(domain, 0, ULONG_MAX);
+	riscv_iommu_iotlb_inval(domain, &gather);
 }
 
 static void riscv_iommu_iotlb_sync(struct iommu_domain *iommu_domain,
@@ -1154,19 +1270,8 @@ static void riscv_iommu_iotlb_sync(struct iommu_domain *iommu_domain,
 {
 	struct riscv_iommu_domain *domain = iommu_domain_to_riscv(iommu_domain);
 
-	if (iommu_pages_list_empty(&gather->freelist)) {
-		riscv_iommu_iotlb_inval(domain, gather->start, gather->end);
-	} else {
-		/*
-		 * In 1.0 spec version, the smallest scope we can use to
-		 * invalidate all levels of page table (i.e. leaf and non-leaf)
-		 * is an invalidate-all-PSCID IOTINVAL.VMA with AV=0.
-		 * This will be updated with hardware support for
-		 * capability.NL (non-leaf) IOTINVAL command.
-		 */
-		riscv_iommu_iotlb_inval(domain, 0, ULONG_MAX);
-		iommu_put_pages_list(&gather->freelist);
-	}
+	riscv_iommu_iotlb_inval(domain, gather);
+	iommu_put_pages_list(&gather->freelist);
 }
 
 static void riscv_iommu_free_paging_domain(struct iommu_domain *iommu_domain)
@@ -1267,7 +1372,10 @@ static struct iommu_domain *riscv_iommu_alloc_paging_domain(struct device *dev)
 	 */
 	cfg.common.features = BIT(PT_FEAT_SIGN_EXTEND) |
 			      BIT(PT_FEAT_FLUSH_RANGE) |
-			      BIT(PT_FEAT_RISCV_SVNAPOT_64K);
+			      BIT(PT_FEAT_RISCV_SVNAPOT_64K) |
+			      BIT(PT_FEAT_DETAILED_GATHER);
+	if (iommu->caps & RISCV_IOMMU_CAPABILITIES_SVPBMT)
+		cfg.common.features |= BIT(PT_FEAT_RISCV_SVPBMT);
 	domain->riscvpt.iommu.nid = dev_to_node(iommu->dev);
 	domain->domain.ops = &riscv_iommu_paging_domain_ops;
 
@@ -1474,6 +1582,7 @@ int riscv_iommu_init(struct riscv_iommu_device *iommu)
 	int rc;
 
 	RISCV_IOMMU_QUEUE_INIT(&iommu->cmdq, CQ);
+	raw_spin_lock_init(&iommu->cmdq.lock);
 	RISCV_IOMMU_QUEUE_INIT(&iommu->fltq, FQ);
 
 	rc = riscv_iommu_init_check(iommu);

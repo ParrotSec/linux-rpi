@@ -145,6 +145,7 @@ struct nfs4_stid {
 	spinlock_t		sc_lock;
 	struct nfs4_client	*sc_client;
 	struct nfs4_file	*sc_file;
+	struct svc_export	*sc_export;
 	void			(*sc_free)(struct nfs4_stid *);
 };
 
@@ -383,6 +384,7 @@ struct nfsd4_session {
 	u16			se_slot_gen;
 	bool			se_dead;
 	u32			se_target_maxslots;
+	struct rcu_head		rcu_head;
 };
 
 /* formatted contents of nfs4_sessionid */
@@ -495,7 +497,7 @@ struct nfs4_client {
 #define NFSD4_CB_FAULT		3
 	int			cl_cb_state;
 	struct nfsd4_callback	cl_cb_null;
-	struct nfsd4_session	*cl_cb_session;
+	struct nfsd4_session	__rcu *cl_cb_session;
 
 	/* for all client information that callback code might need: */
 	spinlock_t		cl_lock;
@@ -753,6 +755,7 @@ struct nfs4_layout_stateid {
 	struct delayed_work		ls_fence_work;
 	unsigned int			ls_fence_delay;
 	bool				ls_fenced;
+	bool				ls_fence_inflight;
 };
 
 static inline struct nfs4_layout_stateid *layoutstateid(struct nfs4_stid *s)
@@ -862,11 +865,16 @@ struct nfsd_file *find_any_file(struct nfs4_file *f);
 
 #ifdef CONFIG_NFSD_V4
 void nfsd4_revoke_states(struct nfsd_net *nn, struct super_block *sb);
+void nfsd4_revoke_export_states(struct nfsd_net *nn, const struct path *path);
 void nfsd4_cancel_copy_by_sb(struct net *net, struct super_block *sb);
 int nfsd_net_cb_init(struct nfsd_net *nn);
 void nfsd_net_cb_shutdown(struct nfsd_net *nn);
 #else
 static inline void nfsd4_revoke_states(struct nfsd_net *nn, struct super_block *sb)
+{
+}
+static inline void nfsd4_revoke_export_states(struct nfsd_net *nn,
+					      const struct path *path)
 {
 }
 static inline void nfsd4_cancel_copy_by_sb(struct net *net, struct super_block *sb)

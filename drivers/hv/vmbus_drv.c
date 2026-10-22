@@ -1369,8 +1369,6 @@ static void run_vmbus_irqd(unsigned int cpu)
 	__vmbus_isr();
 }
 
-static bool vmbus_irq_initialized;
-
 static struct smp_hotplug_thread vmbus_irq_threads = {
 	.store                  = &vmbus_irqd,
 	.setup			= vmbus_irqd_setup,
@@ -1497,11 +1495,10 @@ static int vmbus_bus_init(void)
 	 * the VMbus interrupt handler.
 	 */
 
-	if (IS_ENABLED(CONFIG_PREEMPT_RT) && !vmbus_irq_initialized) {
+	if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
 		ret = smpboot_register_percpu_thread(&vmbus_irq_threads);
 		if (ret)
 			goto err_kthread;
-		vmbus_irq_initialized = true;
 	}
 
 	if (vmbus_irq == -1) {
@@ -1545,10 +1542,8 @@ err_connect:
 	else
 		free_percpu_irq(vmbus_irq, &vmbus_evt);
 err_setup:
-	if (IS_ENABLED(CONFIG_PREEMPT_RT) && vmbus_irq_initialized) {
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
 		smpboot_unregister_percpu_thread(&vmbus_irq_threads);
-		vmbus_irq_initialized = false;
-	}
 err_kthread:
 	bus_unregister(&hv_bus);
 	return ret;
@@ -2180,6 +2175,7 @@ int vmbus_device_register(struct hv_device *child_device_obj)
 	child_device_obj->device.dma_parms = &child_device_obj->dma_parms;
 	child_device_obj->device.dma_mask = &child_device_obj->dma_mask;
 	dma_set_mask(&child_device_obj->device, DMA_BIT_MASK(64));
+	dma_set_coherent_mask(&child_device_obj->device, DMA_BIT_MASK(64));
 
 	/*
 	 * Register with the LDM. This will kick off the driver/device
@@ -2986,6 +2982,13 @@ static int __init hv_acpi_init(void)
 		return -ENODEV;
 
 	if (hv_root_partition() && !hv_nested)
+		/*
+		 * A non-nested root partition does not need VMBus client
+		 * functionality. However, the mshv_root module may have
+		 * a dependency on the VMBus module as described in
+		 * commit 840b740a35bf. Return success so the module
+		 * loads even though no VMBus initialization is done.
+		 */
 		return 0;
 
 	/*
@@ -3034,6 +3037,14 @@ static void __exit vmbus_exit(void)
 {
 	int cpu;
 
+	if (hv_root_partition() && !hv_nested)
+		/*
+		 * If a non-nested root partition loaded the VMBus module,
+		 * hv_acpi_init() did not do any VMBus initialization.
+		 * There's nothing to clean up, so just return.
+		 */
+		return;
+
 	unregister_syscore(&hv_synic_syscore);
 
 	hv_remove_kexec_handler();
@@ -3045,10 +3056,9 @@ static void __exit vmbus_exit(void)
 		hv_remove_vmbus_handler();
 	else
 		free_percpu_irq(vmbus_irq, &vmbus_evt);
-	if (IS_ENABLED(CONFIG_PREEMPT_RT) && vmbus_irq_initialized) {
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
 		smpboot_unregister_percpu_thread(&vmbus_irq_threads);
-		vmbus_irq_initialized = false;
-	}
+
 	for_each_online_cpu(cpu) {
 		struct hv_per_cpu_context *hv_cpu
 			= per_cpu_ptr(hv_context.cpu_context, cpu);

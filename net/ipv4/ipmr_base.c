@@ -39,7 +39,7 @@ static void __mr_free_table(struct work_struct *work)
 
 void mr_table_free(struct mr_table *mrt)
 {
-	queue_rcu_work(system_unbound_wq, &mrt->work);
+	queue_rcu_work(system_dfl_wq, &mrt->work);
 }
 
 struct mr_table *
@@ -52,7 +52,7 @@ mr_table_alloc(struct net *net, u32 id,
 	struct mr_table *mrt;
 	int err;
 
-	mrt = kzalloc_obj(*mrt);
+	mrt = kzalloc_obj(*mrt, GFP_KERNEL_ACCOUNT);
 	if (!mrt)
 		return ERR_PTR(-ENOMEM);
 	mrt->id = id;

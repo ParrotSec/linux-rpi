@@ -397,12 +397,18 @@ static int UVERBS_HANDLER(BNXT_RE_METHOD_DBR_ALLOC)(struct uverbs_attr_bundle *a
 		goto free_dpi;
 	}
 
+	/* Save DPI info to the mmap entry so that bnxt_re_mmap_free()
+	 * can free the DPI slot only after the last reference to the
+	 * mmap entry is released.
+	 */
+	obj->entry->dpi = *dpi;
+	obj->entry->dpi_valid = true;
+
 	obj->rdev = rdev;
 	kref_init(&obj->usecnt);
 	uobj->object = obj;
 	uverbs_finalize_uobj_create(attrs, BNXT_RE_ALLOC_DBR_HANDLE);
 
-	dbr.umdbr = dpi->umdbr;
 	dbr.dpi = dpi->dpi;
 	ret = uverbs_copy_to_struct_or_zero(attrs, BNXT_RE_ALLOC_DBR_ATTR,
 					    &dbr, sizeof(dbr));
@@ -425,10 +431,12 @@ void bnxt_re_dbr_kref_release(struct kref *ref)
 {
 	struct bnxt_re_dbr_obj *obj =
 		container_of(ref, struct bnxt_re_dbr_obj, usecnt);
-	struct bnxt_re_dev *rdev = obj->rdev;
 
+	/* Drop the driver's reference to the mmap entry (_remove()).
+	 * The DPI slot gets freed from bnxt_re_mmap_free() only
+	 * when there's no VMA mapping reference to it.
+	 */
 	rdma_user_mmap_entry_remove(&obj->entry->rdma_entry);
-	bnxt_qplib_free_uc_dpi(&rdev->qplib_res, &obj->dpi);
 	kfree(obj);
 }
 
@@ -463,7 +471,6 @@ static int UVERBS_HANDLER(BNXT_RE_METHOD_GET_DEFAULT_DBR)(struct uverbs_attr_bun
 		return PTR_ERR(ib_uctx);
 
 	uctx = container_of(ib_uctx, struct bnxt_re_ucontext, ib_uctx);
-	dpi.umdbr = uctx->dpi.umdbr;
 	dpi.dpi = uctx->dpi.dpi;
 
 	ret = uverbs_copy_to_struct_or_zero(attrs, BNXT_RE_DEFAULT_DBR_ATTR,
@@ -481,7 +488,7 @@ DECLARE_UVERBS_NAMED_METHOD(BNXT_RE_METHOD_DBR_ALLOC,
 					    UA_MANDATORY),
 			    UVERBS_ATTR_PTR_OUT(BNXT_RE_ALLOC_DBR_ATTR,
 						UVERBS_ATTR_STRUCT(struct bnxt_re_db_region,
-								   umdbr),
+								   reserved2),
 								   UA_MANDATORY),
 			    UVERBS_ATTR_PTR_OUT(BNXT_RE_ALLOC_DBR_OFFSET,
 						UVERBS_ATTR_TYPE(u64),
@@ -501,7 +508,7 @@ DECLARE_UVERBS_NAMED_OBJECT(BNXT_RE_OBJECT_DBR,
 DECLARE_UVERBS_NAMED_METHOD(BNXT_RE_METHOD_GET_DEFAULT_DBR,
 			    UVERBS_ATTR_PTR_OUT(BNXT_RE_DEFAULT_DBR_ATTR,
 						UVERBS_ATTR_STRUCT(struct bnxt_re_db_region,
-								   umdbr),
+								   reserved2),
 						UA_MANDATORY));
 
 DECLARE_UVERBS_GLOBAL_METHODS(BNXT_RE_OBJECT_DEFAULT_DBR,

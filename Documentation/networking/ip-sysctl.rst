@@ -248,7 +248,7 @@ neigh/default/unres_qlen - INTEGER
 
 neigh/default/interval_probe_time_ms - INTEGER
 	The probe interval for neighbor entries with NTF_MANAGED flag,
-	the min value is 1.
+	the min value is 1, and the max value is 86400000 (1 day).
 
 	Default: 5000
 
@@ -489,7 +489,7 @@ tcp_ecn - INTEGER
 tcp_ecn_option - INTEGER
 	Control Accurate ECN (AccECN) option sending when AccECN has been
 	successfully negotiated during handshake. Send logic inhibits
-	sending AccECN options regarless of this setting when no AccECN
+	sending AccECN options regardless of this setting when no AccECN
 	option has been seen for the reverse direction.
 
 	Possible values are:
@@ -873,6 +873,8 @@ tcp_rmem - vector of 3 INTEGERs: min, default, max
 	automatic tuning of that socket's receive buffer size, in which
 	case this value is ignored.
 	Default: between 131072 and 32MB, depending on RAM size.
+
+	Each of the three values cannot be set below 4096.
 
 tcp_sack - BOOLEAN
 	Enable select acknowledgments (SACKS).
@@ -2444,7 +2446,11 @@ fib_multipath_hash_policy - INTEGER
 
 	Possible values:
 
-	- 0 - Layer 3 (source and destination addresses plus flow label)
+	- 0 - Layer 3 (source and destination addresses plus flow label).
+	  For IPv6 TCP, the local ECMP path is selected from the socket
+	  txhash rather than the flow label, and may change after a TCP
+	  rehash event (such as a retransmission timeout) to recover from
+	  path failure.  The on-wire flow label is unaffected.
 	- 1 - Layer 4 (standard 5-tuple)
 	- 2 - Layer 3 or inner Layer 3 if present
 	- 3 - Custom multipath hash. Fields used for multipath hash calculation

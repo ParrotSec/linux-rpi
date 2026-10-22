@@ -337,6 +337,8 @@ static const struct reg_default rt1318_reg[] = {
 	{ 0xdd08, 0x40 },
 	{ 0xdd12, 0x00 },
 	{ 0xdd35, 0x00 },
+	{ 0xdd93, 0x00 },
+	{ 0xdd94, 0x64 },
 	{ 0xddb5, 0x00 },
 	{ 0xddb6, 0x40 },
 	{ 0xddb7, 0x00 },
@@ -345,8 +347,6 @@ static const struct reg_default rt1318_reg[] = {
 	{ 0xddc6, 0x00 },
 	{ 0xddc7, 0x00 },
 	{ 0xddc8, 0x00 },
-	{ 0xdd93, 0x00 },
-	{ 0xdd94, 0x64 },
 	{ 0xdf00, 0x00 },
 	{ 0xdf5f, 0x00 },
 	{ 0xdf60, 0x00 },
@@ -1139,7 +1139,7 @@ static const struct regmap_config rt1318_regmap = {
 };
 
 static const struct i2c_device_id rt1318_i2c_id[] = {
-	{ "rt1318" },
+	{ .name = "rt1318" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, rt1318_i2c_id);

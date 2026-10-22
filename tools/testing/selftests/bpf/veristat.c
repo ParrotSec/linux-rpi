@@ -48,6 +48,7 @@ enum stat_id {
 	SIZE,
 	JITED_SIZE,
 	STACK,
+	MAX_STACK,
 	PROG_TYPE,
 	ATTACH_TYPE,
 	MEMORY_PEAK,
@@ -513,6 +514,40 @@ cleanup:
 	return err == 0;
 }
 
+/* Exact filter match */
+static bool name_filter_matches(struct filter *f, const char *filename, const char *prog_name)
+{
+	if (f->any_glob)
+		return glob_matches(filename, f->any_glob) ||
+		       (prog_name && glob_matches(prog_name, f->any_glob));
+	if (f->file_glob && f->prog_glob)
+		return prog_name &&
+		       glob_matches(filename, f->file_glob) &&
+		       glob_matches(prog_name, f->prog_glob);
+	if (f->file_glob)
+		return glob_matches(filename, f->file_glob);
+	if (f->prog_glob)
+		return prog_name && glob_matches(prog_name, f->prog_glob);
+	return false;
+}
+
+/* Check if the filter does not outright reject the file name */
+static bool name_filter_may_match(struct filter *f, const char *filename)
+{
+	if (f->file_glob)
+		return glob_matches(filename, f->file_glob);
+	/*
+	 * If we don't know program name yet, any_glob filter
+	 * has to assume that current BPF object file might be
+	 * relevant; we'll check again later on after opening
+	 * BPF object file, at which point program name will
+	 * be known finally.
+	 */
+	if (f->any_glob || f->prog_glob)
+		return true;
+	return false;
+}
+
 static bool should_process_file_prog(const char *filename, const char *prog_name)
 {
 	struct filter *f;
@@ -520,16 +555,7 @@ static bool should_process_file_prog(const char *filename, const char *prog_name
 
 	for (i = 0; i < env.deny_filter_cnt; i++) {
 		f = &env.deny_filters[i];
-		if (f->kind != FILTER_NAME)
-			continue;
-
-		if (f->any_glob && glob_matches(filename, f->any_glob))
-			return false;
-		if (f->any_glob && prog_name && glob_matches(prog_name, f->any_glob))
-			return false;
-		if (f->file_glob && glob_matches(filename, f->file_glob))
-			return false;
-		if (f->prog_glob && prog_name && glob_matches(prog_name, f->prog_glob))
+		if (f->kind == FILTER_NAME && name_filter_matches(f, filename, prog_name))
 			return false;
 	}
 
@@ -539,24 +565,15 @@ static bool should_process_file_prog(const char *filename, const char *prog_name
 			continue;
 
 		allow_cnt++;
-		if (f->any_glob) {
-			if (glob_matches(filename, f->any_glob))
-				return true;
-			/* If we don't know program name yet, any_glob filter
-			 * has to assume that current BPF object file might be
-			 * relevant; we'll check again later on after opening
-			 * BPF object file, at which point program name will
-			 * be known finally.
-			 */
-			if (!prog_name || glob_matches(prog_name, f->any_glob))
-				return true;
-		} else {
-			if (f->file_glob && !glob_matches(filename, f->file_glob))
-				continue;
-			if (f->prog_glob && prog_name && !glob_matches(prog_name, f->prog_glob))
-				continue;
+		if (prog_name && name_filter_matches(f, filename, prog_name))
 			return true;
-		}
+		/*
+		 * If there is no prog_name and the file name is not blocked by
+		 * the filter, allow to open the file. Afterwards there would be
+		 * a second refining query with prog_name set.
+		 */
+		if (!prog_name && name_filter_may_match(f, filename))
+			return true;
 	}
 
 	/* if there are no file/prog name allow filters, allow all progs,
@@ -702,6 +719,12 @@ static int append_filter(struct filter **filters, int *cnt, const char *str)
 		}
 	}
 
+	if ((!f->any_glob && !f->file_glob && !f->prog_glob) ||
+	    (f->any_glob && strcmp(f->any_glob, "") == 0)) {
+		fprintf(stderr, "Invalid filter: '%s'\n", str);
+		return -EINVAL;
+	}
+
 	*cnt += 1;
 	return 0;
 }
@@ -789,13 +812,13 @@ cleanup:
 }
 
 static const struct stat_specs default_csv_output_spec = {
-	.spec_cnt = 15,
+	.spec_cnt = 16,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
 		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
 		MAX_STATES_PER_INSN, MARK_READ_MAX_LEN,
 		SIZE, JITED_SIZE, PROG_TYPE, ATTACH_TYPE,
-		STACK, MEMORY_PEAK,
+		STACK, MAX_STACK, MEMORY_PEAK,
 	},
 };
 
@@ -834,6 +857,7 @@ static struct stat_def {
 	[SIZE] = { "Program size", {"prog_size"}, },
 	[JITED_SIZE] = { "Jited size", {"prog_size_jited"}, },
 	[STACK] = {"Stack depth", {"stack_depth", "stack"}, },
+	[MAX_STACK] = {"Max stack depth", {"max_stack_depth"}, },
 	[PROG_TYPE] = { "Program type", {"prog_type"}, },
 	[ATTACH_TYPE] = { "Attach type", {"attach_type", }, },
 	[MEMORY_PEAK] = { "Peak memory (MiB)", {"mem_peak", }, },
@@ -1023,7 +1047,7 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 				&s->stats[MARK_READ_MAX_LEN]))
 			continue;
 
-		if (1 == sscanf(cur, "stack depth %511s", stack))
+		if (2 == sscanf(cur, "stack depth %511s max %ld", stack, &s->stats[MAX_STACK]))
 			continue;
 	}
 	while ((token = strtok_r(cnt++ ? NULL : stack, "+", &state))) {
@@ -2278,6 +2302,7 @@ static int cmp_stat(const struct verif_stats *s1, const struct verif_stats *s2,
 	case SIZE:
 	case JITED_SIZE:
 	case STACK:
+	case MAX_STACK:
 	case VERDICT:
 	case DURATION:
 	case TOTAL_INSNS:
@@ -2512,6 +2537,7 @@ static void prepare_value(const struct verif_stats *s, enum stat_id id,
 	case MAX_STATES_PER_INSN:
 	case MARK_READ_MAX_LEN:
 	case STACK:
+	case MAX_STACK:
 	case SIZE:
 	case JITED_SIZE:
 	case MEMORY_PEAK:
@@ -2602,7 +2628,8 @@ static int parse_stat_value(const char *str, enum stat_id id, struct verif_stats
 	case SIZE:
 	case JITED_SIZE:
 	case MEMORY_PEAK:
-	case STACK: {
+	case STACK:
+	case MAX_STACK: {
 		long val;
 		int err, n;
 

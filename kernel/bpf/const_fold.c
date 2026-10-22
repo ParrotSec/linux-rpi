@@ -58,6 +58,14 @@ static void const_reg_xfer(struct bpf_verifier_env *env, struct const_arg_info *
 	u8 opcode = BPF_OP(insn->code) | BPF_SRC(insn->code);
 	int r;
 
+	/* Stack arg stores (r11-based) are outside the tracked register set. */
+	if (is_stack_arg_st(insn) || is_stack_arg_stx(insn))
+		return;
+	if (is_stack_arg_ldx(insn)) {
+		ci_out[insn->dst_reg] = unknown;
+		return;
+	}
+
 	switch (class) {
 	case BPF_ALU:
 	case BPF_ALU64:
@@ -191,14 +199,9 @@ process_call:
 			ci_out[r] = unknown;
 		break;
 	case BPF_STX:
-		if (mode != BPF_ATOMIC)
-			break;
-		if (insn->imm == BPF_CMPXCHG)
-			ci_out[BPF_REG_0] = unknown;
-		else if (insn->imm == BPF_LOAD_ACQ)
-			*dst = unknown;
-		else if (insn->imm & BPF_FETCH)
-			*src = unknown;
+		r = bpf_atomic_load_reg(insn);
+		if (r >= 0)
+			ci_out[r] = unknown;
 		break;
 	}
 }

@@ -5,6 +5,18 @@ linux (7.2.11-1parrot1) echo; urgency=medium
   * Disable signed binaries (we don't have a key).
   * Use CONFIG_HZ_300.
   * Use debian stable's gcc version.
+  * [amd64] Enable Lenovo WMI camera-switch events.
+  * [amd64] Enable ACPI wireless hotkeys.
+  * [amd64] Enable RedmiBook WMI hotkeys.
+  * Enable Topre REALFORCE keyboard support.
+  * [amd64] Enable Surface temperature monitoring.
+  * [amd64] Enable Surface fan-speed monitoring.
+  * [amd64] Enable Dell WMI hardware privacy support.
+  * Enable RTL8852AU USB Wi-Fi support.
+  * Enable RTL8852CU USB Wi-Fi support.
+  * Enable RTL8922AU USB Wi-Fi support.
+  * [amd64] Enable Apple Touch Bar keyboard and backlight support.
+  * Enable Broadcom BCM4377-family PCIe Bluetooth support.
 
  -- Lorenzo "Palinuro" Faletra <palinuro@parrotsec.org>  Thu, 22 Oct 2026 16:38:38 +0200
 

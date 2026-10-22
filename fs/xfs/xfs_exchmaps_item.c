@@ -227,9 +227,9 @@ xfs_exchmaps_create_intent(
 	xmi_lip = xfs_xmi_init(tp->t_mountp);
 	xlf = &xmi_lip->xmi_format;
 
-	xlf->xmi_inode1 = xmi->xmi_ip1->i_ino;
+	xlf->xmi_inode1 = I_INO(xmi->xmi_ip1);
 	xlf->xmi_igen1 = VFS_I(xmi->xmi_ip1)->i_generation;
-	xlf->xmi_inode2 = xmi->xmi_ip2->i_ino;
+	xlf->xmi_inode2 = I_INO(xmi->xmi_ip2);
 	xlf->xmi_igen2 = VFS_I(xmi->xmi_ip2)->i_generation;
 	xlf->xmi_startoff1 = xmi->xmi_startoff1;
 	xlf->xmi_startoff2 = xmi->xmi_startoff2;
@@ -344,7 +344,17 @@ xfs_xmi_validate(
 	if (!xfs_verify_fileext(mp, xlf->xmi_startoff1, xlf->xmi_blockcount))
 		return false;
 
-	return xfs_verify_fileext(mp, xlf->xmi_startoff2, xlf->xmi_blockcount);
+	if (!xfs_verify_fileext(mp, xlf->xmi_startoff2, xlf->xmi_blockcount))
+		return false;
+
+	if (xlf->xmi_flags & XFS_EXCHMAPS_SET_SIZES) {
+		if ((int64_t)xlf->xmi_isize1 < 0)
+			return false;
+		if ((int64_t)xlf->xmi_isize2 < 0)
+			return false;
+	}
+
+	return true;
 }
 
 /*
@@ -403,6 +413,13 @@ xfs_xmi_item_recover_intent(
 	*ipp1 = ip1;
 	*ipp2 = ip2;
 	xmi = xfs_exchmaps_init_intent(req);
+
+	/* Restore intended file sizes from recovered logged item */
+	if (req->flags & XFS_EXCHMAPS_SET_SIZES) {
+		xmi->xmi_isize1 = xlf->xmi_isize1;
+		xmi->xmi_isize2 = xlf->xmi_isize2;
+	}
+
 	xfs_defer_add_item(dfp, &xmi->xmi_list);
 	return xmi;
 

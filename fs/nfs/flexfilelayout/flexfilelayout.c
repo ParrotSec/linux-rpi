@@ -1247,7 +1247,7 @@ static void ff_layout_reset_write(struct nfs_pgio_header *hdr, bool retry_pnfs)
 			"(req %s/%llu, %u bytes @ offset %llu)\n", __func__,
 			hdr->task.tk_pid,
 			hdr->inode->i_sb->s_id,
-			(unsigned long long)NFS_FILEID(hdr->inode),
+			(unsigned long long)hdr->inode->i_ino,
 			hdr->args.count,
 			(unsigned long long)hdr->args.offset);
 
@@ -1260,7 +1260,7 @@ static void ff_layout_reset_write(struct nfs_pgio_header *hdr, bool retry_pnfs)
 			"(req %s/%llu, %u bytes @ offset %llu)\n", __func__,
 			hdr->task.tk_pid,
 			hdr->inode->i_sb->s_id,
-			(unsigned long long)NFS_FILEID(hdr->inode),
+			(unsigned long long)hdr->inode->i_ino,
 			hdr->args.count,
 			(unsigned long long)hdr->args.offset);
 
@@ -1300,7 +1300,7 @@ static void ff_layout_reset_read(struct nfs_pgio_header *hdr)
 			"(req %s/%llu, %u bytes @ offset %llu)\n", __func__,
 			hdr->task.tk_pid,
 			hdr->inode->i_sb->s_id,
-			(unsigned long long)NFS_FILEID(hdr->inode),
+			(unsigned long long)hdr->inode->i_ino,
 			hdr->args.count,
 			(unsigned long long)hdr->args.offset);
 
@@ -1322,7 +1322,8 @@ static int ff_layout_async_handle_error_v4(struct rpc_task *task,
 	struct pnfs_layout_hdr *lo = lseg->pls_layout;
 	struct inode *inode = lo->plh_inode;
 	struct nfs4_deviceid_node *devid = FF_LAYOUT_DEVID_NODE(lseg, idx, dss_id);
-	struct nfs4_slot_table *tbl = &clp->cl_session->fc_slot_table;
+	struct nfs4_slot_table *tbl = nfs4_has_session(clp) ?
+		&clp->cl_session->fc_slot_table : clp->cl_slot_tbl;
 
 	switch (op_status) {
 	case NFS4_OK:

@@ -221,7 +221,7 @@ int host1x_device_init(struct host1x_device *device)
 
 teardown:
 	list_for_each_entry_continue_reverse(client, &device->clients, list)
-		if (client->ops->exit)
+		if (client->ops && client->ops->exit)
 			client->ops->exit(client);
 
 	/* reset client to end of list for late teardown */
@@ -229,7 +229,7 @@ teardown:
 
 teardown_late:
 	list_for_each_entry_continue_reverse(client, &device->clients, list)
-		if (client->ops->late_exit)
+		if (client->ops && client->ops->late_exit)
 			client->ops->late_exit(client);
 
 	mutex_unlock(&device->clients_lock);
@@ -508,7 +508,7 @@ static int host1x_device_add(struct host1x *host1x,
 	 * Add device even if there are no subdevs to ensure syncpoint functionality
 	 * is available regardless of whether any engine subdevices are present
 	 */
-	if (list_empty(&device->subdevs)) {
+	if (list_empty(&device->subdevs) && !device->registered) {
 		err = device_add(&device->dev);
 		if (err < 0)
 			dev_err(&device->dev, "failed to add device: %d\n", err);

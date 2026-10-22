@@ -849,12 +849,15 @@ static const struct dmi_system_id sof_sdw_quirk_table[] = {
 };
 
 static const struct snd_pci_quirk sof_sdw_ssid_quirk_table[] = {
+	SND_PCI_QUIRK(0x1028, 0x0e53, "Dell XPS WCL", SOC_SDW_SIDECAR_AMPS),
+	SND_PCI_QUIRK(0x1028, 0x0e54, "Dell XPS PTL", SOC_SDW_SIDECAR_AMPS),
 	SND_PCI_QUIRK(0x1043, 0x1e13, "ASUS Zenbook S14", SOC_SDW_CODEC_MIC),
 	SND_PCI_QUIRK(0x1043, 0x1f43, "ASUS Zenbook S16", SOC_SDW_CODEC_MIC),
 	SND_PCI_QUIRK(0x17aa, 0x2347, "Lenovo P16", SOC_SDW_CODEC_MIC),
 	SND_PCI_QUIRK(0x17aa, 0x2348, "Lenovo P16", SOC_SDW_CODEC_MIC),
 	SND_PCI_QUIRK(0x17aa, 0x2349, "Lenovo P1", SOC_SDW_CODEC_MIC),
 	SND_PCI_QUIRK(0x17aa, 0x3821, "Lenovo 0x3821", SOC_SDW_SIDECAR_AMPS),
+	SND_PCI_QUIRK(0x17aa, 0x383c, "Lenovo 0x383c", SOC_SDW_SIDECAR_AMPS),
 	{}
 };
 
@@ -909,10 +912,16 @@ static int create_sdw_dailink(struct snd_soc_card *card,
 		}
 	}
 
+	/*
+	 * The dai_type is used to select function topologies. Since the topology stream name
+	 * and DAI link name use partial matching, unconditionally appending the dai_type provides
+	 * necessary selection metadata without breaking existing topologies. Although
+	 * ctx->append_dai_type is not checked here, we overwrite it to ensure consistency in case
+	 * it is referenced elsewhere.
+	 */
+	ctx->append_dai_type = true;
 	for_each_pcm_streams(stream) {
 		static const char * const sdw_stream_name[] = {
-			"SDW%d-Playback",
-			"SDW%d-Capture",
 			"SDW%d-Playback-%s",
 			"SDW%d-Capture-%s",
 		};
@@ -940,15 +949,10 @@ static int create_sdw_dailink(struct snd_soc_card *card,
 		}
 
 		/* create stream name according to first link id */
-		if (ctx->append_dai_type)
-			name = devm_kasprintf(dev, GFP_KERNEL,
-					      sdw_stream_name[stream + 2],
-					      ffs(sof_end->link_mask) - 1,
-					      type_strings[sof_end->dai_info->dai_type]);
-		else
-			name = devm_kasprintf(dev, GFP_KERNEL,
-					      sdw_stream_name[stream],
-					      ffs(sof_end->link_mask) - 1);
+		name = devm_kasprintf(dev, GFP_KERNEL,
+				      sdw_stream_name[stream],
+				      ffs(sof_end->link_mask) - 1,
+				      type_strings[sof_end->dai_info->dai_type]);
 		if (!name)
 			return -ENOMEM;
 
@@ -1284,7 +1288,7 @@ static int sof_card_dai_links_create(struct snd_soc_card *card)
 		goto err_dai;
 	}
 
-	ret = asoc_sdw_parse_sdw_endpoints(card, sof_aux, sof_dais, sof_ends, &num_confs);
+	ret = asoc_sdw_parse_sdw_endpoints(dev, ctx, sof_aux, sof_dais, sof_ends, &num_confs);
 	if (ret < 0)
 		goto err_end;
 

@@ -2530,6 +2530,7 @@ nv170_chipset = {
 	.vfn      = { 0x00000001, ga100_vfn_new },
 	.ce       = { 0x000003ff, ga100_ce_new },
 	.fifo     = { 0x00000001, ga100_fifo_new },
+	.sec2     = { 0x00000001, tu102_sec2_new },
 };
 
 static const struct nvkm_device_chip
@@ -2845,7 +2846,7 @@ nv1b2_chipset = {
 	.pci      = { 0x00000001, gh100_pci_new },
 	.timer    = { 0x00000001, gk20a_timer_new },
 	.vfn      = { 0x00000001, ga100_vfn_new },
-	.disp     = { 0x00000001, ga102_disp_new },
+	.disp     = { 0x00000001, gb202_disp_new },
 	.fifo     = { 0x00000001, ga102_fifo_new },
 };
 
@@ -2861,7 +2862,7 @@ nv1b3_chipset = {
 	.pci      = { 0x00000001, gh100_pci_new },
 	.timer    = { 0x00000001, gk20a_timer_new },
 	.vfn      = { 0x00000001, ga100_vfn_new },
-	.disp     = { 0x00000001, ga102_disp_new },
+	.disp     = { 0x00000001, gb202_disp_new },
 	.fifo     = { 0x00000001, ga102_fifo_new },
 };
 
@@ -2877,7 +2878,7 @@ nv1b5_chipset = {
 	.pci      = { 0x00000001, gh100_pci_new },
 	.timer    = { 0x00000001, gk20a_timer_new },
 	.vfn      = { 0x00000001, ga100_vfn_new },
-	.disp     = { 0x00000001, ga102_disp_new },
+	.disp     = { 0x00000001, gb202_disp_new },
 	.fifo     = { 0x00000001, ga102_fifo_new },
 };
 
@@ -2893,7 +2894,7 @@ nv1b6_chipset = {
 	.pci      = { 0x00000001, gh100_pci_new },
 	.timer    = { 0x00000001, gk20a_timer_new },
 	.vfn      = { 0x00000001, ga100_vfn_new },
-	.disp     = { 0x00000001, ga102_disp_new },
+	.disp     = { 0x00000001, gb202_disp_new },
 	.fifo     = { 0x00000001, ga102_fifo_new },
 };
 
@@ -2909,7 +2910,7 @@ nv1b7_chipset = {
 	.pci      = { 0x00000001, gh100_pci_new },
 	.timer    = { 0x00000001, gk20a_timer_new },
 	.vfn      = { 0x00000001, ga100_vfn_new },
-	.disp     = { 0x00000001, ga102_disp_new },
+	.disp     = { 0x00000001, gb202_disp_new },
 	.fifo     = { 0x00000001, ga102_fifo_new },
 };
 
@@ -3341,6 +3342,7 @@ nvkm_device_ctor(const struct nvkm_device_func *func,
 	case 0x166: device->chip = &nv166_chipset; break;
 	case 0x167: device->chip = &nv167_chipset; break;
 	case 0x168: device->chip = &nv168_chipset; break;
+	case 0x170: device->chip = &nv170_chipset; break;
 	case 0x172: device->chip = &nv172_chipset; break;
 	case 0x173: device->chip = &nv173_chipset; break;
 	case 0x174: device->chip = &nv174_chipset; break;
@@ -3360,14 +3362,6 @@ nvkm_device_ctor(const struct nvkm_device_func *func,
 	case 0x1b6: device->chip = &nv1b6_chipset; break;
 	case 0x1b7: device->chip = &nv1b7_chipset; break;
 	default:
-		if (nvkm_boolopt(device->cfgopt, "NvEnableUnsupportedChipsets", false)) {
-			switch (device->chipset) {
-			case 0x170: device->chip = &nv170_chipset; break;
-			default:
-				break;
-			}
-		}
-
 		if (!device->chip) {
 			nvdev_error(device, "unknown chipset (%08x)\n", boot0);
 			ret = -ENODEV;

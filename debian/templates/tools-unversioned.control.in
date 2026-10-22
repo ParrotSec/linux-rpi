@@ -129,8 +129,7 @@ Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Section: admin
 Description: Support daemons for Linux running on Hyper-V
- Suite of daemons for Linux guests running on Hyper-V, consisting of
- hv_kvp_daemon and hv_vss_daemon.
+ Suite of daemons for Linux guests running on Hyper-V.
  .
  hv_kvp_daemon provides the key-value pair (KVP) service, allowing the
  host to get and set the IP networking configuration of the guest.
@@ -138,6 +137,8 @@ Description: Support daemons for Linux running on Hyper-V
  .
  hv_vss_daemon provides the volume shadow copy service (VSS), allowing
  the host to freeze the guest filesystems while taking a snapshot.
+ .
+ ${hyperv-daemons:Arch-Description}
 
 Package: rtla
 Meta-Rules-Target: rtla

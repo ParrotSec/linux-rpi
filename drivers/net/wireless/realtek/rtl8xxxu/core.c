@@ -5175,7 +5175,7 @@ static void rtl8xxxu_tx_complete(struct urb *urb)
 }
 
 static void rtl8xxxu_dump_action(struct device *dev,
-				 struct ieee80211_hdr *hdr)
+				 struct ieee80211_hdr *hdr, unsigned int skb_len)
 {
 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)hdr;
 	u16 cap, timeout;
@@ -5183,8 +5183,14 @@ static void rtl8xxxu_dump_action(struct device *dev,
 	if (!(rtl8xxxu_debug & RTL8XXXU_DEBUG_ACTION))
 		return;
 
+	if (skb_len < IEEE80211_MIN_ACTION_SIZE(action_code))
+		return;
+
 	switch (mgmt->u.action.action_code) {
 	case WLAN_ACTION_ADDBA_RESP:
+		if (skb_len < IEEE80211_MIN_ACTION_SIZE(addba_resp))
+			break;
+
 		cap = le16_to_cpu(mgmt->u.action.addba_resp.capab);
 		timeout = le16_to_cpu(mgmt->u.action.addba_resp.timeout);
 		dev_info(dev, "WLAN_ACTION_ADDBA_RESP: "
@@ -5197,6 +5203,9 @@ static void rtl8xxxu_dump_action(struct device *dev,
 			 le16_to_cpu(mgmt->u.action.addba_resp.status));
 		break;
 	case WLAN_ACTION_ADDBA_REQ:
+		if (skb_len < IEEE80211_MIN_ACTION_SIZE(addba_req))
+			break;
+
 		cap = le16_to_cpu(mgmt->u.action.addba_req.capab);
 		timeout = le16_to_cpu(mgmt->u.action.addba_req.timeout);
 		dev_info(dev, "WLAN_ACTION_ADDBA_REQ: "
@@ -5486,7 +5495,7 @@ static void rtl8xxxu_tx(struct ieee80211_hw *hw,
 	}
 
 	if (ieee80211_is_action(hdr->frame_control))
-		rtl8xxxu_dump_action(dev, hdr);
+		rtl8xxxu_dump_action(dev, hdr, skb->len);
 
 	tx_info->rate_driver_data[0] = hw;
 
@@ -5829,14 +5838,19 @@ static void rtl8xxxu_queue_rx_urb(struct rtl8xxxu_priv *priv,
 {
 	struct sk_buff *skb;
 	unsigned long flags;
-	int pending = 0;
 
 	spin_lock_irqsave(&priv->rx_urb_lock, flags);
 
 	if (!priv->shutdown) {
 		list_add_tail(&rx_urb->list, &priv->rx_urb_pending_list);
 		priv->rx_urb_pending_count++;
-		pending = priv->rx_urb_pending_count;
+		/*
+		 * Arm the worker under rx_urb_lock so this is atomic with the
+		 * shutdown check: moving it out of the lock would let a
+		 * completion arm the work after rtl8xxxu_stop() canceled it.
+		 */
+		if (priv->rx_urb_pending_count > RTL8XXXU_RX_URB_PENDING_WATER)
+			schedule_work(&priv->rx_urb_wq);
 	} else {
 		skb = (struct sk_buff *)rx_urb->urb.context;
 		dev_kfree_skb_irq(skb);
@@ -5844,9 +5858,6 @@ static void rtl8xxxu_queue_rx_urb(struct rtl8xxxu_priv *priv,
 	}
 
 	spin_unlock_irqrestore(&priv->rx_urb_lock, flags);
-
-	if (pending > RTL8XXXU_RX_URB_PENDING_WATER)
-		schedule_work(&priv->rx_urb_wq);
 }
 
 static void rtl8xxxu_rx_urb_work(struct work_struct *work)
@@ -7497,6 +7508,13 @@ static void rtl8xxxu_stop(struct ieee80211_hw *hw, bool suspend)
 	spin_lock_irqsave(&priv->rx_urb_lock, flags);
 	priv->shutdown = true;
 	spin_unlock_irqrestore(&priv->rx_urb_lock, flags);
+
+	/*
+	 * Cancel before killing rx_anchor: the worker re-anchors every URB
+	 * it drained via rtl8xxxu_submit_rx_urb(), so a worker still running
+	 * after the kill could submit a URB that escapes it.
+	 */
+	cancel_work_sync(&priv->rx_urb_wq);
 
 	usb_kill_anchored_urbs(&priv->rx_anchor);
 	usb_kill_anchored_urbs(&priv->tx_anchor);

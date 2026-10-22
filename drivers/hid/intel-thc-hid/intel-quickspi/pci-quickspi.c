@@ -555,7 +555,14 @@ static int quickspi_alloc_report_buf(struct quickspi_device *qsdev)
 	max_report_len = max(le16_to_cpu(qsdev->dev_desc.max_output_len),
 			     le16_to_cpu(qsdev->dev_desc.max_input_len));
 
-	qsdev->report_buf = devm_kzalloc(qsdev->dev, max_report_len, GFP_KERNEL);
+	/*
+	 * write_cmd_to_txdma() writes the output report header ahead of the
+	 * content in this buffer, so it has to hold both.
+	 */
+	qsdev->report_buf_size = HIDSPI_OUTPUT_REPORT_SIZE(max_report_len);
+
+	qsdev->report_buf = devm_kzalloc(qsdev->dev, qsdev->report_buf_size,
+					 GFP_KERNEL);
 	if (!qsdev->report_buf)
 		return -ENOMEM;
 
@@ -713,6 +720,7 @@ static void quickspi_remove(struct pci_dev *pdev)
 	quickspi_hid_remove(qsdev);
 	quickspi_dma_deinit(qsdev);
 
+	pm_runtime_dont_use_autosuspend(qsdev->dev);
 	pm_runtime_get_noresume(qsdev->dev);
 
 	quickspi_dev_deinit(qsdev);
@@ -784,20 +792,72 @@ static int quickspi_resume(struct device *device)
 	if (ret)
 		return ret;
 
+	/*
+	 * A wake-enabled device keeps its power and state across suspend, so
+	 * only restore the THC context. Resetting it here would discard a
+	 * pending wake touch event and break wake-on-touch.
+	 */
+	if (device_may_wakeup(qsdev->dev)) {
+		thc_interrupt_config(qsdev->thc_hw);
+
+		thc_interrupt_enable(qsdev->thc_hw, true);
+
+		ret = thc_dma_configure(qsdev->thc_hw);
+		if (ret)
+			return ret;
+
+		return thc_interrupt_quiesce(qsdev->thc_hw, false);
+	}
+
+	/*
+	 * Otherwise the touch IC may have lost power across suspend. On
+	 * platforms that suspend through s2idle (for example the Surface Pro
+	 * 10, whose firmware exposes s2idle as the only mem_sleep state) the
+	 * IC loses power the same way it does across hibernation. A plain
+	 * HIDSPI_ON is then not acknowledged and the descriptor read fails, so
+	 * re-enumerate the device through the full reset flow already used by
+	 * quickspi_restore().
+	 */
+	thc_spi_input_output_address_config(qsdev->thc_hw,
+					    qsdev->input_report_hdr_addr,
+					    qsdev->input_report_bdy_addr,
+					    qsdev->output_report_addr);
+
+	ret = thc_spi_read_config(qsdev->thc_hw, qsdev->spi_freq_val,
+				  qsdev->spi_read_io_mode,
+				  qsdev->spi_read_opcode,
+				  qsdev->spi_packet_size);
+	if (ret)
+		return ret;
+
+	ret = thc_spi_write_config(qsdev->thc_hw, qsdev->spi_freq_val,
+				   qsdev->spi_write_io_mode,
+				   qsdev->spi_write_opcode,
+				   qsdev->spi_packet_size,
+				   qsdev->performance_limit);
+	if (ret)
+		return ret;
+
 	thc_interrupt_config(qsdev->thc_hw);
 
 	thc_interrupt_enable(qsdev->thc_hw, true);
+
+	/* The touch IC may have lost power, reset it to recover */
+	ret = reset_tic(qsdev);
+	if (ret)
+		return ret;
 
 	ret = thc_dma_configure(qsdev->thc_hw);
 	if (ret)
 		return ret;
 
-	ret = thc_interrupt_quiesce(qsdev->thc_hw, false);
-	if (ret)
-		return ret;
+	thc_ltr_config(qsdev->thc_hw,
+		       qsdev->active_ltr_val,
+		       qsdev->low_power_ltr_val);
 
-	if (!device_may_wakeup(qsdev->dev))
-		return quickspi_set_power(qsdev, HIDSPI_ON);
+	thc_change_ltr_mode(qsdev->thc_hw, THC_LTR_MODE_ACTIVE);
+
+	qsdev->state = QUICKSPI_ENABLED;
 
 	return 0;
 }

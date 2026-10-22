@@ -1375,7 +1375,9 @@ static int __sev_snp_init_locked(int *error, unsigned int max_snp_asid)
 		return -EOPNOTSUPP;
 	}
 
-	snp_prepare();
+	rc = snp_prepare();
+	if (rc)
+		return rc;
 
 	/*
 	 * Starting in SNP firmware v1.52, the SNP_INIT_EX command takes a list
@@ -1543,7 +1545,7 @@ static int __sev_platform_init_handle_init_ex_path(struct sev_device *sev)
 	if (sev_init_ex_buffer)
 		return 0;
 
-	page = alloc_pages(GFP_KERNEL, get_order(NV_LENGTH));
+	page = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(NV_LENGTH));
 	if (!page) {
 		dev_err(sev->dev, "SEV: INIT_EX NV memory allocation failed\n");
 		return -ENOMEM;
@@ -1553,20 +1555,31 @@ static int __sev_platform_init_handle_init_ex_path(struct sev_device *sev)
 
 	rc = sev_read_init_ex_file();
 	if (rc)
-		return rc;
+		goto err_free;
 
 	/* If SEV-SNP is initialized, transition to firmware page. */
 	if (sev->snp_initialized) {
 		unsigned long npages;
 
 		npages = 1UL << get_order(NV_LENGTH);
-		if (rmp_mark_pages_firmware(__pa(sev_init_ex_buffer), npages, false)) {
+		if (rmp_mark_pages_firmware(__pa(sev_init_ex_buffer), npages, true)) {
 			dev_err(sev->dev, "SEV: INIT_EX NV memory page state change failed.\n");
-			return -ENOMEM;
+			rc = -ENOMEM;
+			/*
+			 * Pages can be in an inconsistent state, don't release them back to the
+			 * system.
+			 */
+			goto err_reset;
 		}
 	}
 
 	return 0;
+
+err_free:
+	__free_pages(page, get_order(NV_LENGTH));
+err_reset:
+	sev_init_ex_buffer = NULL;
+	return rc;
 }
 
 static int __sev_platform_init_locked(int *error)
@@ -2367,16 +2380,14 @@ e_free_pdh:
 	return ret;
 }
 
-static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
+static int __sev_do_snp_platform_status(struct sev_user_data_snp_status *status,
+					int *error)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_data_snp_addr buf;
 	struct page *status_page;
 	void *data;
 	int ret;
-
-	if (!argp->data)
-		return -EINVAL;
 
 	status_page = alloc_page(GFP_KERNEL_ACCOUNT);
 	if (!status_page)
@@ -2400,7 +2411,7 @@ static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
 	}
 
 	buf.address = __psp_pa(data);
-	ret = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, &argp->error);
+	ret = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
 
 	if (sev->snp_initialized) {
 		/*
@@ -2415,12 +2426,29 @@ static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
 	if (ret)
 		goto cleanup;
 
-	if (copy_to_user((void __user *)argp->data, data,
-			 sizeof(struct sev_user_data_snp_status)))
-		ret = -EFAULT;
+	memcpy(status, data, sizeof(*status));
 
 cleanup:
 	__free_pages(status_page, 0);
+	return ret;
+}
+
+static int sev_ioctl_do_snp_platform_status(struct sev_issue_cmd *argp)
+{
+	struct sev_user_data_snp_status status;
+	int ret;
+
+	if (!argp->data)
+		return -EINVAL;
+
+	ret = __sev_do_snp_platform_status(&status, &argp->error);
+	if (ret < 0)
+		return ret;
+
+	if (copy_to_user((void __user *)argp->data, &status,
+			 sizeof(struct sev_user_data_snp_status)))
+		ret = -EFAULT;
+
 	return ret;
 }
 
@@ -2895,3 +2923,73 @@ void sev_pci_exit(void)
 
 	sev_firmware_shutdown(sev);
 }
+
+static int get_v1_svn(struct sev_device *sev)
+{
+	struct sev_snp_tcb_version_genoa_milan *tcb;
+	struct sev_user_data_snp_status status;
+	int ret, error = 0;
+
+	mutex_lock(&sev_cmd_mutex);
+	ret = __sev_do_snp_platform_status(&status, &error);
+	mutex_unlock(&sev_cmd_mutex);
+	if (ret < 0)
+		return ret;
+
+	tcb = (struct sev_snp_tcb_version_genoa_milan *)&status
+		      .current_tcb_version;
+	return tcb->snp;
+}
+
+static int get_v2_svn(struct sev_device *sev)
+{
+	struct sev_user_data_snp_status status;
+	struct sev_snp_tcb_version_turin *tcb;
+	int ret, error = 0;
+
+	mutex_lock(&sev_cmd_mutex);
+	ret = __sev_do_snp_platform_status(&status, &error);
+	mutex_unlock(&sev_cmd_mutex);
+	if (ret < 0)
+		return ret;
+
+	tcb = (struct sev_snp_tcb_version_turin *)&status
+		      .current_tcb_version;
+	return tcb->snp;
+}
+
+static bool sev_firmware_allows_es(struct sev_device *sev)
+{
+	/* Documented in AMD-SB-3023 */
+	if (boot_cpu_has(X86_FEATURE_ZEN4) || boot_cpu_has(X86_FEATURE_ZEN3))
+		return get_v1_svn(sev) < 0x1b;
+	else if (boot_cpu_has(X86_FEATURE_ZEN5))
+		return get_v2_svn(sev) < 0x4;
+	else
+		return true;
+}
+
+int sev_firmware_supported_vm_types(void)
+{
+	int supported_vm_types = 0;
+	struct sev_device *sev;
+
+	if (!psp_master || !psp_master->sev_data)
+		return supported_vm_types;
+	sev = psp_master->sev_data;
+
+	supported_vm_types |= BIT(KVM_X86_SEV_VM);
+	supported_vm_types |= BIT(KVM_X86_SEV_ES_VM);
+
+	if (!sev->snp_initialized)
+		return supported_vm_types;
+
+	supported_vm_types |= BIT(KVM_X86_SNP_VM);
+
+	if (!sev_firmware_allows_es(sev))
+		supported_vm_types &= ~BIT(KVM_X86_SEV_ES_VM);
+
+	return supported_vm_types;
+
+}
+EXPORT_SYMBOL_FOR_MODULES(sev_firmware_supported_vm_types, "kvm-amd");

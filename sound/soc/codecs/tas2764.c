@@ -897,13 +897,13 @@ static const struct reg_default tas2764_reg_defaults[] = {
 	{ TAS2764_PAGE, 0x00 },
 	{ TAS2764_SW_RST, 0x00 },
 	{ TAS2764_PWR_CTRL, 0x1a },
-	{ TAS2764_DVC, 0x00 },
 	{ TAS2764_CHNL_0, 0x28 },
 	{ TAS2764_TDM_CFG0, 0x09 },
 	{ TAS2764_TDM_CFG1, 0x02 },
 	{ TAS2764_TDM_CFG2, 0x0a },
 	{ TAS2764_TDM_CFG3, 0x10 },
 	{ TAS2764_TDM_CFG5, 0x42 },
+	{ TAS2764_DVC, 0x00 },
 	{ TAS2764_INT_CLK_CFG, 0x19 },
 };
 
@@ -1036,7 +1036,7 @@ static int tas2764_i2c_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id tas2764_i2c_id[] = {
-	{ "tas2764"},
+	{ .name = "tas2764" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tas2764_i2c_id);

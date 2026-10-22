@@ -185,8 +185,11 @@ static void __hci_pio_init(struct i3c_hci *hci, u32 *size_val_ptr)
 	pio_reg_write(INTR_SIGNAL_ENABLE, 0x0);
 	pio_reg_write(INTR_STATUS_ENABLE, 0xffffffff);
 
-	/* Always accept error interrupts (will be activated on first xfer) */
-	pio->enabled_irqs = STAT_ALL_ERRORS;
+	/*
+	 * Always accept error interrupts and IBI threshold interrupt
+	 * (will be activated on first xfer).
+	 */
+	pio->enabled_irqs = STAT_ALL_ERRORS | STAT_IBI_STATUS_THLD;
 }
 
 static void hci_pio_suspend(struct i3c_hci *hci)
@@ -605,6 +608,7 @@ static bool hci_pio_process_cmd(struct i3c_hci *hci, struct hci_pio_data *pio)
 		 * Finally send the command.
 		 */
 		hci_pio_write_cmd(hci, pio->curr_xfer);
+		hci_start_xfer(pio->curr_xfer);
 		/*
 		 * And move on.
 		 */
@@ -860,6 +864,11 @@ static bool hci_pio_prep_new_ibi(struct i3c_hci *hci, struct hci_pio_data *pio)
 	ibi->last_seg = ibi_status & IBI_LAST_STATUS;
 	ibi->seg_len = FIELD_GET(IBI_DATA_LENGTH, ibi_status);
 	ibi->seg_cnt = ibi->seg_len;
+
+	if (ibi->addr == I3C_HOT_JOIN_ADDR) {
+		i3c_master_queue_hotjoin(&hci->master);
+		return true;
+	}
 
 	dev = i3c_hci_addr_to_dev(hci, ibi->addr);
 	if (!dev) {

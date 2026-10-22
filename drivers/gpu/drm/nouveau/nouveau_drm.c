@@ -585,6 +585,7 @@ nouveau_drm_device_fini(struct nouveau_drm *drm)
 	if (nouveau_pmops_runtime()) {
 		pm_runtime_get_sync(dev->dev);
 		pm_runtime_forbid(dev->dev);
+		pm_runtime_dont_use_autosuspend(dev->dev);
 	}
 
 	nouveau_led_fini(dev);
@@ -632,7 +633,7 @@ nouveau_drm_device_init(struct nouveau_drm *drm)
 	struct drm_device *dev = drm->dev;
 	int ret;
 
-	drm->sched_wq = alloc_workqueue("nouveau_sched_wq_shared", 0,
+	drm->sched_wq = alloc_workqueue("nouveau_sched_wq_shared", WQ_PERCPU,
 					WQ_MAX_ACTIVE);
 	if (!drm->sched_wq)
 		return -ENOMEM;
@@ -1251,10 +1252,8 @@ nouveau_drm_open(struct drm_device *dev, struct drm_file *fpriv)
 	mutex_unlock(&drm->clients_lock);
 
 done:
-	if (ret && cli) {
-		nouveau_cli_fini(cli);
+	if (ret && cli)
 		kfree(cli);
-	}
 
 	pm_runtime_mark_last_busy(dev->dev);
 	pm_runtime_put_autosuspend(dev->dev);

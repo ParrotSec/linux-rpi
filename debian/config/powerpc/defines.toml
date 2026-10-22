@@ -1,18 +1,9 @@
 [[flavour]]
 name = 'powerpc'
 [flavour.description]
-hardware = 'uniprocessor 32-bit PowerPC'
+hardware = '32-bit PowerPC'
 [flavour.packages]
 installer = true
-
-[[flavour]]
-name = 'powerpc-smp'
-[flavour.build]
-config = [
-  'powerpc/config.powerpc',
-]
-[flavour.description]
-hardware = 'multiprocessor 32-bit PowerPC'
 
 [[featureset]]
 name = 'none'

@@ -24,8 +24,6 @@
 #include <net/ip.h>
 #include <net/ipv6.h>
 
-#include "../core/sock_destructor.h"
-
 /* Use skb->cb to track consecutive/adjacent fragments coming at
  * the end of the queue. Nodes in the rb-tree queue will
  * contain "runs" of one or more adjacent fragments.
@@ -237,6 +235,8 @@ void fqdir_pre_exit(struct fqdir *fqdir)
 	rhashtable_walk_start(&hti);
 
 	while ((fq = rhashtable_walk_next(&hti))) {
+		int refs = 0;
+
 		if (IS_ERR(fq)) {
 			if (PTR_ERR(fq) != -EAGAIN)
 				break;
@@ -244,8 +244,12 @@ void fqdir_pre_exit(struct fqdir *fqdir)
 		}
 		spin_lock_bh(&fq->lock);
 		if (!(fq->flags & INET_FRAG_COMPLETE))
+			inet_frag_kill(fq, &refs);
+
+		if (fq->flags & INET_FRAG_HASH_DEAD)
 			inet_frag_queue_flush(fq, 0);
 		spin_unlock_bh(&fq->lock);
+		inet_frag_putn(fq, refs);
 	}
 
 	rhashtable_walk_stop(&hti);
@@ -531,7 +535,6 @@ void *inet_frag_reasm_prepare(struct inet_frag_queue *q, struct sk_buff *skb,
 			head = skb;
 			goto out_restore_sk;
 		}
-		FRAG_CB(fp)->next_frag = FRAG_CB(skb)->next_frag;
 		if (RB_EMPTY_NODE(&skb->rbnode))
 			FRAG_CB(parent)->next_frag = fp;
 		else
@@ -546,7 +549,6 @@ void *inet_frag_reasm_prepare(struct inet_frag_queue *q, struct sk_buff *skb,
 			skb->destructor = NULL;
 		}
 		skb_morph(skb, head);
-		FRAG_CB(skb)->next_frag = FRAG_CB(head)->next_frag;
 		rb_replace_node(&head->rbnode, &skb->rbnode,
 				&q->rb_fragments);
 		consume_skb(head);

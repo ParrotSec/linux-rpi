@@ -1222,14 +1222,8 @@ static void clocksource_enqueue(struct clocksource *cs)
  * @cs:		clocksource to be registered
  * @scale:	Scale factor multiplied against freq to get clocksource hz
  * @freq:	clocksource frequency (cycles per second) divided by scale
- *
- * This should only be called from the clocksource->enable() method.
- *
- * This *SHOULD NOT* be called directly! Please use the
- * __clocksource_update_freq_hz() or __clocksource_update_freq_khz() helper
- * functions.
  */
-void __clocksource_update_freq_scale(struct clocksource *cs, u32 scale, u32 freq)
+static void __clocksource_update_freq_scale(struct clocksource *cs, u32 scale, u32 freq)
 {
 	u64 sec;
 
@@ -1287,7 +1281,6 @@ void __clocksource_update_freq_scale(struct clocksource *cs, u32 scale, u32 freq
 	pr_info("%s: mask: 0x%llx max_cycles: 0x%llx, max_idle_ns: %lld ns\n",
 		cs->name, cs->mask, cs->max_cycles, cs->max_idle_ns);
 }
-EXPORT_SYMBOL_GPL(__clocksource_update_freq_scale);
 
 /**
  * __clocksource_register_scale - Used to install new clocksources
@@ -1337,6 +1330,26 @@ int __clocksource_register_scale(struct clocksource *cs, u32 scale, u32 freq)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(__clocksource_register_scale);
+
+static void __devm_clocksource_unregister(void *data)
+{
+	struct clocksource *cs = data;
+
+	clocksource_unregister(cs);
+}
+
+int __devm_clocksource_register_scale(struct device *dev, struct clocksource *cs,
+				      u32 scale, u32 freq)
+{
+	int ret;
+
+	ret = __clocksource_register_scale(cs, scale, freq);
+	if (ret)
+		return ret;
+
+	return devm_add_action_or_reset(dev, __devm_clocksource_unregister, cs);
+}
+EXPORT_SYMBOL_GPL(__devm_clocksource_register_scale);
 
 /*
  * Unbind clocksource @cs. Called with clocksource_mutex held
@@ -1553,8 +1566,12 @@ static int __init init_clocksource_sysfs(void)
 {
 	int error = subsys_system_register(&clocksource_subsys, NULL);
 
-	if (!error)
-		error = device_register(&device_clocksource);
+	if (error)
+		return error;
+
+	error = device_register(&device_clocksource);
+	if (error)
+		bus_unregister(&clocksource_subsys);
 
 	return error;
 }

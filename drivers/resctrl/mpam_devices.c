@@ -224,6 +224,24 @@ static inline void _mpam_write_monsel_reg(struct mpam_msc *msc, u16 reg, u32 val
 
 #define mpam_write_monsel_reg(msc, reg, val)   _mpam_write_monsel_reg(msc, MSMON_##reg, val)
 
+static bool mpam_msc_check_aidr(struct mpam_msc *msc)
+{
+	u32 aidr = __mpam_read_reg(msc, MPAMF_AIDR);
+	u32 major = FIELD_GET(MPAMF_AIDR_ARCH_MAJOR_REV, aidr);
+	u32 minor = FIELD_GET(MPAMF_AIDR_ARCH_MINOR_REV, aidr);
+
+	/*
+	 * v0.0 and >v2.x aren't supported, but anything else should be backward
+	 * compatible to v0.1 or v1.0.
+	 */
+	if (!major && !minor)
+		return false;
+	if (major > 1)
+		return false;
+
+	return true;
+}
+
 static u64 mpam_msc_read_idr(struct mpam_msc *msc)
 {
 	u64 idr_high = 0, idr_low;
@@ -945,9 +963,8 @@ static int mpam_msc_hw_probe(struct mpam_msc *msc)
 
 	lockdep_assert_held(&msc->probe_lock);
 
-	idr = __mpam_read_reg(msc, MPAMF_AIDR);
-	if ((idr & MPAMF_AIDR_ARCH_MAJOR_REV) != MPAM_ARCHITECTURE_V1) {
-		dev_err_once(dev, "MSC does not match MPAM architecture v1.x\n");
+	if (!mpam_msc_check_aidr(msc)) {
+		dev_err_once(dev, "MSC does not match architecture v1.x\n");
 		return -EIO;
 	}
 
@@ -1179,8 +1196,7 @@ static u64 mpam_msmon_overflow_val(enum mpam_device_features type,
 {
 	u64 overflow_val = __mpam_msmon_overflow_val(type);
 
-	if (mpam_has_quirk(T241_MBW_COUNTER_SCALE_64, msc) &&
-	    type != mpam_feat_msmon_mbwu_63counter)
+	if (mpam_has_quirk(T241_MBW_COUNTER_SCALE_64, msc))
 		overflow_val *= 64;
 
 	return overflow_val;
@@ -1276,8 +1292,7 @@ static void __ris_msmon_read(void *arg)
 			now = FIELD_GET(MSMON___VALUE, now);
 		}
 
-		if (mpam_has_quirk(T241_MBW_COUNTER_SCALE_64, msc) &&
-		    m->type != mpam_feat_msmon_mbwu_63counter)
+		if (mpam_has_quirk(T241_MBW_COUNTER_SCALE_64, msc))
 			now *= 64;
 
 		if (nrdy)
@@ -2008,6 +2023,9 @@ static void mpam_msc_drv_remove(struct platform_device *pdev)
 {
 	struct mpam_msc *msc = platform_get_drvdata(pdev);
 
+	if (!msc)
+		return;
+
 	mutex_lock(&mpam_list_lock);
 	mpam_msc_destroy(msc);
 	mutex_unlock(&mpam_list_lock);
@@ -2121,6 +2139,7 @@ static int mpam_msc_drv_probe(struct platform_device *pdev)
 static struct platform_driver mpam_msc_driver = {
 	.driver = {
 		.name = "mpam_msc",
+		.suppress_bind_attrs = true,
 	},
 	.probe = mpam_msc_drv_probe,
 	.remove = mpam_msc_drv_remove,

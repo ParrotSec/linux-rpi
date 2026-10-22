@@ -42,7 +42,7 @@ static struct sk_buff *dequeue_func(struct codel_vars *vars, void *ctx)
 	struct sk_buff *skb = __qdisc_dequeue_head(&sch->q);
 
 	if (skb) {
-		sch->qstats.backlog -= qdisc_pkt_len(skb);
+		qstats_backlog_sub(sch, qdisc_pkt_len(skb));
 		prefetch(&skb->end); /* we'll need skb_shinfo() */
 	}
 	return skb;
@@ -205,7 +205,7 @@ static int codel_init(struct Qdisc *sch, struct nlattr *opt,
 	codel_params_init(&q->params);
 	codel_vars_init(&q->vars);
 	codel_stats_init(&q->stats);
-	q->params.mtu = psched_mtu(qdisc_dev(sch));
+	q->params.mtu = min_t(u32, psched_mtu(qdisc_dev(sch)), 1 << 20);
 
 	if (opt) {
 		int err = codel_change(sch, opt, extack);

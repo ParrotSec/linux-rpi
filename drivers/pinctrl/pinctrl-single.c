@@ -619,8 +619,9 @@ static int pcs_pinconf_set(struct pinctrl_dev *pctldev,
 static int pcs_pinconf_group_get(struct pinctrl_dev *pctldev,
 				unsigned group, unsigned long *config)
 {
+	unsigned long old = 0;
 	const unsigned *pins;
-	unsigned npins, old = 0;
+	unsigned npins;
 	int i, ret;
 
 	ret = pinctrl_generic_get_group_pins(pctldev, group, &pins, &npins);
@@ -1627,7 +1628,8 @@ static int pcs_irq_init_chained_handler(struct pcs_device *pcs,
 					       &pcs_irqdomain_ops,
 					       pcs_soc);
 	if (!pcs->domain) {
-		irq_set_chained_handler(pcs_soc->irq, NULL);
+		pcs_irq_free(pcs);
+		pcs_soc->irq = -1;
 		return -EINVAL;
 	}
 

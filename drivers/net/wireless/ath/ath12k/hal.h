@@ -738,7 +738,9 @@ struct hal_rx_desc_data {
 	    addr2_present:1,
 	    is_mcbc:1,
 	    seq_ctl_valid:1,
-	    fc_valid:1;
+	    fc_valid:1,
+	    is_to_ds:1,
+	    is_from_ds:1;
 	u16 msdu_len;
 	u16 peer_id;
 	u16 seq_no;
@@ -1442,7 +1444,7 @@ struct hal_ops {
 };
 
 #define HAL_TLV_HDR_TAG		GENMASK(9, 1)
-#define HAL_TLV_HDR_LEN		GENMASK(25, 10)
+#define HAL_TLV_HDR_LEN		GENMASK(21, 10)
 #define HAL_TLV_USR_ID		GENMASK(31, 26)
 
 #define HAL_TLV_ALIGN	4
@@ -1461,9 +1463,6 @@ struct hal_tlv_64_hdr {
 	__le64 tl;
 	u8 value[];
 } __packed;
-
-#define HAL_SRNG_TLV_HDR_TAG		GENMASK(9, 1)
-#define HAL_SRNG_TLV_HDR_LEN		GENMASK(25, 10)
 
 dma_addr_t ath12k_hal_srng_get_tp_addr(struct ath12k_base *ab,
 				       struct hal_srng *srng);

@@ -45,7 +45,7 @@
 									      \
 	__asm__ volatile (                                                    \
 		_NOLIBC_SYSCALL                                               \
-		: "+r"(_arg1)                                                 \
+		: "=r"(_arg1)                                                 \
 		: "r"(_num)                                                   \
 		: "memory", "cc"                                              \
 	);                                                                    \
@@ -154,7 +154,7 @@
 
 #ifndef NOLIBC_NO_RUNTIME
 /* startup code */
-void __attribute__((weak, noreturn)) __nolibc_entrypoint __no_stack_protector _start(void)
+void __attribute__((weak, noreturn)) __nolibc_entrypoint __nolibc_no_stack_protector _start(void)
 {
 	__asm__ volatile (
 		/*

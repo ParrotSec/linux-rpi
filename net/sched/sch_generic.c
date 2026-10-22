@@ -630,6 +630,9 @@ static void netdev_watchdog_down(struct net_device *dev)
  */
 void netif_carrier_on(struct net_device *dev)
 {
+	if (READ_ONCE(dev->proto_down))
+		return;
+
 	if (test_and_clear_bit(__LINK_STATE_NOCARRIER, &dev->state)) {
 		if (dev->reg_state == NETREG_UNINITIALIZED)
 			return;
@@ -1079,25 +1082,25 @@ void qdisc_reset(struct Qdisc *qdisc)
 	__skb_queue_purge(&qdisc->skb_bad_txq);
 
 	WRITE_ONCE(qdisc->q.qlen, 0);
-	qdisc->qstats.backlog = 0;
+	WRITE_ONCE(qdisc->qstats.backlog, 0);
 }
 EXPORT_SYMBOL(qdisc_reset);
-
-void qdisc_free(struct Qdisc *qdisc)
-{
-	if (qdisc_is_percpu_stats(qdisc)) {
-		free_percpu(qdisc->cpu_bstats);
-		free_percpu(qdisc->cpu_qstats);
-	}
-
-	kfree(qdisc);
-}
 
 static void qdisc_free_cb(struct rcu_head *head)
 {
 	struct Qdisc *q = container_of(head, struct Qdisc, rcu);
 
-	qdisc_free(q);
+	if (qdisc_is_percpu_stats(q)) {
+		free_percpu(q->cpu_bstats);
+		free_percpu(q->cpu_qstats);
+	}
+
+	kfree(q);
+}
+
+void qdisc_free_rcu(struct Qdisc *qdisc)
+{
+	call_rcu(&qdisc->rcu, qdisc_free_cb);
 }
 
 static void __qdisc_destroy(struct Qdisc *qdisc)
@@ -1124,7 +1127,7 @@ static void __qdisc_destroy(struct Qdisc *qdisc)
 
 	trace_qdisc_destroy(qdisc);
 
-	call_rcu(&qdisc->rcu, qdisc_free_cb);
+	qdisc_free_rcu(qdisc);
 }
 
 void qdisc_destroy(struct Qdisc *qdisc)
@@ -1275,7 +1278,7 @@ static void transition_one_qdisc(struct net_device *dev,
 
 	rcu_assign_pointer(dev_queue->qdisc, new_qdisc);
 	if (need_watchdog_p) {
-		WRITE_ONCE(dev_queue->trans_start, 0);
+		WRITE_ONCE(dev_queue->trans_start, jiffies);
 		*need_watchdog_p = 1;
 	}
 }

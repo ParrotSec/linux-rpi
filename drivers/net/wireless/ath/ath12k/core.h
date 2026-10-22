@@ -15,7 +15,6 @@
 #include <linux/ctype.h>
 #include <linux/firmware.h>
 #include <linux/of_reserved_mem.h>
-#include <linux/panic_notifier.h>
 #include <linux/average.h>
 #include <linux/of.h>
 #include <linux/rhashtable.h>
@@ -72,6 +71,7 @@
 
 #define ATH12K_MAX_MLO_PEERS            256
 #define ATH12K_MLO_PEER_ID_INVALID      0xFFFF
+#define ATH12K_MLO_PEER_ID_PENDING      0xFFFE
 
 #define ATH12K_INVALID_RSSI_FULL -1
 #define ATH12K_INVALID_RSSI_EMPTY -128
@@ -353,6 +353,9 @@ struct ath12k_link_vif {
 	u16 num_stations;
 	bool is_csa_in_progress;
 	struct wiphy_work bcn_tx_work;
+
+	bool set_wds_vdev_param;
+	bool nawds_enabled;
 };
 
 struct ath12k_vif {
@@ -492,6 +495,10 @@ struct ath12k_link_sta {
 	/* link address similar to ieee80211_link_sta */
 	u8 addr[ETH_ALEN];
 
+	u16 tcl_metadata;
+	u16 ast_hash;
+	u16 ast_idx;
+
 	/* the following are protected by ar->data_lock */
 	u32 changed; /* IEEE80211_RC_* */
 	u32 bw;
@@ -527,6 +534,8 @@ struct ath12k_sta {
 	u16 free_logical_link_idx_map;
 
 	enum ieee80211_sta_state state;
+
+	bool enable_4addr;
 };
 
 #define ATH12K_HALF_20MHZ_BW	10
@@ -542,8 +551,8 @@ struct ath12k_sta {
 #define ATH12K_MAX_5GHZ_FREQ	(ATH12K_5GHZ_MAX_CENTER + ATH12K_HALF_20MHZ_BW)
 #define ATH12K_MIN_6GHZ_FREQ	(ATH12K_6GHZ_MIN_CENTER - ATH12K_HALF_20MHZ_BW)
 #define ATH12K_MAX_6GHZ_FREQ	(ATH12K_6GHZ_MAX_CENTER + ATH12K_HALF_20MHZ_BW)
-#define ATH12K_NUM_CHANS 101
-#define ATH12K_MAX_5GHZ_CHAN 173
+#define ATH12K_NUM_CHANS 102
+#define ATH12K_MAX_5GHZ_CHAN 177
 
 static inline bool ath12k_is_2ghz_channel_freq(u32 freq)
 {
@@ -656,7 +665,8 @@ struct ath12k {
 
 	/* protects the radio specific data like debug stats, ppdu_stats_info stats,
 	 * vdev_stop_status info, scan data, ath12k_sta info, ath12k_link_vif info,
-	 * channel context data, survey info, test mode data, regd_channel_update_queue.
+	 * channel context data, test mode data, regd_channel_update_queue,
+	 * peer_delete_waits.
 	 */
 	spinlock_t data_lock;
 
@@ -678,7 +688,7 @@ struct ath12k {
 	u8 radio_idx;
 
 	struct completion peer_assoc_done;
-	struct completion peer_delete_done;
+	struct list_head peer_delete_waits;
 
 	int install_key_status;
 	struct completion install_key_done;
@@ -712,7 +722,6 @@ struct ath12k {
 	 * avoid reporting garbage data.
 	 */
 	bool ch_info_can_report_survey;
-	struct survey_info survey[ATH12K_NUM_CHANS];
 	struct completion bss_survey_done;
 
 	struct work_struct regd_update_work;
@@ -763,6 +772,14 @@ struct ath12k {
 	struct ath12k_pdev_rssi_offsets rssi_info;
 
 	struct ath12k_thermal thermal;
+
+	/* Protected by ar->data_lock */
+	struct ath12k_incumbent_signal_interference {
+		u32 center_freq;
+		enum nl80211_chan_width width;
+		u32 chan_bw_interference_bitmap;
+		bool handling_in_progress;
+	} incumbent_signal_interference;
 };
 
 struct ath12k_hw {
@@ -774,8 +791,15 @@ struct ath12k_hw {
 	 */
 	struct mutex hw_mutex;
 	enum ath12k_hw_state state;
+
+	/* protects survey[] shared across radios of this hw. */
+	spinlock_t survey_lock;
+	struct survey_info survey[ATH12K_NUM_CHANS];
+
 	bool regd_updated;
 	bool use_6ghz_regd;
+	bool host_alloc_ml_id;
+	struct completion peer_ml_id_done;
 
 	u8 num_radio;
 
@@ -1121,8 +1145,6 @@ struct ath12k_base {
 
 #endif /* CONFIG_ACPI */
 
-	struct notifier_block panic_nb;
-
 	struct ath12k_hw_group *ag;
 	struct ath12k_wsi_info wsi_info;
 	enum ath12k_firmware_mode fw_mode;
@@ -1277,8 +1299,6 @@ void ath12k_fw_stats_init(struct ath12k *ar);
 void ath12k_fw_stats_bcn_free(struct list_head *head);
 void ath12k_fw_stats_free(struct ath12k_fw_stats *stats);
 void ath12k_fw_stats_reset(struct ath12k *ar);
-struct reserved_mem *ath12k_core_get_reserved_mem(struct ath12k_base *ab,
-						  int index);
 enum ath12k_qmi_mem_mode ath12k_core_get_memory_mode(struct ath12k_base *ab);
 
 static inline const char *ath12k_scan_state_str(enum ath12k_scan_state state)

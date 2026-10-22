@@ -16,8 +16,8 @@
 
 /* DXE - DMA transfer engine
  * we have 2 channels(High prio and Low prio) for TX and 2 channels for RX.
- * through low channels data packets are transfered
- * through high channels managment packets are transfered
+ * through low channels data packets are transferred
+ * through high channels management packets are transferred
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -1055,7 +1055,7 @@ void wcn36xx_dxe_deinit(struct wcn36xx *wcn)
 
 	free_irq(wcn->tx_irq, wcn);
 	free_irq(wcn->rx_irq, wcn);
-	timer_delete(&wcn->tx_ack_timer);
+	timer_shutdown_sync(&wcn->tx_ack_timer);
 
 	if (wcn->tx_ack_skb) {
 		ieee80211_tx_status_irqsafe(wcn->hw, wcn->tx_ack_skb);

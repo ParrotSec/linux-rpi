@@ -43,6 +43,8 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/virtgpu_drm.h>
 
+#include <xen/xen.h>
+
 #define DRIVER_NAME "virtio_gpu"
 #define DRIVER_DESC "virtio GPU"
 
@@ -59,6 +61,24 @@
 
 /* See virtio_gpu_ctx_create. One additional character for NULL terminator. */
 #define DEBUG_NAME_MAX_LEN 65
+
+/*
+ * Whether the host must be told about resource backing pages by DMA address
+ * rather than guest-physical address.
+ *
+ * This mirrors vring_use_map_api() in drivers/virtio/virtio_ring.c, including
+ * its xen_domain() case.
+ */
+static inline bool virtio_gpu_use_dma_api(const struct virtio_device *vdev)
+{
+	if (!virtio_has_dma_quirk(vdev))
+		return true;
+
+	if (xen_domain())
+		return true;
+
+	return false;
+}
 
 struct virtio_gpu_object_params {
 	unsigned long size;
@@ -84,6 +104,7 @@ struct virtio_gpu_object_params {
 	uint32_t blob_mem;
 	uint32_t blob_flags;
 	uint64_t blob_id;
+	uint32_t blob_hints;
 };
 
 struct virtio_gpu_object {
@@ -93,6 +114,8 @@ struct virtio_gpu_object {
 	bool dumb;
 	bool created;
 	bool attached;
+	/* a guest-bound transfer is queued and its mapping not yet synced */
+	bool from_host_pending;
 	bool host3d_blob, guest_blob;
 	uint32_t blob_mem, blob_flags;
 
@@ -171,6 +194,9 @@ struct virtio_gpu_vbuffer {
 	struct list_head list;
 
 	uint32_t seqno;
+
+	/* guest-bound transfer whose shmem backing needs a CPU sync */
+	bool sync_for_cpu;
 };
 
 struct virtio_gpu_output {
@@ -257,6 +283,7 @@ struct virtio_gpu_device {
 	bool has_resource_blob;
 	bool has_host_visible;
 	bool has_context_init;
+	bool has_blob_alignment;
 	struct virtio_shm_region host_visible_region;
 	struct drm_mm host_visible_mm;
 
@@ -270,6 +297,7 @@ struct virtio_gpu_device {
 	uint32_t num_capsets;
 	uint64_t capset_id_mask;
 	struct list_head cap_cache;
+	uint32_t blob_alignment;
 
 	/* protects uuid state when exporting */
 	spinlock_t resource_export_lock;
@@ -508,6 +536,7 @@ struct sg_table *virtio_gpu_vram_map_dma_buf(struct virtio_gpu_object *bo,
 void virtio_gpu_vram_unmap_dma_buf(struct device *dev,
 				   struct sg_table *sgt,
 				   enum dma_data_direction dir);
+void virtio_gpu_vram_map_deferred(struct virtio_gpu_object_vram *vram);
 
 /* virtgpu_submit.c */
 int virtio_gpu_execbuffer_ioctl(struct drm_device *dev, void *data,

@@ -185,11 +185,6 @@ CONFIG_SPARSEMEM_MANUAL=y
 ## end choice
 
 ##
-## file: net/appletalk/Kconfig
-##
-# CONFIG_ATALK is not set
-
-##
 ## file: net/atm/Kconfig
 ##
 # CONFIG_ATM is not set

@@ -505,9 +505,10 @@ static void _rtl_pci_tx_isr(struct ieee80211_hw *hw, int prio)
 			}
 		}
 		if (ieee80211_is_action(fc)) {
-			struct ieee80211_mgmt *action_frame =
-				(struct ieee80211_mgmt *)skb->data;
-			if (action_frame->u.action.action_code ==
+			struct ieee80211_mgmt *action_frame = (void *)skb->data;
+
+			if (skb->len >= IEEE80211_MIN_ACTION_SIZE(action_code) &&
+			    action_frame->u.action.action_code ==
 			    WLAN_HT_ACTION_SMPS) {
 				dev_kfree_skb(skb);
 				goto tx_status_ok;
@@ -2226,13 +2227,17 @@ int rtl_pci_probe(struct pci_dev *pdev,
 		rtl_dbg(rtlpriv, COMP_INIT, DBG_DMESG,
 			"%s: failed to register IRQ handler\n",
 			wiphy_name(hw->wiphy));
-		goto fail3;
+		goto fail6;
 	}
 	rtlpci->irq_alloc = 1;
 
 	set_bit(RTL_STATUS_INTERFACE_START, &rtlpriv->status);
 	return 0;
 
+fail6:
+	rtl_deinit_rfkill(hw);
+	rtl_debug_remove_one(hw);
+	ieee80211_unregister_hw(hw);
 fail5:
 	rtl_pci_deinit(hw);
 fail4:

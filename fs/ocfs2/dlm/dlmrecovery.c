@@ -837,7 +837,7 @@ int dlm_request_all_locks_handler(struct o2net_msg *msg, u32 len, void *data,
 	}
 
 	/* this will get freed by dlm_request_all_locks_worker */
-	buf = (char *) __get_free_page(GFP_NOFS);
+	buf = kmalloc(PAGE_SIZE, GFP_NOFS);
 	if (!buf) {
 		kfree(item);
 		dlm_put(dlm);
@@ -933,7 +933,7 @@ static void dlm_request_all_locks_worker(struct dlm_work_item *item, void *data)
 		}
 	}
 leave:
-	free_page((unsigned long)data);
+	kfree(data);
 }
 
 
@@ -1356,6 +1356,15 @@ int dlm_mig_lockres_handler(struct o2net_msg *msg, u32 len, void *data,
 
 	if (!dlm_grab(dlm))
 		return -EINVAL;
+
+	if (mres->lockname_len > DLM_LOCKID_NAME_MAX ||
+	    mres->num_locks > DLM_MAX_MIGRATABLE_LOCKS ||
+	    be16_to_cpu(msg->data_len) < struct_size(mres, ml, mres->num_locks)) {
+		mlog(ML_ERROR, "%s: invalid lockres migration message from %u\n",
+		     dlm->name, mres->master);
+		dlm_put(dlm);
+		return -EINVAL;
+	}
 
 	if (!dlm_joined(dlm)) {
 		mlog(ML_ERROR, "Domain %s not joined! "

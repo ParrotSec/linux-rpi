@@ -1,0 +1,4 @@
+lib/modules/7.2.11+parrot7-armmp/kernel      usr/lib/debug/lib/modules/7.2.11+parrot7-armmp
+lib/modules/7.2.11+parrot7-armmp/System.map  usr/lib/debug/lib/modules/7.2.11+parrot7-armmp
+lib/modules/7.2.11+parrot7-armmp/vdso        usr/lib/debug/lib/modules/7.2.11+parrot7-armmp
+lib/modules/7.2.11+parrot7-armmp/vmlinux     usr/lib/debug/lib/modules/7.2.11+parrot7-armmp

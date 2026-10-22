@@ -1,0 +1,6 @@
+lib/modules/7.2.11+deb14-test/config                   usr/lib/modules/7.2.11+deb14-test
+lib/modules/7.2.11+deb14-test/System.map               usr/lib/modules/7.2.11+deb14-test
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.2.11+deb14-test/modules.builtin          usr/lib/modules/7.2.11+deb14-test
+lib/modules/7.2.11+deb14-test/modules.builtin.modinfo  usr/lib/modules/7.2.11+deb14-test
+lib/modules/7.2.11+deb14-test/modules.order            usr/lib/modules/7.2.11+deb14-test

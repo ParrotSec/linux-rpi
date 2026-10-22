@@ -1,16 +1,9 @@
 [[flavour]]
 name = 'sparc64'
 [flavour.description]
-hardware = 'uniprocessor 64-bit UltraSPARC'
+hardware = '64-bit UltraSPARC'
 [flavour.packages]
 installer = true
-
-[[flavour]]
-name = 'sparc64-smp'
-[flavour.defs]
-is_default = true
-[flavour.description]
-hardware = 'multiprocessor 64-bit UltraSPARC'
 
 [[featureset]]
 name = 'none'

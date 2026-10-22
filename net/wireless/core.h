@@ -3,7 +3,7 @@
  * Wireless configuration interface internals.
  *
  * Copyright 2006-2010	Johannes Berg <johannes@sipsolutions.net>
- * Copyright (C) 2018-2025 Intel Corporation
+ * Copyright (C) 2018-2026 Intel Corporation
  */
 #ifndef __NET_WIRELESS_CORE_H
 #define __NET_WIRELESS_CORE_H
@@ -24,6 +24,16 @@
 struct cfg80211_scan_request_int {
 	struct cfg80211_scan_info info;
 	bool notified;
+	/*
+	 * set while the request is handed to the driver, i.e. between
+	 * rdev_scan() and cfg80211_scan_done()
+	 */
+	bool driver_owns;
+	/*
+	 * set when cfg80211 is done with the request but the driver still
+	 * owns it, so that cfg80211_scan_done() knows to just free it
+	 */
+	bool stale;
 	/* must be last - variable members */
 	struct cfg80211_scan_request req;
 };
@@ -280,8 +290,7 @@ struct cfg80211_event {
 			bool locally_generated;
 		} dc;
 		struct {
-			u8 bssid[ETH_ALEN];
-			struct ieee80211_channel *channel;
+			struct cfg80211_bss *bss;
 		} ij;
 		struct {
 			u8 peer_addr[ETH_ALEN];
@@ -344,8 +353,7 @@ int __cfg80211_join_ibss(struct cfg80211_registered_device *rdev,
 void cfg80211_clear_ibss(struct net_device *dev, bool nowext);
 int cfg80211_leave_ibss(struct cfg80211_registered_device *rdev,
 			struct net_device *dev, bool nowext);
-void __cfg80211_ibss_joined(struct net_device *dev, const u8 *bssid,
-			    struct ieee80211_channel *channel);
+void __cfg80211_ibss_joined(struct net_device *dev, struct cfg80211_bss *bss);
 int cfg80211_ibss_wext_join(struct cfg80211_registered_device *rdev,
 			    struct wireless_dev *wdev);
 
@@ -446,6 +454,7 @@ bool cfg80211_supported_cipher_suite(struct wiphy *wiphy, u32 cipher);
 bool cfg80211_valid_key_idx(struct cfg80211_registered_device *rdev,
 			    int key_idx, bool pairwise);
 int cfg80211_validate_key_settings(struct cfg80211_registered_device *rdev,
+				   struct wireless_dev *wdev,
 				   struct key_params *params, int key_idx,
 				   bool pairwise, const u8 *mac_addr);
 void __cfg80211_scan_done(struct wiphy *wiphy, struct wiphy_work *wk);
@@ -556,6 +565,8 @@ void cfg80211_stop_p2p_device(struct cfg80211_registered_device *rdev,
 
 void cfg80211_stop_nan(struct cfg80211_registered_device *rdev,
 		       struct wireless_dev *wdev);
+void cfg80211_stop_pd(struct cfg80211_registered_device *rdev,
+		      struct wireless_dev *wdev);
 
 int cfg80211_nan_set_local_schedule(struct cfg80211_registered_device *rdev,
 				    struct wireless_dev *wdev,

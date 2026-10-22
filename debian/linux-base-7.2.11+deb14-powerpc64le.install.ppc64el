@@ -1,0 +1,6 @@
+lib/modules/7.2.11+deb14-powerpc64le/config                   usr/lib/modules/7.2.11+deb14-powerpc64le
+lib/modules/7.2.11+deb14-powerpc64le/System.map               usr/lib/modules/7.2.11+deb14-powerpc64le
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.2.11+deb14-powerpc64le/modules.builtin          usr/lib/modules/7.2.11+deb14-powerpc64le
+lib/modules/7.2.11+deb14-powerpc64le/modules.builtin.modinfo  usr/lib/modules/7.2.11+deb14-powerpc64le
+lib/modules/7.2.11+deb14-powerpc64le/modules.order            usr/lib/modules/7.2.11+deb14-powerpc64le

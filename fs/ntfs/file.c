@@ -22,6 +22,7 @@
 #include "ea.h"
 #include "iomap.h"
 #include "bitmap.h"
+#include "volume.h"
 
 #include <linux/filelock.h>
 
@@ -110,7 +111,8 @@ static int ntfs_trim_prealloc(struct inode *vi)
 			ntfs_error(vol->sb, "Preallocated block rollback failed");
 		} else {
 			ni->allocated_size = ntfs_cluster_to_bytes(vol, vcn_tr);
-			err = ntfs_attr_update_mapping_pairs(ni, 0);
+			err = ntfs_attr_update_mapping_pairs_locked(
+					ni, 0, ni);
 			if (err)
 				ntfs_error(vol->sb,
 					   "Failed to rollback mapping pairs for prealloc");
@@ -345,14 +347,12 @@ int ntfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 		if (ia_valid & ATTR_MODE)
 			flags |= NTFS_EA_MODE;
 
-		if (S_ISDIR(vi->i_mode))
-			vi->i_mode &= ~vol->dmask;
-		else
-			vi->i_mode &= ~vol->fmask;
-
 		mutex_lock(&ni->mrec_lock);
-		ntfs_ea_set_wsl_inode(vi, 0, NULL, flags);
+		err = ntfs_ea_set_wsl_inode(vi, 0, NULL, flags);
 		mutex_unlock(&ni->mrec_lock);
+		if (err)
+			goto out;
+
 	}
 
 	mark_inode_dirty(vi);
@@ -675,10 +675,29 @@ static int ntfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 static const char *ntfs_get_link(struct dentry *dentry, struct inode *inode,
 		struct delayed_call *done)
 {
-	if (!NTFS_I(inode)->target)
+	struct ntfs_inode *ni = NTFS_I(inode);
+	char *target;
+	int err;
+
+	if (!dentry)
+		return ERR_PTR(-ECHILD);
+
+	if (!ni->target)
 		return ERR_PTR(-EINVAL);
 
-	return NTFS_I(inode)->target;
+	if (ni->reparse_tag == IO_REPARSE_TAG_MOUNT_POINT ||
+	    (ni->reparse_tag == IO_REPARSE_TAG_SYMLINK &&
+	     !(ni->reparse_flags & cpu_to_le32(SYMLINK_FLAG_RELATIVE)))) {
+		if (NVolNativeSymlinkRel(ni->vol)) {
+			err = ntfs_translate_symlink_path(dentry, ni->target, &target);
+			if (err < 0)
+				return ERR_PTR(err);
+			set_delayed_call(done, kfree_link, target);
+			return target;
+		}
+	}
+
+	return ni->target;
 }
 
 static ssize_t ntfs_file_splice_read(struct file *in, loff_t *ppos,

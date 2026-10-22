@@ -41,8 +41,6 @@
 
 #include <soc/bcm2835/raspberrypi-firmware.h>
 
-#include "uapi/drm/vc4_drm.h"
-
 #include "vc4_drv.h"
 #include "vc4_regs.h"
 
@@ -362,8 +360,11 @@ static int vc4_drm_bind(struct device *dev)
 	}
 
 	ret = aperture_remove_all_conflicting_devices(driver->name);
-	if (ret)
+	if (ret) {
+		if (firmware)
+			rpi_firmware_put(firmware);
 		goto err;
+	}
 
 	if (firmware) {
 		ret = rpi_firmware_property(firmware,

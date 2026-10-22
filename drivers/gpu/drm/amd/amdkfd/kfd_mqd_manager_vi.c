@@ -148,6 +148,11 @@ static void init_mqd(struct mqd_manager *mm, void **mqd,
 		m->cp_hqd_wg_state_offset = q->ctl_stack_size;
 	}
 
+	mutex_lock(&mm->dev->kfd->profiler_lock);
+	if (mm->dev->kfd->profiler_process != NULL)
+		m->compute_perfcount_enable = 1;
+	mutex_unlock(&mm->dev->kfd->profiler_lock);
+
 	*mqd = m;
 	if (gart_addr)
 		*gart_addr = addr;
@@ -203,6 +208,9 @@ static void __update_mqd(struct mqd_manager *mm, void *mqd,
 			mtype << CP_HQD_IB_CONTROL__MTYPE__SHIFT;
 
 	/*
+	 * The lowest 6 bits of eop_control store the EOP ring size. If
+	 * their value is X, the ring size is 2^(X + 1) dwords, or
+	 * 2^(X + 3) bytes.
 	 * HW does not clamp this field correctly. Maximum EOP queue size
 	 * is constrained by per-SE EOP done signal count, which is 8-bit.
 	 * Limit is 0xFF EOP entries (= 0x7F8 dwords). CP will not submit
@@ -210,7 +218,7 @@ static void __update_mqd(struct mqd_manager *mm, void *mqd,
 	 * is safe, giving a maximum field value of 0xA.
 	 */
 	m->cp_hqd_eop_control |= q->eop_ring_buffer_size ? min(0xA,
-		order_base_2(q->eop_ring_buffer_size / 4) - 1) : 0;
+		order_base_2(q->eop_ring_buffer_size / 8)) : 0;
 	m->cp_hqd_eop_base_addr_lo =
 			lower_32_bits(q->eop_ring_buffer_address >> 8);
 	m->cp_hqd_eop_base_addr_hi =
@@ -230,6 +238,12 @@ static void __update_mqd(struct mqd_manager *mm, void *mqd,
 		m->cp_hqd_ctx_save_control =
 			atc_bit << CP_HQD_CTX_SAVE_CONTROL__ATC__SHIFT |
 			mtype << CP_HQD_CTX_SAVE_CONTROL__MTYPE__SHIFT;
+	if (minfo) {
+		if (minfo->update_flag == UPDATE_FLAG_PERFCOUNT_ENABLE)
+			m->compute_perfcount_enable = 1;
+		else if (minfo->update_flag == UPDATE_FLAG_PERFCOUNT_DISABLE)
+			m->compute_perfcount_enable = 0;
+	}
 
 	update_cu_mask(mm, mqd, minfo);
 	set_priority(m, q);

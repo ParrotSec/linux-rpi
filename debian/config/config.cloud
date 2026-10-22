@@ -121,7 +121,6 @@ CONFIG_XEN_BLKDEV_FRONTEND=m
 ##
 ## file: drivers/char/Kconfig
 ##
-# CONFIG_APPLICOM is not set
 # CONFIG_DEVPORT is not set
 # CONFIG_TELCLOCK is not set
 
@@ -1249,7 +1248,6 @@ CONFIG_HYPERV_STORAGE=m
 # CONFIG_FB_VESA is not set
 CONFIG_FB_EFI=y
 # CONFIG_FB_N411 is not set
-# CONFIG_FB_HGA is not set
 # CONFIG_FB_OPENCORES is not set
 # CONFIG_FB_S1D13XXX is not set
 # CONFIG_FB_I740 is not set
@@ -1312,7 +1310,6 @@ CONFIG_FB_EFI=y
 # CONFIG_W83627HF_WDT is not set
 # CONFIG_W83877F_WDT is not set
 # CONFIG_W83977F_WDT is not set
-# CONFIG_MACHZ_WDT is not set
 # CONFIG_SBC_EPX_C3_WATCHDOG is not set
 
 ##
@@ -1470,11 +1467,6 @@ CONFIG_EXT4_FS=y
 ## file: net/9p/Kconfig
 ##
 # CONFIG_NET_9P is not set
-
-##
-## file: net/appletalk/Kconfig
-##
-# CONFIG_ATALK is not set
 
 ##
 ## file: net/atm/Kconfig

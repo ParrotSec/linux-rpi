@@ -1,0 +1,2 @@
+# vmlinux needs extra sections that would normally be stripped.
+linux-binary-7.2.11+deb14-powerpc64le-64k: unstripped-binary-or-object *vmlinuz*

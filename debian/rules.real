@@ -181,6 +181,7 @@ $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): REAL_VERSION = $(ABINAME)$
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): SOURCE_DIR=$(BUILD_DIR)/source_$(FEATURESET)
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): DIR=$(BUILD_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR)
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): OUTPUT_DIR=$(DIR)/output/image
+$(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): OUTPUT_DIR_LIB=$(OUTPUT_DIR)/lib/modules/$(REAL_VERSION)
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): OUTPUT_DIR_DBG=$(DIR)/output/image-dbg
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): OUTPUT_DIR_DBG_LIB=$(OUTPUT_DIR_DBG)/lib/modules/$(REAL_VERSION)
 $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): export KBUILD_SIGN_PIN = $(shell dd if=/dev/random bs=16 count=1 status=none | base64)
@@ -199,18 +200,18 @@ $(STAMPS_DIR)/build_$(ARCH)_$(FEATURESET)_$(FLAVOUR): $(STAMPS_DIR)/setup_$(ARCH
 	+$(MAKE_CLEAN) -C '$(DIR)'
 	debian/bin/buildcheck.py $(DIR) $(ARCH) $(FEATURESET) $(FLAVOUR) build
 
-	install -D -m644 '$(DIR)/$(IMAGE_FILE)' $(OUTPUT_DIR)/boot/$(IMAGE_INSTALL_STEM)-$(REAL_VERSION)
+	install -D -m644 '$(DIR)/$(IMAGE_FILE)' $(OUTPUT_DIR_LIB)/vmlinuz
 ifeq ($(IMAGE_FILE),vmlinux)
 # This is the unprocessed ELF image, so we need to strip debug symbols
-	$(CROSS_COMPILE)strip --strip-debug $(OUTPUT_DIR)/boot/$(IMAGE_INSTALL_STEM)-$(REAL_VERSION)
+	$(CROSS_COMPILE)strip --strip-debug $(OUTPUT_DIR_LIB)/vmlinuz
 endif
 
 	sed '/CONFIG_\(MODULE_SIG_\(ALL\|KEY\)\|SYSTEM_TRUSTED_KEYS\|BUILD_SALT\)[ =]/d' $(DIR)/.config \
-		> $(OUTPUT_DIR)/boot/config-$(REAL_VERSION)
+		> $(OUTPUT_DIR_LIB)/config
 	echo "ffffffffffffffff B The real System.map is in the linux-image-$(REAL_VERSION)-dbg package" \
-		> $(OUTPUT_DIR)/boot/System.map-$(REAL_VERSION)
+		> $(OUTPUT_DIR_LIB)/System.map
 
-	install -D -m644 $(OUTPUT_DIR)/boot/$(IMAGE_INSTALL_STEM)-$(REAL_VERSION) $(OUTPUT_DIR)/lib/modules/$(REAL_VERSION)/vmlinuz.unsigned
+	install -D -m644 $(OUTPUT_DIR_LIB)/vmlinuz $(OUTPUT_DIR_LIB)/vmlinuz.unsigned
 
 	install -D -m644 $(DIR)/vmlinux $(OUTPUT_DIR_DBG_LIB)/vmlinux
 	install -D -m644 $(DIR)/System.map $(OUTPUT_DIR_DBG_LIB)/System.map
@@ -234,7 +235,7 @@ endif
 
 ifeq ($(ENABLE_DTB),True)
 	+$(MAKE_CLEAN) -C $(DIR) dtbs
-	+$(MAKE_CLEAN) -C $(DIR) dtbs_install INSTALL_DTBS_PATH='$(CURDIR)/$(OUTPUT_DIR)/lib/modules/$(REAL_VERSION)/dtb'
+	+$(MAKE_CLEAN) -C $(DIR) dtbs_install INSTALL_DTBS_PATH='$(CURDIR)/$(OUTPUT_DIR_LIB)/dtb'
 endif
 
 	rm -f $(OUTPUT_DIR)/lib/modules/$(REAL_VERSION)/build
@@ -683,6 +684,13 @@ binary_hyperv-daemons: build_hyperv-daemons
 		dh_installinit --name hv-$$service-daemon \
 			|| break; \
 	done
+ifneq ($(filter amd64 i386 x32,$(DEB_HOST_ARCH)),)
+	dh_installsystemd --name hv-fcopy-uio-daemon
+	dh_installinit --name hv-fcopy-uio-daemon
+	echo >> debian/hyperv-daemons.substvars 'hyperv-daemons:Arch-Description='\
+'hv_fcopy_uio_daemon provides the file copy service, allowing the host$${Newline}'\
+'to copy files into the guest.'
+endif
 	$(dh_binary_post)
 
 build_rtla: $(STAMPS_DIR)/prepare-build-tools $(STAMPS_DIR)/build-cpupower

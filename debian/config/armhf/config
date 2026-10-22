@@ -670,7 +670,6 @@ CONFIG_DHT11=m
 ## file: drivers/iio/trigger/Kconfig
 ##
 CONFIG_IIO_HRTIMER_TRIGGER=m
-CONFIG_IIO_INTERRUPT_TRIGGER=m
 CONFIG_IIO_STM32_LPTIMER_TRIGGER=m
 
 ##
@@ -1783,11 +1782,6 @@ CONFIG_KEXEC=y
 CONFIG_CRASH_DUMP=y
 
 ##
-## file: kernel/dma/Kconfig
-##
-CONFIG_DMA_CMA=y
-
-##
 ## file: kernel/power/Kconfig
 ##
 CONFIG_SUSPEND=y
@@ -1799,11 +1793,6 @@ CONFIG_ENERGY_MODEL=y
 ##
 CONFIG_XZ_DEC_ARM=y
 CONFIG_XZ_DEC_ARMTHUMB=y
-
-##
-## file: mm/Kconfig
-##
-CONFIG_CMA=y
 
 ##
 ## file: mm/Kconfig.debug

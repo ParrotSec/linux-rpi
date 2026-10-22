@@ -136,7 +136,7 @@ static int label_compound_match(struct aa_profile *profile,
 	struct label_it i;
 	struct path_cond cond = { };
 
-	/* find first subcomponent that is in view and going to be interated with */
+	/* find first subcomponent that is in view and going to be interacted with */
 	label_for_each(i, label, tp) {
 		if (!aa_ns_visible(profile->ns, tp->ns, inview))
 			continue;
@@ -864,6 +864,61 @@ audit:
 }
 
 /* ensure none ns domain transitions are correctly applied with onexec */
+static struct aa_label *label_merge_wrap(struct aa_label *a, struct aa_label *b,
+					 gfp_t gfp)
+{
+	struct aa_label *label = aa_label_merge(a, b, gfp);
+
+	if (!label)
+		return ERR_PTR(-ENOMEM);
+	return label;
+}
+
+static bool is_profile_priv_restricted_to_stack(const struct cred *subj_cred,
+						struct aa_profile *profile)
+{
+	if (profile_unconfined(profile) && profile == profile->ns->unconfined &&
+	    aa_unprivileged_unconfined_restricted &&
+	    /* cap_capable returns false (0) if true, hence true here means
+	     * doesn't have capability and the stack will be restricted
+	     */
+	    cap_capable(current_cred(), &init_user_ns, CAP_MAC_OVERRIDE,
+			CAP_OPT_NOAUDIT))
+		return true;
+	return false;
+}
+
+static const char *stack_msg = "change_profile unprivileged unconfined converted to stacking";
+
+static struct aa_label *priv_restricted_transition(const struct cred *subj_cred,
+						   struct aa_profile *profile,
+						   const char *op, u32 request,
+						   const char *name,
+						   struct aa_label *transition,
+						   gfp_t gfp)
+{
+	if (!is_profile_priv_restricted_to_stack(subj_cred, profile))
+		return aa_get_newest_label(transition);
+
+	/* transition allowed but only via stack */
+	struct aa_label *target = label_merge_wrap(&profile->label,
+						      transition, gfp);
+	if (IS_ERR_OR_NULL(target))
+		return target;
+
+	/* doing this here is less than optimal but good enough until the
+	 * fs mediation rework lands
+	 */
+	struct aa_perms perms = {
+		.allow = request,
+		.audit = request,
+	};
+	aa_audit_file(subj_cred, profile, &perms, op,
+		      request, name, NULL, target,
+		      subj_cred->euid, stack_msg, 0);
+
+	return target;
+}
 
 static struct aa_label *handle_onexec(const struct cred *subj_cred,
 				      struct aa_label *label,
@@ -891,12 +946,16 @@ static struct aa_label *handle_onexec(const struct cred *subj_cred,
 		return ERR_PTR(error);
 
 	new = fn_label_build_in_scope(label, profile, GFP_KERNEL,
-			stack ? aa_label_merge(&profile->label, onexec,
-					       GFP_KERNEL)
-			      : aa_get_newest_label(onexec),
+			stack ? label_merge_wrap(&profile->label, onexec,
+						 GFP_KERNEL)
+			      : priv_restricted_transition(subj_cred, profile,
+						OP_CHANGE_ONEXEC, AA_MAY_ONEXEC,
+						bprm->filename, onexec,
+						GFP_KERNEL),
 			profile_transition(subj_cred, profile, bprm,
 					   buffer, cond, unsafe));
-	if (new)
+	AA_BUG(!new);
+	if (!IS_ERR(new))
 		return new;
 
 	/* TODO: get rid of GLOBAL_ROOT_UID */
@@ -905,7 +964,8 @@ static struct aa_label *handle_onexec(const struct cred *subj_cred,
 				      OP_CHANGE_ONEXEC,
 				      AA_MAY_ONEXEC, bprm->filename, NULL,
 				      onexec, GLOBAL_ROOT_UID,
-				      "failed to build target label", -ENOMEM));
+				      "failed to build target label",
+				      PTR_ERR(new)));
 	return ERR_PTR(error);
 }
 
@@ -968,13 +1028,9 @@ int apparmor_bprm_creds_for_exec(struct linux_binprm *bprm)
 				profile_transition(subj_cred, profile, bprm,
 						   buffer,
 						   &cond, &unsafe));
-
 	AA_BUG(!new);
 	if (IS_ERR(new)) {
 		error = PTR_ERR(new);
-		goto done;
-	} else if (!new) {
-		error = -ENOMEM;
 		goto done;
 	}
 
@@ -1077,8 +1133,8 @@ static struct aa_label *build_change_hat(const struct cred *subj_cred,
 	if (!hat) {
 		error = -ENOENT;
 		if (COMPLAIN_MODE(profile)) {
-			hat = aa_new_learning_profile(profile, true, name,
-						      GFP_KERNEL);
+			hat = __aa_new_learning_profile(profile, true, name,
+							GFP_KERNEL);
 			if (!hat) {
 				info = "failed null profile create";
 				error = -ENOMEM;
@@ -1116,6 +1172,7 @@ static struct aa_label *change_hat(const struct cred *subj_cred,
 	bool sibling = false;
 	const char *name, *info = NULL;
 	int i, error;
+	bool needput = false;
 
 	AA_BUG(!label);
 	AA_BUG(!hats);
@@ -1128,7 +1185,6 @@ static struct aa_label *change_hat(const struct cred *subj_cred,
 	 * the profiles and label, we can rely on the namespaces being live
 	 * and avoid incrementing their refcounts while grabbing the lock.
 	 */
-	label = aa_get_label(label);
 	ns = labels_ns(label);
 
 retry:
@@ -1136,15 +1192,19 @@ retry:
 	if (label_is_stale(label)) {
 		new = aa_get_newest_label(label);
 		new_ns = labels_ns(new);
+
+		if (needput)
+			/* aa_put_label() is safe to call when under lock */
+			aa_put_label(label);
+		label = new;
+		needput = true;
+		/* check if replaced with label in parent ns, and lock there */
 		if (new_ns != ns) {
-			aa_put_label(new);
 			mutex_unlock(&ns->lock);
 			ns = new_ns;
-			label = new;
+			/* retry will bottom out at the root of the tree */
 			goto retry;
 		}
-		aa_put_label(label);
-		label = new;
 	}
 
 	if (PROFILE_IS_HAT(labels_profile(label)))
@@ -1155,7 +1215,8 @@ retry:
 		name = hats[i];
 		label_for_each_in_scope(it, labels_ns(label), label, profile) {
 			if (sibling && PROFILE_IS_HAT(profile)) {
-				root = aa_get_profile(profile->parent);
+				root = aa_get_profile(rcu_dereference_protected(profile->parent,
+						      mutex_is_locked(&ns->lock)));
 			} else if (!sibling && !PROFILE_IS_HAT(profile)) {
 				root = aa_get_profile(profile);
 			} else {	/* conflicting change type */
@@ -1216,6 +1277,8 @@ fail:
 		}
 	}
 	mutex_unlock(&ns->lock);
+	if (needput)
+		aa_put_label(label);
 	return ERR_PTR(error);
 
 build:
@@ -1223,12 +1286,11 @@ build:
 				   build_change_hat(subj_cred, profile, name,
 						    sibling),
 				   aa_get_label(&profile->label));
-	if (!new) {
-		info = "label build failed";
-		error = -ENOMEM;
-		goto fail;
-	} /* else if (IS_ERR) build_change_hat has logged error so return new */
 	mutex_unlock(&ns->lock);
+	AA_BUG(!new);
+	/* return new label or error ptr */
+	if (needput)
+		aa_put_label(label);
 	return new;
 }
 
@@ -1401,8 +1463,6 @@ static int change_profile_perms_wrapper(const char *op, const char *name,
 	return error;
 }
 
-static const char *stack_msg = "change_profile unprivileged unconfined converted to stacking";
-
 /**
  * aa_change_profile - perform a one-way profile transition
  * @fqname: name of profile may include namespace (NOT NULL)
@@ -1460,28 +1520,6 @@ int aa_change_profile(const char *fqname, int flags)
 			op = OP_STACK;
 		else
 			op = OP_CHANGE_PROFILE;
-	}
-
-	/* This should move to a per profile test. Requires pushing build
-	 * into callback
-	 */
-	if (!stack && unconfined(label) &&
-	    label == &labels_ns(label)->unconfined->label &&
-	    aa_unprivileged_unconfined_restricted &&
-	    /* TODO: refactor so this check is a fn */
-	    cap_capable(current_cred(), &init_user_ns, CAP_MAC_OVERRIDE,
-			CAP_OPT_NOAUDIT)) {
-		/* regardless of the request in this case apparmor
-		 * stacks against unconfined so admin set policy can't be
-		 * by-passed
-		 */
-		stack = true;
-		perms.audit = request;
-		(void) fn_for_each_in_scope(label, profile,
-				aa_audit_file(subj_cred, profile, &perms, op,
-					      request, auditname, NULL, target,
-					      GLOBAL_ROOT_UID, stack_msg, 0));
-		perms.audit = 0;
 	}
 
 	if (*fqname == '&') {
@@ -1554,9 +1592,13 @@ check:
 	/* stacking is always a subset, so only check the nonstack case */
 	if (!stack) {
 		new = fn_label_build_in_scope(label, profile, GFP_KERNEL,
-					   aa_get_label(target),
+				priv_restricted_transition(subj_cred, profile,
+							   op, request,
+							   auditname, target,
+							   GFP_KERNEL),
 					   aa_get_label(&profile->label));
-		if (IS_ERR_OR_NULL(new))
+		AA_BUG(!new);
+		if (IS_ERR(new))
 			goto build_fail;
 		/*
 		 * no new privs prevents domain transitions that would
@@ -1580,10 +1622,9 @@ check:
 			goto build_fail;
 		error = aa_replace_current_label(new);
 	} else {
-		if (new) {
-			aa_put_label(new);
-			new = NULL;
-		}
+		/* new will be recomputed so at exec time. So discard */
+		aa_put_label(new);
+		new = NULL;
 
 		/* full transition will be built in exec path */
 		aa_set_current_onexec(target, stack);

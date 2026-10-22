@@ -25,14 +25,24 @@
 /* Fixture for tests that create child processes */
 FIXTURE(nsid) {
 	pid_t child_pid;
+	pid_t grandchild_pid;
 };
 
 FIXTURE_SETUP(nsid) {
 	self->child_pid = 0;
+	self->grandchild_pid = 0;
 }
 
 FIXTURE_TEARDOWN(nsid) {
-	/* Clean up any child process that may still be running */
+	/*
+	 * Kill grandchild first: timens_separate and pidns_separate fork a
+	 * grandchild that calls pause().  It is reparented to init on child
+	 * exit and keeps the test runner's tap pipe open, hanging the runner.
+	 */
+	if (self->grandchild_pid > 0) {
+		kill(self->grandchild_pid, SIGKILL);
+		waitpid(self->grandchild_pid, NULL, 0);
+	}
 	if (self->child_pid > 0) {
 		kill(self->child_pid, SIGKILL);
 		waitpid(self->child_pid, NULL, 0);
@@ -639,8 +649,6 @@ TEST_F(nsid, timens_separate)
 		/* Fork a grandchild to actually enter the new namespace */
 		pid_t grandchild = fork();
 		if (grandchild == 0) {
-			/* Grandchild is in the new namespace */
-			write(pipefd[1], "Y", 1);
 			close(pipefd[1]);
 			pause();
 			_exit(0);
@@ -676,6 +684,7 @@ TEST_F(nsid, timens_separate)
 
 	pid_t grandchild_pid;
 	ASSERT_EQ(read(pipefd[0], &grandchild_pid, sizeof(grandchild_pid)), sizeof(grandchild_pid));
+	self->grandchild_pid = grandchild_pid;
 	close(pipefd[0]);
 
 	/* Open grandchild's time namespace */
@@ -760,8 +769,6 @@ TEST_F(nsid, pidns_separate)
 		/* Fork a grandchild to actually enter the new namespace */
 		pid_t grandchild = fork();
 		if (grandchild == 0) {
-			/* Grandchild is in the new namespace */
-			write(pipefd[1], "Y", 1);
 			close(pipefd[1]);
 			pause();
 			_exit(0);
@@ -797,6 +804,7 @@ TEST_F(nsid, pidns_separate)
 
 	pid_t grandchild_pid;
 	ASSERT_EQ(read(pipefd[0], &grandchild_pid, sizeof(grandchild_pid)), sizeof(grandchild_pid));
+	self->grandchild_pid = grandchild_pid;
 	close(pipefd[0]);
 
 	/* Open grandchild's PID namespace */

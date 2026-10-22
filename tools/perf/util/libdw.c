@@ -4,6 +4,7 @@
 #include "srcline.h"
 #include "symbol.h"
 #include "dwarf-aux.h"
+#include "callchain.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <elfutils/libdwfl.h>
@@ -81,26 +82,58 @@ struct libdw_a2l_cb_args {
 static int libdw_a2l_cb(Dwarf_Die *die, void *_args)
 {
 	struct libdw_a2l_cb_args *args  = _args;
-	struct symbol *inline_sym = new_inline_sym(args->dso, args->sym, die_name(die));
 	const char *call_fname = die_get_call_file(die);
+	int call_lineno = die_get_call_lineno(die);
 	char *call_srcline = srcline__unknown;
-	struct inline_list *ilist;
+	struct symbol *inline_sym;
 
-	if (!inline_sym)
-		goto abort_enomem;
+	if (dwarf_tag(die) == DW_TAG_subprogram && args->sym) {
+		/*
+		 * cu_walk_functions_at() opens the walk with the
+		 * containing DW_TAG_subprogram DIE (the non-inlined outer
+		 * function). That's just the base symbol -- use it
+		 * directly. Avoids a fragile name-vs-name compare in
+		 * new_inline_sym() that misfires when GCC IPA passes
+		 * (.isra/.constprop/.part/.cold) rename the ELF symbol
+		 * while DWARF keeps the pre-clone linkage name, which
+		 * left the outer frame spuriously tagged "(inlined)".
+		 */
+		inline_sym = args->sym;
+	} else {
+		/*
+		 * Prefer DW_AT_linkage_name so C++ inline frames keep
+		 * their namespace/class qualification. new_inline_sym()
+		 * runs the name through dso__demangle_sym(), so the
+		 * mangled linkage name is turned back into
+		 * "Namespace::Class::method". Fall back to DW_AT_name
+		 * (unqualified) when no linkage name is present, e.g.
+		 * for C code or extern "C" functions.
+		 */
+		const char *funcname = die_get_linkage_name(die) ?: die_name(die);
+
+		inline_sym = new_inline_sym(args->dso, args->sym, funcname);
+		if (!inline_sym)
+			goto abort_enomem;
+	}
 
 	/* Assign caller information to the parent. */
 	if (call_fname)
-		call_srcline = srcline_from_fileline(call_fname, die_get_call_lineno(die));
+		call_srcline = srcline_from_fileline(call_fname, call_lineno >= 0 ? call_lineno : 0);
 
-	list_for_each_entry(ilist, &args->node->val, list) {
-		if (args->leaf_srcline == ilist->srcline)
+	if (!list_empty(&args->node->val)) {
+		struct inline_list *parent;
+
+		if (callchain_param.order == ORDER_CALLEE)
+			parent = list_first_entry(&args->node->val, struct inline_list, list);
+		else
+			parent = list_last_entry(&args->node->val, struct inline_list, list);
+
+		if (args->leaf_srcline == parent->srcline)
 			args->leaf_srcline_used = false;
-		else if (ilist->srcline != srcline__unknown)
-			free(ilist->srcline);
-		ilist->srcline =  call_srcline;
+		else if (parent->srcline != srcline__unknown)
+			free(parent->srcline);
+		parent->srcline = call_srcline;
 		call_srcline = NULL;
-		break;
 	}
 	if (call_srcline && call_srcline != srcline__unknown)
 		free(call_srcline);
@@ -123,7 +156,7 @@ static int libdw_a2l_cb(Dwarf_Die *die, void *_args)
 	return 0;
 
 abort_delete_sym:
-	if (inline_sym->inlined)
+	if (symbol__inlined(inline_sym))
 		symbol__delete(inline_sym);
 abort_enomem:
 	args->err = -ENOMEM;

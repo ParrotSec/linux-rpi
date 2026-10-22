@@ -8,6 +8,7 @@
 #include "dml2_external_lib_deps.h"
 #include "dml_top_display_cfg_types.h"
 #include "dml_top_types.h"
+#include "lib_frl_cap_check.h"
 
 #define __DML_VBA_DEBUG__
 #define __DML2_CALCS_MAX_VRATIO_PRE_OTO__ 4.0 //<brief max vratio for one-to-one prefetch bw scheduling
@@ -1522,6 +1523,8 @@ struct dml2_core_shared_CalculateSwathAndDETConfiguration_locals {
 };
 
 struct dml2_core_shared_TruncToValidBPP_locals {
+	struct lib_frl_cap_check_params hdmifrlparams;
+	struct lib_frl_cap_check_intermediates hdmifrlinter;
 };
 
 struct dml2_core_shared_CalculateDETBufferSize_locals {
@@ -1745,8 +1748,8 @@ struct dml2_core_calcs_CalculateWatermarksMALLUseAndDRAMSpeedChangeSupport_param
 	bool UnboundedRequestEnabled;
 	unsigned int CompressedBufferSizeInkByte;
 	bool max_outstanding_when_urgent_expected;
-	const unsigned int max_outstanding_requests;
-	const unsigned int max_request_size_bytes;
+	unsigned int max_outstanding_requests;
+	unsigned int max_request_size_bytes;
 	const unsigned int *meta_row_height_l;
 	const unsigned int *meta_row_height_c;
 	const enum dml2_pstate_method *uclk_pstate_switch_modes;

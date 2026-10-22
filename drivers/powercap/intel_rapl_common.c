@@ -32,6 +32,9 @@
 
 #define ENERGY_STATUS_MASK		GENMASK(31, 0)
 
+/* Width of the RAPL energy counters, see the *_ENERGY_STATUS_MASK defines */
+#define RAPL_CNTR_WIDTH			32
+
 #define POWER_UNIT_OFFSET		0x00
 #define POWER_UNIT_MASK			GENMASK(3, 0)
 
@@ -1227,6 +1230,7 @@ static u64 rapl_event_update(struct perf_event *event)
 	struct rapl_package_pmu_data *data = event_to_pmu_data(event);
 	u64 prev_raw_count, new_raw_count;
 	s64 delta, sdelta;
+	int shift = 64 - RAPL_CNTR_WIDTH;
 
 	/*
 	 * Follow the generic code to drain hwc->prev_count.
@@ -1243,8 +1247,13 @@ static u64 rapl_event_update(struct perf_event *event)
 	 * Now we have the new raw value and have updated the prev
 	 * timestamp already. We can now calculate the elapsed delta
 	 * (event-)time and add that to the generic event.
+	 *
+	 * Careful, the counter is narrower than u64 and is not
+	 * sign-extended above its physical width.  Shift both values up
+	 * so that the subtraction wraps, then shift the result back down.
 	 */
-	delta = new_raw_count - prev_raw_count;
+	delta = (new_raw_count << shift) - (prev_raw_count << shift);
+	delta >>= shift;
 
 	/*
 	 * Scale delta to smallest unit (2^-32)
@@ -1441,7 +1450,7 @@ static ssize_t cpumask_show(struct device *dev,
 	}
 	cpus_read_unlock();
 
-	ret = cpumap_print_to_pagebuf(true, buf, cpu_mask);
+	ret = sysfs_emit(buf, "%*pbl\n", cpumask_pr_args(cpu_mask));
 
 	free_cpumask_var(cpu_mask);
 
@@ -1770,7 +1779,8 @@ struct rapl_package *rapl_add_package_cpuslocked(int id, struct rapl_if_priv *pr
 			 topology_physical_package_id(id) : topology_logical_die_id(id);
 		if ((int)(rp->id) < 0) {
 			pr_err("topology_logical_(package/die)_id() returned a negative value");
-			return ERR_PTR(-EINVAL);
+			ret = -EINVAL;
+			goto err_free_package;
 		}
 		rp->lead_cpu = id;
 		if (!rapl_msrs_are_pkg_scope() && topology_max_dies_per_package() > 1)

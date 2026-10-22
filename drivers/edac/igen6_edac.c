@@ -151,6 +151,9 @@ static struct res_config {
 	/* MEMSS_PMA_CR registers. */
 	u32 reg_mem_config_offset;
 	u32 reg_mem_config_ddr_type_mask;
+	u32 reg_mem_config_ibecc_en_mask;
+	u32 reg_capabilities_misc_offset;
+	u32 reg_capabilities_misc_ibecc_dis;
 	/* Memory controller registers. */
 	u32 reg_mad_inter_size_mask[NUM_CHANNELS];
 	u64 reg_mad_inter_size_granularity;
@@ -172,8 +175,6 @@ static struct res_config {
 	/* Set imc->dimm_{l_size,s_size,l_map}[chan]. */
 	void (*set_dimm_params)(struct igen6_imc *imc, int chan);
 	bool (*ibecc_available)(struct pci_dev *pdev);
-	/* Extract error address logged in IBECC */
-	u64 (*err_addr)(u64 ecclog);
 	/* Convert error address logged in IBECC to system physical address */
 	u64 (*err_addr_to_sys_addr)(u64 eaddr, int mc);
 	/* Convert error address logged in IBECC to integrated memory controller address */
@@ -309,9 +310,16 @@ static struct work_struct ecclog_work;
 #define DID_PTL_H_SKU11	0xb028
 #define DID_PTL_H_SKU12	0xb029
 #define DID_PTL_H_SKU13	0xb02a
+#define DID_PTL_H_SKU14	0xb00a
 
 /* Compute die IDs for Wildcat Lake with IBECC */
 #define DID_WCL_SKU1	0xfd00
+
+/* Compute die IDs for Nova Lake-H/HX with IBECC */
+#define DID_NVL_H_SKU1	0xd701
+#define DID_NVL_H_SKU2	0xd702
+#define DID_NVL_H_SKU3	0xd704
+#define DID_NVL_H_SKU4	0xd705
 
 static int get_mchbar(struct pci_dev *pdev, u64 *mchbar)
 {
@@ -404,27 +412,26 @@ static bool mtl_p_ibecc_available(struct pci_dev *pdev)
 	return !(CAPID_E_IBECC_BIT18 & v);
 }
 
-static bool mtl_ps_ibecc_available(struct pci_dev *pdev)
+static bool generic_ibecc_available(struct pci_dev *pdev)
 {
-#define MCHBAR_MEMSS_IBECCDIS	0x13c00
-	void __iomem *window;
-	u64 mchbar;
+	void __iomem *base = igen6_pvt->memss_pma_cr;
+	bool present;
 	u32 val;
 
-	if (get_mchbar(pdev, &mchbar))
-		return false;
-
-	window = ioremap(mchbar, MCHBAR_SIZE * 2);
-	if (!window) {
-		igen6_printk(KERN_ERR, "Failed to ioremap 0x%llx\n", mchbar);
-		return false;
+	if (res_cfg->reg_capabilities_misc_offset) {
+		val = readl(base + res_cfg->reg_capabilities_misc_offset);
+		present = !(val & res_cfg->reg_capabilities_misc_ibecc_dis);
+		edac_dbg(2, "capabilities misc reg 0x%x\n", val);
+	} else if (res_cfg->reg_mem_config_offset) {
+		val = readl(base + res_cfg->reg_mem_config_offset);
+		present = !!(val & res_cfg->reg_mem_config_ibecc_en_mask);
+		edac_dbg(2, "mem config reg 0x%x\n", val);
+	} else {
+		igen6_printk(KERN_ERR, "No register for detecting IBECC presence.\n");
+		present = false;
 	}
 
-	val = readl(window + MCHBAR_MEMSS_IBECCDIS);
-	iounmap(window);
-
-	/* Bit6: 1 - IBECC is disabled, 0 - IBECC isn't disabled */
-	return !GET_BITFIELD(val, 6, 6);
+	return present;
 }
 
 static u64 mem_addr_to_sys_addr(u64 maddr)
@@ -511,11 +518,6 @@ static u64 adl_err_addr_to_imc_addr(u64 eaddr, int mc)
 		   GET_BITFIELD(eaddr, 0, intlv_bit - 1);
 
 	return imc_addr;
-}
-
-static u64 rpl_p_err_addr(u64 ecclog)
-{
-	return field_get(res_cfg->reg_eccerrlog_addr_mask, ecclog);
 }
 
 static enum mem_type ptl_h_get_mem_type(struct igen6_imc *imc)
@@ -707,35 +709,21 @@ static struct res_config adl_n_cfg = {
 	.err_addr_to_imc_addr	= adl_err_addr_to_imc_addr,
 };
 
-static struct res_config rpl_p_cfg = {
-	.machine_check		= true,
-	.num_imc		= 2,
-	.reg_mchbar_mask	= GENMASK_ULL(41, 17),
-	.reg_tom_mask		= GENMASK_ULL(41, 20),
-	.reg_touud_mask		= GENMASK_ULL(41, 20),
-	.reg_eccerrlog_addr_mask = GENMASK_ULL(45, 5),
-	.imc_base		= 0xd800,
-	.ibecc_base		= 0xd400,
-	.ibecc_error_log_offset	= 0x68,
-	.ibecc_available	= tgl_ibecc_available,
-	.err_addr		= rpl_p_err_addr,
-	.err_addr_to_sys_addr	= adl_err_addr_to_sys_addr,
-	.err_addr_to_imc_addr	= adl_err_addr_to_imc_addr,
-};
-
 static struct res_config mtl_ps_cfg = {
-	.machine_check		= true,
-	.num_imc		= 2,
-	.reg_mchbar_mask	= GENMASK_ULL(41, 17),
-	.reg_tom_mask		= GENMASK_ULL(41, 20),
-	.reg_touud_mask		= GENMASK_ULL(41, 20),
-	.reg_eccerrlog_addr_mask = GENMASK_ULL(38, 5),
-	.imc_base		= 0xd800,
-	.ibecc_base		= 0xd400,
-	.ibecc_error_log_offset	= 0x170,
-	.ibecc_available	= mtl_ps_ibecc_available,
-	.err_addr_to_sys_addr	= adl_err_addr_to_sys_addr,
-	.err_addr_to_imc_addr	= adl_err_addr_to_imc_addr,
+	.machine_check				= true,
+	.num_imc				= 2,
+	.reg_mchbar_mask			= GENMASK_ULL(41, 17),
+	.reg_tom_mask				= GENMASK_ULL(41, 20),
+	.reg_touud_mask				= GENMASK_ULL(41, 20),
+	.reg_eccerrlog_addr_mask		= GENMASK_ULL(38, 5),
+	.reg_capabilities_misc_offset		= 0x13c00,
+	.reg_capabilities_misc_ibecc_dis	= BIT(6),
+	.imc_base				= 0xd800,
+	.ibecc_base				= 0xd400,
+	.ibecc_error_log_offset			= 0x170,
+	.ibecc_available			= generic_ibecc_available,
+	.err_addr_to_sys_addr			= adl_err_addr_to_sys_addr,
+	.err_addr_to_imc_addr			= adl_err_addr_to_imc_addr,
 };
 
 static struct res_config mtl_p_cfg = {
@@ -798,72 +786,108 @@ static struct res_config wcl_cfg = {
 	.err_addr_to_imc_addr	= adl_err_addr_to_imc_addr,
 };
 
+static struct res_config nvl_h_cfg = {
+	.machine_check			= true,
+	.num_imc			= 2,
+	.reg_mchbar_mask		= GENMASK_ULL(41, 17),
+	.reg_tom_mask			= GENMASK_ULL(41, 20),
+	.reg_touud_mask			= GENMASK_ULL(41, 20),
+	.reg_eccerrlog_addr_mask	= GENMASK_ULL(38, 5),
+	.reg_mem_config_offset		= 0x12904,
+	.reg_mem_config_ddr_type_mask	= GENMASK(8, 6),
+	.reg_mem_config_ibecc_en_mask	= GENMASK(3, 2),
+	.reg_mad_inter_size_mask[0]	= GENMASK(15, 8),
+	.reg_mad_inter_size_mask[1]	= GENMASK(23, 16),
+	.reg_mad_inter_size_granularity	= BIT_ULL(29),
+	.reg_mad_intra_rank_mask[0]	= BIT(7),
+	.reg_mad_intra_rank_mask[1]	= BIT(15),
+	.reg_mad_intra_width_mask[0]	= BIT(6),
+	.reg_mad_intra_width_mask[1]	= BIT(14),
+	.reg_mad_intra_density_mask[0]	= GENMASK(3, 0),
+	.reg_mad_intra_density_mask[1]	= GENMASK(11, 8),
+	.imc_base			= 0xd800,
+	.ibecc_base			= 0xd400,
+	.ibecc_error_log_offset		= 0x170,
+	.get_mem_type			= ptl_h_get_mem_type,
+	.get_dev_type			= ptl_h_get_dev_type,
+	.set_chan_params		= ptl_h_set_chan_params,
+	.set_dimm_params		= ptl_h_set_dimm_params,
+	.ibecc_available		= generic_ibecc_available,
+	.err_addr_to_sys_addr		= adl_err_addr_to_sys_addr,
+	.err_addr_to_imc_addr		= adl_err_addr_to_imc_addr,
+};
+
 static struct pci_device_id igen6_pci_tbl[] = {
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU5), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU6), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU7), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU8), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU9), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU10), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU11), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU12), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU13), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU14), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_EHL_SKU15), (kernel_ulong_t)&ehl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ICL_SKU8), (kernel_ulong_t)&icl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ICL_SKU10), (kernel_ulong_t)&icl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ICL_SKU11), (kernel_ulong_t)&icl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ICL_SKU12), (kernel_ulong_t)&icl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_TGL_SKU), (kernel_ulong_t)&tgl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_SKU1), (kernel_ulong_t)&adl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_SKU2), (kernel_ulong_t)&adl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_SKU3), (kernel_ulong_t)&adl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_SKU4), (kernel_ulong_t)&adl_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU1), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU2), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU3), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU4), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU5), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU6), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU7), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU8), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU9), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU10), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU11), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU12), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_AZB_SKU1), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ASL_SKU1), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ASL_SKU2), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ASL_SKU3), (kernel_ulong_t)&adl_n_cfg },
-	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU1), (kernel_ulong_t)&rpl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU2), (kernel_ulong_t)&rpl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU3), (kernel_ulong_t)&rpl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU4), (kernel_ulong_t)&rpl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU5), (kernel_ulong_t)&rpl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU1), (kernel_ulong_t)&mtl_ps_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU2), (kernel_ulong_t)&mtl_ps_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU3), (kernel_ulong_t)&mtl_ps_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU4), (kernel_ulong_t)&mtl_ps_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU1), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU2), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU3), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU1), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU2), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU3), (kernel_ulong_t)&mtl_p_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU1), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU2), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU3), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU4), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU5), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU6), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU7), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU8), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU9), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU10), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU11), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU12), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU13), (kernel_ulong_t)&ptl_h_cfg },
-	{ PCI_VDEVICE(INTEL, DID_WCL_SKU1), (kernel_ulong_t)&wcl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU5), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU6), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU7), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU8), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU9), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU10), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU11), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU12), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU13), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU14), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_EHL_SKU15), .driver_data = (kernel_ulong_t)&ehl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ICL_SKU8), .driver_data = (kernel_ulong_t)&icl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ICL_SKU10), .driver_data = (kernel_ulong_t)&icl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ICL_SKU11), .driver_data = (kernel_ulong_t)&icl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ICL_SKU12), .driver_data = (kernel_ulong_t)&icl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_TGL_SKU), .driver_data = (kernel_ulong_t)&tgl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_SKU1), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_SKU2), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_SKU3), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_SKU4), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU1), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU2), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU3), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU4), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU5), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU6), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU7), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU8), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU9), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU10), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU11), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ADL_N_SKU12), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_AZB_SKU1), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ASL_SKU1), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ASL_SKU2), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ASL_SKU3), .driver_data = (kernel_ulong_t)&adl_n_cfg },
+	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU1), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU2), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU3), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU4), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_RPL_P_SKU5), .driver_data = (kernel_ulong_t)&adl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU1), .driver_data = (kernel_ulong_t)&mtl_ps_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU2), .driver_data = (kernel_ulong_t)&mtl_ps_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU3), .driver_data = (kernel_ulong_t)&mtl_ps_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_PS_SKU4), .driver_data = (kernel_ulong_t)&mtl_ps_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU1), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU2), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_MTL_P_SKU3), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU1), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU2), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_ARL_UH_SKU3), .driver_data = (kernel_ulong_t)&mtl_p_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU1), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU2), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU3), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU4), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU5), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU6), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU7), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU8), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU9), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU10), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU11), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU12), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU13), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_PTL_H_SKU14), .driver_data = (kernel_ulong_t)&ptl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_WCL_SKU1), .driver_data = (kernel_ulong_t)&wcl_cfg },
+	{ PCI_VDEVICE(INTEL, DID_NVL_H_SKU1), .driver_data = (kernel_ulong_t)&nvl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_NVL_H_SKU2), .driver_data = (kernel_ulong_t)&nvl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_NVL_H_SKU3), .driver_data = (kernel_ulong_t)&nvl_h_cfg },
+	{ PCI_VDEVICE(INTEL, DID_NVL_H_SKU4), .driver_data = (kernel_ulong_t)&nvl_h_cfg },
 	{ },
 };
 MODULE_DEVICE_TABLE(pci, igen6_pci_tbl);
@@ -962,14 +986,22 @@ static void set_dimm_params(struct igen6_imc *imc, int chan)
 
 static int decode_chan_idx(u64 addr, u64 mask, int intlv_bit)
 {
-	u64 hash_addr = addr & mask, hash = 0;
-	u64 intlv = (addr >> intlv_bit) & 1;
+	u64 hash_addr, hash = 0;
 	int i;
+
+	/*
+	 * In hash mode, the @intlv_bit is the lowest selected bit of @addr
+	 * to be XORed. While @mask may or may not include this @intlv_bit,
+	 * we enforce that @mask includes @intlv_bit to ensure @intlv_bit is
+	 * XORed exactly once.
+	 */
+	mask |= 1 << intlv_bit;
+	hash_addr = addr & mask;
 
 	for (i = 6; i < 20; i++)
 		hash ^= (hash_addr >> i) & 1;
 
-	return (int)hash ^ intlv;
+	return (int)hash;
 }
 
 static u64 decode_channel_addr(u64 addr, int intlv_bit)
@@ -988,19 +1020,18 @@ static void decode_addr(u64 addr, u32 hash, u64 s_size, int l_map,
 {
 	int intlv_bit = CHANNEL_HASH_LSB_MASK_BIT(hash) + 6;
 
-	if (addr > 2 * s_size) {
+	if (addr >= 2 * s_size) {
 		*sub_addr = addr - s_size;
 		*idx = l_map;
 		return;
 	}
 
-	if (CHANNEL_HASH_MODE(hash)) {
-		*sub_addr = decode_channel_addr(addr, intlv_bit);
+	*sub_addr = decode_channel_addr(addr, intlv_bit);
+
+	if (CHANNEL_HASH_MODE(hash))
 		*idx = decode_chan_idx(addr, CHANNEL_HASH_MASK(hash), intlv_bit);
-	} else {
-		*sub_addr = decode_channel_addr(addr, 6);
-		*idx = GET_BITFIELD(addr, 6, 6);
-	}
+	else
+		*idx = GET_BITFIELD(addr, intlv_bit, intlv_bit);
 }
 
 static int igen6_decode(struct decoded_addr *res)
@@ -1183,11 +1214,7 @@ static void ecclog_work_cb(struct work_struct *work)
 
 	llist_for_each_entry_safe(node, tmp, head, llnode) {
 		memset(&res, 0, sizeof(res));
-		if (res_cfg->err_addr)
-			eaddr = res_cfg->err_addr(node->ecclog);
-		else
-			eaddr = node->ecclog & res_cfg->reg_eccerrlog_addr_mask;
-
+		eaddr	     = node->ecclog & res_cfg->reg_eccerrlog_addr_mask;
 		res.mc	     = node->mc;
 		res.sys_addr = res_cfg->err_addr_to_sys_addr(eaddr, res.mc);
 		res.imc_addr = res_cfg->err_addr_to_imc_addr(eaddr, res.mc);

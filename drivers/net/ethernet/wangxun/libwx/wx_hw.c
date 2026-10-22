@@ -2517,9 +2517,11 @@ int wx_sw_init(struct wx *wx)
 	}
 
 	spin_lock_init(&wx->hw_stats_lock);
+	spin_lock_init(&wx->ptp_tx_lock);
 	mutex_init(&wx->reset_lock);
 	bitmap_zero(wx->state, WX_STATE_NBITS);
 	bitmap_zero(wx->flags, WX_PF_FLAGS_NBITS);
+	set_bit(WX_STATE_DOWN, wx->state);
 	wx->misc_irq_domain = false;
 
 	return 0;
@@ -2875,7 +2877,7 @@ void wx_update_stats(struct wx *wx)
 	u64 restart_queue = 0, tx_busy = 0;
 	u32 i;
 
-	if (!netif_running(wx->netdev) ||
+	if (test_bit(WX_STATE_DOWN, wx->state) ||
 	    test_bit(WX_STATE_RESETTING, wx->state))
 		return;
 

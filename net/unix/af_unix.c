@@ -1143,8 +1143,6 @@ static int unix_create(struct net *net, struct socket *sock, int protocol,
 	if (protocol && protocol != PF_UNIX)
 		return -EPROTONOSUPPORT;
 
-	sock->state = SS_UNCONNECTED;
-
 	switch (sock->type) {
 	case SOCK_STREAM:
 		set_bit(SOCK_CUSTOM_SOCKOPT, &sock->flags);
@@ -1776,7 +1774,6 @@ restart:
 	/* Set credentials */
 	copy_peercred(sk, other);
 
-	sock->state	= SS_CONNECTED;
 	WRITE_ONCE(sk->sk_state, TCP_ESTABLISHED);
 	sock_hold(newsk);
 
@@ -1832,8 +1829,7 @@ static int unix_socketpair(struct socket *socka, struct socket *sockb)
 
 	ska->sk_state = TCP_ESTABLISHED;
 	skb->sk_state = TCP_ESTABLISHED;
-	socka->state  = SS_CONNECTED;
-	sockb->state  = SS_CONNECTED;
+
 	return 0;
 }
 
@@ -1875,7 +1871,6 @@ static int unix_accept(struct socket *sock, struct socket *newsock,
 	/* attach accepted sock to socket */
 	unix_state_lock(tsk);
 	unix_update_edges(unix_sk(tsk));
-	newsock->state = SS_CONNECTED;
 	sock_graft(tsk, newsock);
 	unix_state_unlock(tsk);
 	return 0;
@@ -2810,8 +2805,8 @@ static int unix_stream_recv_urg(struct unix_stream_read_state *state)
 	return 1;
 }
 
-static struct sk_buff *manage_oob(struct sk_buff *skb, struct sock *sk,
-				  int flags, int copied)
+static struct sk_buff *manage_oob(struct sk_buff *skb, struct sk_buff **last,
+				  struct sock *sk, int flags, int copied)
 {
 	struct sk_buff *read_skb = NULL, *unread_skb = NULL;
 	struct unix_sock *u = unix_sk(sk);
@@ -2825,11 +2820,13 @@ static struct sk_buff *manage_oob(struct sk_buff *skb, struct sock *sk,
 		if (copied && (!u->oob_skb || skb == u->oob_skb)) {
 			skb = NULL;
 		} else if (flags & MSG_PEEK) {
+			*last = skb;
 			skb = skb_peek_next(skb, &sk->sk_receive_queue);
 		} else {
 			read_skb = skb;
 			skb = skb_peek_next(skb, &sk->sk_receive_queue);
 			__skb_unlink(read_skb, &sk->sk_receive_queue);
+			*last = skb;
 		}
 
 		if (!skb)
@@ -2848,8 +2845,10 @@ static struct sk_buff *manage_oob(struct sk_buff *skb, struct sock *sk,
 			__skb_unlink(skb, &sk->sk_receive_queue);
 			unread_skb = skb;
 			skb = skb_peek(&sk->sk_receive_queue);
+			*last = skb;
 		}
 	} else if (!sock_flag(sk, SOCK_URGINLINE)) {
+		*last = skb;
 		skb = skb_peek_next(skb, &sk->sk_receive_queue);
 	}
 
@@ -2969,8 +2968,8 @@ redo:
 again:
 #if IS_ENABLED(CONFIG_AF_UNIX_OOB)
 		if (skb) {
-			skb = manage_oob(skb, sk, flags, copied);
-			if (!skb && copied) {
+			skb = manage_oob(skb, &last, sk, flags, copied);
+			if (!skb && (copied || !state->size)) {
 				unix_state_unlock(sk);
 				break;
 			}

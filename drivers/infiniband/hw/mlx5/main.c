@@ -965,8 +965,9 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 
 	resp.response_length = resp_len;
 
-	if (uhw && uhw->inlen && !ib_is_udata_cleared(uhw, 0, uhw->inlen))
-		return -EINVAL;
+	err = ib_is_udata_in_empty(uhw);
+	if (err)
+		return err;
 
 	memset(props, 0, sizeof(*props));
 	err = mlx5_query_system_image_guid(ibdev,
@@ -1213,20 +1214,29 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 		}
 	}
 
-	if (offsetofend(typeof(resp), packet_pacing_caps) <= uhw_outlen &&
-	    raw_support) {
-		if (MLX5_CAP_QOS(mdev, packet_pacing) &&
-		    MLX5_CAP_GEN(mdev, qos)) {
-			resp.packet_pacing_caps.qp_rate_limit_max =
-				MLX5_CAP_QOS(mdev, packet_pacing_max_rate);
-			resp.packet_pacing_caps.qp_rate_limit_min =
-				MLX5_CAP_QOS(mdev, packet_pacing_min_rate);
-			resp.packet_pacing_caps.supported_qpts |=
-				1 << IB_QPT_RAW_PACKET;
-			if (MLX5_CAP_QOS(mdev, packet_pacing_burst_bound) &&
-			    MLX5_CAP_QOS(mdev, packet_pacing_typical_size))
-				resp.packet_pacing_caps.cap_flags |=
-					MLX5_IB_PP_SUPPORT_BURST;
+	if (offsetofend(typeof(resp), packet_pacing_caps) <= uhw_outlen) {
+		if (MLX5_CAP_GEN(mdev, qos)) {
+			if (MLX5_CAP_QOS(mdev, packet_pacing) && raw_support)
+				resp.packet_pacing_caps.supported_qpts |=
+					BIT(IB_QPT_RAW_PACKET);
+			if (MLX5_CAP_QOS(mdev, packet_pacing_req_ud))
+				resp.packet_pacing_caps.supported_qpts |=
+					BIT(IB_QPT_UD);
+			if (MLX5_CAP_QOS(mdev, packet_pacing_req_uc))
+				resp.packet_pacing_caps.supported_qpts |=
+					BIT(IB_QPT_UC);
+
+			if (resp.packet_pacing_caps.supported_qpts) {
+				resp.packet_pacing_caps.qp_rate_limit_max =
+					MLX5_CAP_QOS(mdev, packet_pacing_max_rate);
+				resp.packet_pacing_caps.qp_rate_limit_min =
+					MLX5_CAP_QOS(mdev, packet_pacing_min_rate);
+
+				if (MLX5_CAP_QOS(mdev, packet_pacing_burst_bound) &&
+				    MLX5_CAP_QOS(mdev, packet_pacing_typical_size))
+					resp.packet_pacing_caps.cap_flags |=
+						MLX5_IB_PP_SUPPORT_BURST;
+			}
 		}
 		resp.response_length += sizeof(resp.packet_pacing_caps);
 	}
@@ -1355,7 +1365,7 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 	}
 
 	if (uhw_outlen) {
-		err = ib_copy_to_udata(uhw, &resp, resp.response_length);
+		err = ib_respond_udata(uhw, resp);
 
 		if (err)
 			return err;
@@ -1621,14 +1631,15 @@ static int mlx5_ib_query_port_speed_from_vport(struct mlx5_core_dev *mdev,
 					       u32 port_num)
 {
 	u32 max_tx_speed;
+	u8 vport_state;
 	int err;
 
 	err = mlx5_query_vport_max_tx_speed(mdev, op_mod, vport, other_vport,
-					    &max_tx_speed);
+					    &max_tx_speed, &vport_state);
 	if (err)
 		return err;
 
-	if (max_tx_speed == 0)
+	if (vport_state == VPORT_STATE_DOWN || max_tx_speed == 0)
 		/* Value 0 indicates field not supported, fallback */
 		return mlx5_ib_query_port_speed_from_port(dev, port_num,
 							  speed);
@@ -1673,11 +1684,8 @@ static int mlx5_ib_query_port_speed_rep(struct mlx5_ib_dev *dev, u32 port_num,
 	struct mlx5_core_dev *mdev;
 	u16 op_mod;
 
-	if (!dev->port[port_num - 1].rep) {
-		mlx5_ib_warn(dev, "Representor doesn't exist for port %u\n",
-			     port_num);
-		return -EINVAL;
-	}
+	if (!dev->port[port_num - 1].rep)
+		return -ENODEV;
 
 	rep = dev->port[port_num - 1].rep;
 	mdev = mlx5_eswitch_get_core_dev(rep->esw);
@@ -2023,12 +2031,23 @@ int mlx5_ib_enable_lb(struct mlx5_ib_dev *dev, bool td, bool qp)
 	    dev->lb.qps == 1) {
 		if (!dev->lb.enabled) {
 			err = mlx5_nic_vport_update_local_lb(dev->mdev, true);
+			if (err)
+				goto err_rollback;
+
 			dev->lb.enabled = true;
 		}
 	}
 
 	mutex_unlock(&dev->lb.mutex);
 
+	return err;
+
+err_rollback:
+	if (td)
+		dev->lb.user_td--;
+	if (qp)
+		dev->lb.qps--;
+	mutex_unlock(&dev->lb.mutex);
 	return err;
 }
 
@@ -2284,7 +2303,7 @@ uar_done:
 		goto out_mdev;
 
 	resp.response_length = min(udata->outlen, sizeof(resp));
-	err = ib_copy_to_udata(udata, &resp, resp.response_length);
+	err = ib_respond_udata(udata, resp);
 	if (err)
 		goto out_mdev;
 
@@ -2776,7 +2795,7 @@ static int mlx5_ib_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 {
 	struct mlx5_ib_pd *pd = to_mpd(ibpd);
 	struct ib_device *ibdev = ibpd->device;
-	struct mlx5_ib_alloc_pd_resp resp;
+	struct mlx5_ib_alloc_pd_resp resp = {};
 	int err;
 	u32 out[MLX5_ST_SZ_DW(alloc_pd_out)] = {};
 	u32 in[MLX5_ST_SZ_DW(alloc_pd_in)] = {};
@@ -2795,9 +2814,10 @@ static int mlx5_ib_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 	pd->uid = uid;
 	if (udata) {
 		resp.pdn = pd->pdn;
-		if (ib_copy_to_udata(udata, &resp, sizeof(resp))) {
+		err = ib_respond_udata(udata, resp);
+		if (err) {
 			mlx5_cmd_dealloc_pd(to_mdev(ibdev)->mdev, pd->pdn, uid);
-			return -EFAULT;
+			return err;
 		}
 	}
 
@@ -4454,6 +4474,7 @@ static const struct uapi_definition mlx5_ib_defs[] = {
 	UAPI_DEF_CHAIN(mlx5_ib_std_types_defs),
 	UAPI_DEF_CHAIN(mlx5_ib_dm_defs),
 	UAPI_DEF_CHAIN(mlx5_ib_create_cq_defs),
+	UAPI_DEF_CHAIN(mlx5_ib_create_qp_defs),
 
 	UAPI_DEF_CHAIN_OBJ_TREE(UVERBS_OBJECT_DEVICE, &mlx5_ib_query_context),
 	UAPI_DEF_CHAIN_OBJ_TREE(UVERBS_OBJECT_MR, &mlx5_ib_reg_dmabuf_mr),
@@ -5113,7 +5134,7 @@ err_out:
 		if (profile->stage[i].cleanup)
 			profile->stage[i].cleanup(dev);
 	}
-	return -ENOMEM;
+	return err;
 }
 
 static const struct mlx5_ib_profile pf_profile = {
@@ -5515,6 +5536,7 @@ mp_err:
 dd_err:
 	mlx5r_rep_cleanup();
 rep_err:
+	rcu_barrier();
 	mlx5_ib_qp_event_cleanup();
 qp_event_err:
 	destroy_workqueue(mlx5_ib_event_wq);
@@ -5528,6 +5550,7 @@ static void __exit mlx5_ib_cleanup(void)
 	auxiliary_driver_unregister(&mlx5r_driver);
 	auxiliary_driver_unregister(&mlx5r_mp_driver);
 	mlx5r_rep_cleanup();
+	rcu_barrier();
 
 	mlx5_ib_qp_event_cleanup();
 	destroy_workqueue(mlx5_ib_event_wq);

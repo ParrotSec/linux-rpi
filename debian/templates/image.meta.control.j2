@@ -1,0 +1,18 @@
+Package: linux-image{{source_suffix}}{{localversion}}
+Meta-Rules-Target: meta
+Meta-Rules-Makeflags: INSTALLDOCS_LINK_DOC=linux-base{{source_suffix}}{{localversion}}
+Build-Profiles: <!pkg.linux.nokernel !pkg.linux.nometa>
+Depends:
+ linux-base{{source_suffix}}{{localversion}} (= ${binary:Version}),
+ linux-image-{{abiname}}{{localversion}} (= ${binary:Version}),
+ ${misc:Depends},
+Provides:
+ linux-latest-modules-{{abiname}}{{localversion}},
+ wireguard-modules (= 1.0.0),
+ virtualbox-guest-modules [amd64],
+{% if config.defs_flavour.is_default %}
+ linux-image-generic,
+{% endif %}
+Description: Linux for {{class}} (meta-package)
+ This package depends on the latest Linux kernel and modules for use on
+ {{longclass}}.

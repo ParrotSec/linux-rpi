@@ -307,6 +307,8 @@ static int btrfs_init_dev_replace_tgtdev(struct btrfs_fs_info *fs_info,
 	device->bdev_file = bdev_file;
 	set_bit(BTRFS_DEV_STATE_IN_FS_METADATA, &device->dev_state);
 	set_bit(BTRFS_DEV_STATE_REPLACE_TGT, &device->dev_state);
+	/* Check the comment in btrfs_init_new_device() for the reason. */
+	atomic_inc(&device->dev_stats_ccnt);
 	device->dev_stats_valid = 1;
 	set_blocksize(bdev_file, BTRFS_BDEV_BLOCKSIZE);
 	device->fs_devices = fs_devices;
@@ -491,6 +493,7 @@ static int mark_block_group_to_copy(struct btrfs_fs_info *fs_info,
 	path->reada = READA_FORWARD;
 	path->search_commit_root = true;
 	path->skip_locking = true;
+	path->need_commit_sem = true;
 
 	key.objectid = src_dev->devid;
 	key.type = BTRFS_DEV_EXTENT_KEY;
@@ -1013,8 +1016,15 @@ error:
 
 	/* write back the superblocks */
 	trans = btrfs_start_transaction(root, 0);
-	if (!IS_ERR(trans))
+	if (!IS_ERR(trans)) {
+		/*
+		 * Ignore any error here, if we failed to remove the DEV_STATS
+		 * item for devid 0, it's not a big deal.  We have other ways
+		 * to address it.
+		 */
+		btrfs_remove_dev_stat_item(trans, BTRFS_DEV_REPLACE_DEVID);
 		btrfs_commit_transaction(trans);
+	}
 
 	mutex_unlock(&dev_replace->lock_finishing_cancel_unmount);
 

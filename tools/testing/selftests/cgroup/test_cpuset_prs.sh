@@ -20,7 +20,7 @@ skip_test() {
 WAIT_INOTIFY=$(cd $(dirname $0); pwd)/wait_inotify
 
 # Find cgroup v2 mount point
-CGROUP2=$(mount -t cgroup2 | head -1 | awk -e '{print $3}')
+CGROUP2=$(mount -t cgroup2 | head -1 | awk '{print $3}')
 [[ -n "$CGROUP2" ]] || skip_test "Cgroup v2 mount point not found!"
 SUBPARTS_CPUS=$CGROUP2/.__DEBUG__.cpuset.cpus.subpartitions
 CPULIST=$(cat $CGROUP2/cpuset.cpus.effective)
@@ -298,6 +298,8 @@ TEST_MATRIX=(
 	" C0-4:X2-4 C1-4:X2-4:P2 C2-4:X4:P1 \
 				   .      .      .      X1      .    0 A1:0-1|A2:2-4|A3:2-4 \
 								       A1:P0|A2:P2|A3:P-1 2-4"
+	" CX1-3:P1 CX1-3  CX1-3    .      .      .      P1      .    0 A1:1-3|A2:1-3|A3:1-3 \
+								       A1:P1|A2:P0|A3:P-1"
 
 	# Remote partition offline tests
 	"   C0-3    C1-3  C2-3     .    X2-3   X2-3 X2-3:P2:O2=0 .   0 A1:0-1|A2:1|A3:3 A1:P0|A3:P2 2-3"
@@ -495,13 +497,20 @@ REMOTE_TEST_MATRIX=(
 	# Narrowing cpuset.cpus to previously sibling-excluded CPUs should
 	# not return CPUs that were never actually owned.
 	"  C1-4:P1   .   C1-2:P1  C1-3:P2  .       .  \
-	      .      .     .         C3    .       .     p1:4|c11:1-2|c12:3 \
+	      .      .     .       C3      .       .     p1:4|c11:1-2|c12:3 \
 							 p1:P1|c11:P1|c12:P2 3"
 	# Expanding cpuset.cpus to include a previously sibling-excluded CPU
 	# after the sibling has become a member should correctly request it.
 	"  C1-4:P1   .   C1-2:P1  C1-3:P2  .       .  \
-	      .      .      P0     C2-3    .       .     p1:1,4|c11:1|c12:2-3 \
+	      .      .     P0      C2-3    .       .     p1:1,4|c11:1|c12:2-3 \
 							 p1:P1|c11:P0|c12:P2 2-3"
+	# Cpusets with empty cpuset.cpus should inherit parent's effective_cpus
+	"  C1-4:P1 C5-6   C1-2     .       C5      .  \
+	      .      P1    P1      .       .       .     p1:3-4|p2:5-6|c11:1-2|c12:3-4|c21:5|c22:5-6 \
+							 p1:P1|p2:P1|c11:P1"
+	"  C1-4:P1 C5-6   C1-2     .       C5      .  \
+	      .      P1    P1      .      O5=0     .     p1:3-4|p2:6|c11:1-2|c12:3-4|c21:6|c22:6 \
+							 p1:P1|p2:P1|c11:P1"
 )
 
 #
@@ -513,6 +522,7 @@ write_cpu_online()
 	CPU=${1%=*}
 	VAL=${1#*=}
 	CPUFILE=//sys/devices/system/cpu/cpu${CPU}/online
+	echo $VAL > $CPUFILE || return 1
 	if [[ $VAL -eq 0 ]]
 	then
 		OFFLINE_CPUS="$OFFLINE_CPUS $CPU"
@@ -522,7 +532,6 @@ write_cpu_online()
 					sort | uniq -u)
 		}
 	fi
-	echo $VAL > $CPUFILE
 	pause 0.05
 }
 
@@ -590,7 +599,8 @@ set_ctrl_state()
 			eval $COMM $REDIRECT
 			;;
 		    O*) VAL=${CMD#?}
-			write_cpu_online $VAL
+			COMM="write_cpu_online $VAL"
+			eval $COMM $REDIRECT
 			;;
 		    T*) COMM="echo 0 > $TFILE"
 			eval $COMM $REDIRECT
@@ -627,7 +637,7 @@ set_ctrl_state_noerr()
 
 online_cpus()
 {
-	[[ -n "OFFLINE_CPUS" ]] && {
+	[[ -n "$OFFLINE_CPUS" ]] && {
 		for C in $OFFLINE_CPUS
 		do
 			write_cpu_online ${C}=1
@@ -783,7 +793,6 @@ check_isolcpus()
 	EXPECTED_ISOLCPUS=$1
 	ISCPUS=${CGROUP2}/cpuset.cpus.isolated
 	ISOLCPUS=$(cat $ISCPUS)
-	HKICPUS=$(cat /sys/devices/system/cpu/isolated)
 	LASTISOLCPU=
 	SCHED_DOMAINS=/sys/kernel/debug/sched/domains
 	if [[ $EXPECTED_ISOLCPUS = . ]]
@@ -820,11 +829,6 @@ check_isolcpus()
 	[[ "$EXPECTED_ISOLCPUS" != "$ISOLCPUS" ]] && return 1
 	ISOLCPUS=
 	EXPECTED_ISOLCPUS=$EXPECTED_SDOMAIN
-
-	#
-	# The inverse of HK_TYPE_DOMAIN cpumask in $HKICPUS should match $ISOLCPUS
-	#
-	[[ "$ISOLCPUS" != "$HKICPUS" ]] && return 1
 
 	#
 	# Use the sched domain in debugfs to check isolated CPUs, if available

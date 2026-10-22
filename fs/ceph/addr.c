@@ -1426,6 +1426,16 @@ void ceph_shift_unused_folios_left(struct folio_batch *fbatch)
 	fbatch->nr = n;
 }
 
+static void ceph_undo_wrbuffer_claim(struct inode *inode, struct folio *folio)
+{
+	struct ceph_snap_context *snapc = folio_detach_private(folio);
+
+	if (!snapc)
+		return;
+	ceph_put_wrbuffer_cap_refs(ceph_inode(inode), 1, snapc);
+	ceph_put_snap_context(snapc);
+}
+
 static
 int ceph_submit_write(struct address_space *mapping,
 			struct writeback_control *wbc,
@@ -1489,6 +1499,7 @@ new_request:
 			if (!page)
 				continue;
 
+			ceph_undo_wrbuffer_claim(inode, page_folio(page));
 			redirty_page_for_writepage(wbc, page);
 			unlock_page(page);
 		}
@@ -2570,7 +2581,8 @@ int ceph_pool_perm_check(struct inode *inode, int need)
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct ceph_string *pool_ns;
 	s64 pool;
-	int ret, flags;
+	int ret;
+	unsigned long flags;
 
 	/* Only need to do this for regular files */
 	if (!S_ISREG(inode->i_mode))
@@ -2612,20 +2624,19 @@ check:
 	if (ret < 0)
 		return ret;
 
-	flags = CEPH_I_POOL_PERM;
-	if (ret & POOL_READ)
-		flags |= CEPH_I_POOL_RD;
-	if (ret & POOL_WRITE)
-		flags |= CEPH_I_POOL_WR;
-
 	spin_lock(&ci->i_ceph_lock);
 	if (pool == ci->i_layout.pool_id &&
 	    pool_ns == rcu_dereference_raw(ci->i_layout.pool_ns)) {
-		ci->i_ceph_flags |= flags;
-        } else {
+		set_bit(CEPH_I_POOL_PERM_BIT, &ci->i_ceph_flags);
+		if (ret & POOL_READ)
+			set_bit(CEPH_I_POOL_RD_BIT, &ci->i_ceph_flags);
+		if (ret & POOL_WRITE)
+			set_bit(CEPH_I_POOL_WR_BIT, &ci->i_ceph_flags);
+	} else {
 		pool = ci->i_layout.pool_id;
-		flags = ci->i_ceph_flags;
 	}
+	/* Re-read flags under the lock so check: sees the updated bits. */
+	flags = ci->i_ceph_flags;
 	spin_unlock(&ci->i_ceph_lock);
 	goto check;
 }

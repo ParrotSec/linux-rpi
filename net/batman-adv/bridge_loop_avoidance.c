@@ -8,6 +8,7 @@
 #include "main.h"
 
 #include <linux/atomic.h>
+#include <linux/bug.h>
 #include <linux/byteorder/generic.h>
 #include <linux/compiler.h>
 #include <linux/container_of.h>
@@ -122,7 +123,7 @@ static bool batadv_compare_backbone_gw(const struct hlist_node *node,
  * @node: list node of the first entry to compare
  * @data2: pointer to the second claims
  *
- * Return: true if the claim have the same data, 0 otherwise
+ * Return: true if the claims have the same data, false otherwise
  */
 static bool batadv_compare_claim(const struct hlist_node *node,
 				 const void *data2)
@@ -323,11 +324,6 @@ batadv_bla_del_backbone_claims(struct batadv_bla_backbone_gw *backbone_gw)
 		}
 		spin_unlock_bh(list_lock);
 	}
-
-	/* all claims gone, initialize CRC */
-	spin_lock_bh(&backbone_gw->crc_lock);
-	backbone_gw->crc = BATADV_BLA_CRC_INIT;
-	spin_unlock_bh(&backbone_gw->crc_lock);
 }
 
 /**
@@ -698,12 +694,14 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 	struct batadv_bla_backbone_gw *old_backbone_gw;
 	struct batadv_bla_claim *claim;
 	struct batadv_bla_claim search_claim;
-	bool remove_crc = false;
 	int hash_added;
+	u16 claim_crc;
+	bool changed;
 
 	ether_addr_copy(search_claim.addr, mac);
 	search_claim.vid = vid;
 	claim = batadv_claim_hash_find(bat_priv, &search_claim);
+	claim_crc = crc16(0, mac, ETH_ALEN);
 
 	/* create a new claim entry if it does not exist yet. */
 	if (!claim) {
@@ -735,43 +733,56 @@ static void batadv_bla_add_claim(struct batadv_priv *bat_priv,
 			kfree(claim);
 			return;
 		}
-	} else {
-		WRITE_ONCE(claim->lasttime, jiffies);
-		if (claim->backbone_gw == backbone_gw)
-			/* no need to register a new backbone */
-			goto claim_free_ref;
 
+		spin_lock_bh(&backbone_gw->crc_lock);
+		backbone_gw->crc ^= claim_crc;
+		spin_unlock_bh(&backbone_gw->crc_lock);
+
+		WRITE_ONCE(backbone_gw->lasttime, jiffies);
+
+		batadv_claim_put(claim);
+		return;
+	}
+
+	WRITE_ONCE(claim->lasttime, jiffies);
+
+	/* replace backbone_gw atomically and adjust reference counters */
+	spin_lock_bh(&claim->backbone_lock);
+	if (claim->backbone_gw != backbone_gw) {
+		changed = true;
+
+		old_backbone_gw = claim->backbone_gw;
+		kref_get(&backbone_gw->refcount);
+		claim->backbone_gw = backbone_gw;
+	} else {
+		old_backbone_gw = NULL;
+		changed = false;
+	}
+	spin_unlock_bh(&claim->backbone_lock);
+
+	if (changed) {
 		batadv_dbg(BATADV_DBG_BLA, bat_priv,
 			   "%s(): changing ownership for %pM, vid %d to gw %pM\n",
 			   __func__, mac, batadv_print_vid(vid),
 			   backbone_gw->orig);
 
-		remove_crc = true;
+		/* add claim address to new backbone_gw */
+		spin_lock_bh(&backbone_gw->crc_lock);
+		backbone_gw->crc ^= claim_crc;
+		spin_unlock_bh(&backbone_gw->crc_lock);
+
+		WRITE_ONCE(backbone_gw->lasttime, jiffies);
 	}
 
-	/* replace backbone_gw atomically and adjust reference counters */
-	spin_lock_bh(&claim->backbone_lock);
-	old_backbone_gw = claim->backbone_gw;
-	kref_get(&backbone_gw->refcount);
-	claim->backbone_gw = backbone_gw;
-	spin_unlock_bh(&claim->backbone_lock);
-
-	if (remove_crc) {
+	if (old_backbone_gw) {
 		/* remove claim address from old backbone_gw */
 		spin_lock_bh(&old_backbone_gw->crc_lock);
-		old_backbone_gw->crc ^= crc16(0, claim->addr, ETH_ALEN);
+		old_backbone_gw->crc ^= claim_crc;
 		spin_unlock_bh(&old_backbone_gw->crc_lock);
+
+		batadv_backbone_gw_put(old_backbone_gw);
 	}
 
-	batadv_backbone_gw_put(old_backbone_gw);
-
-	/* add claim address to new backbone_gw */
-	spin_lock_bh(&backbone_gw->crc_lock);
-	backbone_gw->crc ^= crc16(0, claim->addr, ETH_ALEN);
-	spin_unlock_bh(&backbone_gw->crc_lock);
-	WRITE_ONCE(backbone_gw->lasttime, jiffies);
-
-claim_free_ref:
 	batadv_claim_put(claim);
 }
 
@@ -941,26 +952,18 @@ static bool batadv_handle_unclaim(struct batadv_priv *bat_priv,
 				  const u8 *backbone_addr, const u8 *claim_addr,
 				  unsigned short vid)
 {
-	struct batadv_bla_backbone_gw *backbone_gw;
-
 	/* unclaim in any case if it is our own */
 	if (primary_if && batadv_compare_eth(backbone_addr,
 					     primary_if->net_dev->dev_addr))
 		batadv_bla_send_claim(bat_priv, claim_addr, vid,
 				      BATADV_CLAIM_TYPE_UNCLAIM);
 
-	backbone_gw = batadv_backbone_hash_find(bat_priv, backbone_addr, vid);
-
-	if (!backbone_gw)
-		return true;
-
 	/* this must be an UNCLAIM frame */
 	batadv_dbg(BATADV_DBG_BLA, bat_priv,
 		   "%s(): UNCLAIM %pM on vid %d (sent by %pM)...\n", __func__,
-		   claim_addr, batadv_print_vid(vid), backbone_gw->orig);
+		   claim_addr, batadv_print_vid(vid), backbone_addr);
 
 	batadv_bla_del_claim(bat_priv, claim_addr, vid);
-	batadv_backbone_gw_put(backbone_gw);
 	return true;
 }
 
@@ -1281,7 +1284,7 @@ purge_now:
 
 			if (purged) {
 				/* reference for pending report_work */
-				if (cancel_work_sync(&backbone_gw->report_work))
+				if (disable_work_sync(&backbone_gw->report_work))
 					batadv_backbone_gw_put(backbone_gw);
 
 				/* reference for hash_entry */
@@ -1379,7 +1382,7 @@ void batadv_bla_update_orig_address(struct batadv_priv *bat_priv,
 	bat_priv->bla.claim_dest.group = group;
 
 	/* purge everything when bridge loop avoidance is turned off */
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		oldif = NULL;
 
 	if (!oldif) {
@@ -1483,7 +1486,7 @@ static void batadv_bla_periodic_work(struct work_struct *work)
 	batadv_bla_purge_claims(bat_priv, primary_if, 0);
 	batadv_bla_purge_backbone_gw(bat_priv, 0);
 
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		goto out;
 
 	if (atomic_dec_and_test(&bat_priv->bla.loopdetect_next)) {
@@ -1782,7 +1785,7 @@ bool batadv_bla_is_backbone_gw_orig(struct batadv_priv *bat_priv, u8 *orig,
 	struct batadv_bla_backbone_gw *backbone_gw;
 	int i;
 
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		return false;
 
 	if (!hash)
@@ -1820,7 +1823,7 @@ bool batadv_bla_is_backbone_gw(struct sk_buff *skb,
 	struct batadv_bla_backbone_gw *backbone_gw;
 	unsigned short vid;
 
-	if (!atomic_read(&orig_node->bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(orig_node->bat_priv->bridge_loop_avoidance))
 		return false;
 
 	/* first, find out the vid. */
@@ -1849,7 +1852,7 @@ void batadv_bla_free(struct batadv_priv *bat_priv)
 {
 	struct batadv_hard_iface *primary_if;
 
-	cancel_delayed_work_sync(&bat_priv->bla.work);
+	disable_delayed_work_sync(&bat_priv->bla.work);
 	primary_if = batadv_primary_if_get_selected(bat_priv);
 
 	if (bat_priv->bla.claim_hash) {
@@ -1952,7 +1955,7 @@ bool batadv_bla_rx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 	if (!primary_if)
 		goto handled;
 
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		goto allow;
 
 	if (batadv_bla_loopdetect_check(bat_priv, skb, primary_if, vid))
@@ -2084,7 +2087,7 @@ bool batadv_bla_tx(struct batadv_priv *bat_priv, struct sk_buff *skb,
 	if (!primary_if)
 		goto out;
 
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		goto allow;
 
 	if (batadv_bla_process_claim(bat_priv, primary_if, skb))
@@ -2504,7 +2507,7 @@ bool batadv_bla_check_claim(struct batadv_priv *bat_priv,
 	struct batadv_hard_iface *primary_if = NULL;
 	bool ret = true;
 
-	if (!atomic_read(&bat_priv->bridge_loop_avoidance))
+	if (!READ_ONCE(bat_priv->bridge_loop_avoidance))
 		return ret;
 
 	primary_if = batadv_primary_if_get_selected(bat_priv);

@@ -25,6 +25,7 @@ struct mnt_namespace {
 	__u32			n_fsnotify_mask;
 	struct fsnotify_mark_connector __rcu *n_fsnotify_marks;
 #endif
+	struct hlist_head	mnt_visible_mounts; /* SB_I_USERNS_VISIBLE mounts */
 	unsigned int		nr_mounts; /* # of mounts in the namespace */
 	unsigned int		pending_mounts;
 	refcount_t		passive; /* number references not pinning @mounts */
@@ -32,7 +33,8 @@ struct mnt_namespace {
 } __randomize_layout;
 
 struct mnt_pcp {
-	int mnt_count;
+	unsigned int mnt_gets;
+	unsigned int mnt_puts;
 	int mnt_writers;
 };
 
@@ -98,6 +100,7 @@ struct mount {
 	int mnt_expiry_mark;		/* true if marked for expiry */
 	struct hlist_head mnt_pins;
 	struct hlist_head mnt_stuck_children;
+	struct hlist_node mnt_ns_visible; /* link in ns->mnt_visible_mounts */
 	struct mount *overmount;	/* mounted on ->mnt_root */
 } __randomize_layout;
 
@@ -215,6 +218,8 @@ static inline void move_from_ns(struct mount *mnt)
 		ns->mnt_first_node = rb_next(&mnt->mnt_node);
 	rb_erase(&mnt->mnt_node, &ns->mounts);
 	RB_CLEAR_NODE(&mnt->mnt_node);
+	if (!hlist_unhashed(&mnt->mnt_ns_visible))
+		hlist_del_init(&mnt->mnt_ns_visible);
 }
 
 bool has_locked_children(struct mount *mnt, struct dentry *dentry);
@@ -229,6 +234,9 @@ static inline struct mnt_namespace *to_mnt_ns(struct ns_common *ns)
 #ifdef CONFIG_FSNOTIFY
 static inline void mnt_notify_add(struct mount *m)
 {
+	/* queued already under this namespace_sem hold */
+	if (!list_empty(&m->to_notify))
+		return;
 	/* Optimize the case where there are no watches */
 	if ((m->mnt_ns && m->mnt_ns->n_fsnotify_marks) ||
 	    (m->prev_ns && m->prev_ns->n_fsnotify_marks))

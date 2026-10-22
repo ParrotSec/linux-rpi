@@ -1566,8 +1566,11 @@ static void anx7411_i2c_remove(struct i2c_client *client)
 	anx7411_partner_unregister_altmode(plat);
 	anx7411_unregister_partner(plat);
 
-	if (plat->workqueue)
+	if (plat->workqueue) {
+		disable_irq(plat->intp_irq);
+		cancel_work_sync(&plat->work);
 		destroy_workqueue(plat->workqueue);
+	}
 
 	i2c_unregister_device(plat->spi_client);
 
@@ -1579,8 +1582,8 @@ static void anx7411_i2c_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id anx7411_id[] = {
-	{ "anx7411" },
-	{}
+	{ .name = "anx7411" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(i2c, anx7411_id);

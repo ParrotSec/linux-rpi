@@ -390,7 +390,7 @@ int iommu_mock_device_add(struct device *dev, struct iommu_device *iommu)
 
 	rc = device_add(dev);
 	if (rc)
-		iommu_fwspec_free(dev);
+		dev_iommu_free(dev);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(iommu_mock_device_add);
@@ -611,9 +611,8 @@ static void iommu_deinit_device(struct device *dev)
 	dev->iommu_group = NULL;
 	module_put(ops->owner);
 	dev_iommu_free(dev);
-#ifdef CONFIG_IOMMU_DMA
-	dev->dma_iommu = false;
-#endif
+	if (IS_ENABLED(CONFIG_IOMMU_DMA))
+		dev_clear_dma_iommu(dev);
 }
 
 static struct iommu_domain *pasid_array_entry_to_domain(void *entry)

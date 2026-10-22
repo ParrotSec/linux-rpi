@@ -1,0 +1,6 @@
+lib/modules/7.2.11+deb14-sh7751r/config                   usr/lib/modules/7.2.11+deb14-sh7751r
+lib/modules/7.2.11+deb14-sh7751r/System.map               usr/lib/modules/7.2.11+deb14-sh7751r
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.2.11+deb14-sh7751r/modules.builtin          usr/lib/modules/7.2.11+deb14-sh7751r
+lib/modules/7.2.11+deb14-sh7751r/modules.builtin.modinfo  usr/lib/modules/7.2.11+deb14-sh7751r
+lib/modules/7.2.11+deb14-sh7751r/modules.order            usr/lib/modules/7.2.11+deb14-sh7751r

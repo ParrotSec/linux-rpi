@@ -190,11 +190,11 @@ static int ipip_err(struct sk_buff *skb, u32 info)
 	if (t->parms.iph.ttl == 0 && type == ICMP_TIME_EXCEEDED)
 		goto out;
 
-	if (time_before(jiffies, t->err_time + IPTUNNEL_ERR_TIMEO))
-		t->err_count++;
+	if (time_before(jiffies, READ_ONCE(t->err_time) + IPTUNNEL_ERR_TIMEO))
+		WRITE_ONCE(t->err_count, READ_ONCE(t->err_count) + 1);
 	else
-		t->err_count = 1;
-	t->err_time = jiffies;
+		WRITE_ONCE(t->err_count, 1);
+	WRITE_ONCE(t->err_time, jiffies);
 
 out:
 	return err;
@@ -248,7 +248,7 @@ static int ipip_tunnel_rcv(struct sk_buff *skb, u8 ipproto)
 
 			tun_dst = ip_tun_rx_dst(skb, flags, 0, 0);
 			if (!tun_dst)
-				return 0;
+				goto drop;
 			ip_tunnel_md_udp_encap(skb, &tun_dst->u.tun_info);
 		}
 		skb_reset_mac_header(skb);

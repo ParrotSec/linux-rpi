@@ -7,6 +7,7 @@
 #include "mt7921.h"
 #include "../dma.h"
 #include "../mt76_connac2_mac.h"
+#include "regd.h"
 #include "mcu.h"
 
 #define MT_WTBL_TXRX_CAP_RATE_OFFSET	7
@@ -155,7 +156,7 @@ static void mt7921_mac_sta_poll(struct mt792x_dev *dev)
 		rssi[0] = to_rssi(GENMASK(7, 0), val);
 		rssi[1] = to_rssi(GENMASK(15, 8), val);
 		rssi[2] = to_rssi(GENMASK(23, 16), val);
-		rssi[3] = to_rssi(GENMASK(31, 14), val);
+		rssi[3] = to_rssi(GENMASK(31, 24), val);
 
 		mlink->ack_signal =
 			mt76_rx_signal(msta->vif->phy->mt76->antenna_mask, rssi);
@@ -673,6 +674,9 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	cancel_work_sync(&pm->wake_work);
 
 	for (i = 0; i < 10; i++) {
+		if (atomic_read(&dev->mt76.bus_hung))
+			return;
+
 		mutex_lock(&dev->mt76.mutex);
 		ret = mt792x_dev_reset(dev);
 		mutex_unlock(&dev->mt76.mutex);
@@ -680,7 +684,9 @@ void mt7921_mac_reset_work(struct work_struct *work)
 		if (!ret)
 			break;
 	}
-	if (mt76_is_sdio(&dev->mt76) && atomic_read(&dev->mt76.bus_hung))
+
+	if ((mt76_is_sdio(&dev->mt76) || mt76_is_usb(&dev->mt76)) &&
+	    atomic_read(&dev->mt76.bus_hung))
 		return;
 
 	if (i == 10)
@@ -702,6 +708,8 @@ void mt7921_mac_reset_work(struct work_struct *work)
 					    IEEE80211_IFACE_ITER_RESUME_ALL,
 					    mt7921_vif_connect_iter, NULL);
 	mt76_connac_power_save_sched(&dev->mt76.phy, pm);
+
+	mt7921_regd_change(&dev->phy, "00");
 }
 
 void mt7921_coredump_work(struct work_struct *work)

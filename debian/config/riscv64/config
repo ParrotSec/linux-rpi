@@ -7,10 +7,9 @@ CONFIG_SECCOMP=y
 ## file: arch/riscv/Kconfig
 ##
 CONFIG_SMP=y
-CONFIG_NR_CPUS=128
 CONFIG_NUMA=y
+CONFIG_RISCV_ISA_V_UCOPY_THRESHOLD=-1
 # CONFIG_COMPAT is not set
-# CONFIG_RISCV_USER_CFI is not set
 
 ##
 ## file: arch/riscv/Kconfig.socs
@@ -27,6 +26,7 @@ CONFIG_SOC_STARFIVE=y
 CONFIG_ARCH_SUNXI=y
 CONFIG_ARCH_TENSTORRENT=y
 CONFIG_ARCH_THEAD=y
+CONFIG_ARCH_ULTRARISC=y
 CONFIG_ARCH_VIRT=y
 CONFIG_ARCH_CANAAN=y
 
@@ -129,11 +129,17 @@ CONFIG_GPIO_DWAPB=m
 CONFIG_GPIO_POLARFIRE_SOC=y
 CONFIG_GPIO_SIFIVE=y
 CONFIG_GPIO_SPACEMIT_K1=y
+CONFIG_GPIO_PCA953X=m
 
 ##
 ## file: drivers/gpu/drm/Kconfig
 ##
 CONFIG_DRM=m
+
+##
+## file: drivers/gpu/drm/ast/Kconfig
+##
+CONFIG_DRM_AST=m
 
 ##
 ## file: drivers/gpu/drm/bridge/Kconfig
@@ -498,8 +504,8 @@ CONFIG_USB=m
 ##
 CONFIG_USB_CDNS_SUPPORT=m
 CONFIG_USB_CDNS3=m
-CONFIG_USB_CDNS3_GADGET=y
 CONFIG_USB_CDNS3_HOST=y
+CONFIG_USB_CDNS3_GADGET=y
 CONFIG_USB_CDNS3_STARFIVE=m
 
 ##
@@ -572,20 +578,9 @@ CONFIG_KALLSYMS_ALL=y
 CONFIG_KEXEC=y
 
 ##
-## file: kernel/dma/Kconfig
-##
-CONFIG_DMA_CMA=y
-CONFIG_CMA_SIZE_MBYTES=96
-
-##
 ## file: lib/Kconfig.debug
 ##
 CONFIG_DEBUG_INFO_BTF=y
-
-##
-## file: mm/Kconfig
-##
-CONFIG_CMA=y
 
 ##
 ## file: sound/hda/controllers/Kconfig

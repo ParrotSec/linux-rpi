@@ -854,7 +854,7 @@ static void dce80_resource_destruct(struct dce110_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		if (pool->base.engines[i] != NULL)
 			dce110_engine_destroy(&pool->base.engines[i]);
 		if (pool->base.hw_i2cs[i] != NULL) {
@@ -1058,7 +1058,7 @@ static bool dce80_construct(
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dce80_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();
@@ -1148,6 +1148,8 @@ static bool dce81_construct(
 	dc->caps.max_cursor_size = 128;
 	dc->caps.min_horizontal_blanking_period = 80;
 	dc->caps.is_apu = true;
+	dc->debug = debug_defaults;
+	dc->check_config = config_defaults;
 
 	/*************************************************
 	 *  Create resources                             *
@@ -1258,7 +1260,7 @@ static bool dce81_construct(
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dce80_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();
@@ -1456,7 +1458,7 @@ static bool dce83_construct(
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dce80_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();

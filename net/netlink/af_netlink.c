@@ -39,6 +39,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
@@ -921,9 +922,9 @@ netlink_update_subscriptions(struct sock *sk, unsigned int subscriptions)
 
 static int netlink_realloc_groups(struct sock *sk)
 {
+	unsigned long *new_groups, *old_groups = NULL;
 	struct netlink_sock *nlk = nlk_sk(sk);
 	unsigned int groups;
-	unsigned long *new_groups;
 	int err = 0;
 
 	netlink_table_grab();
@@ -937,18 +938,37 @@ static int netlink_realloc_groups(struct sock *sk)
 	if (nlk->ngroups >= groups)
 		goto out_unlock;
 
-	new_groups = krealloc(nlk->groups, NLGRPSZ(groups), GFP_ATOMIC);
-	if (new_groups == NULL) {
+	/* Can not use krealloc(), because the old buffer might be freed
+	 * immediately, while lockless readers (netlink diag dump and
+	 * /proc/net/netlink) can still be looking at it.
+	 */
+	new_groups = kzalloc(NLGRPSZ(groups), GFP_ATOMIC);
+	if (!new_groups) {
 		err = -ENOMEM;
 		goto out_unlock;
 	}
-	memset((char *)new_groups + NLGRPSZ(nlk->ngroups), 0,
-	       NLGRPSZ(groups) - NLGRPSZ(nlk->ngroups));
+	old_groups = nlk->groups;
+	if (old_groups)
+		memcpy(new_groups, old_groups, NLGRPSZ(nlk->ngroups));
 
-	nlk->groups = new_groups;
-	nlk->ngroups = groups;
+	/* Publish the new bitmap and its content: pairs with the address
+	 * dependency in lockless readers, which can pick up the new pointer
+	 * while still seeing the old (smaller) nlk->ngroups.
+	 */
+	smp_store_release(&nlk->groups, new_groups);
+
+	/* Then publish the new size: pairs with smp_load_acquire() from
+	 * lockless readers, so that they can not read NLGRPSZ(new ngroups)
+	 * bytes from the old buffer.
+	 */
+	smp_store_release(&nlk->ngroups, groups);
+
  out_unlock:
 	netlink_table_ungrab();
+
+	if (old_groups)
+		kfree_rcu_mightsleep(old_groups);
+
 	return err;
 }
 
@@ -1721,18 +1741,18 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int netlink_getsockopt(struct socket *sock, int level, int optname,
-			      char __user *optval, int __user *optlen)
+			      sockopt_t *opt)
 {
 	struct sock *sk = sock->sk;
 	struct netlink_sock *nlk = nlk_sk(sk);
 	unsigned int flag;
 	int len, val;
+	u32 group;
 
 	if (level != SOL_NETLINK)
 		return -ENOPROTOOPT;
 
-	if (get_user(len, optlen))
-		return -EFAULT;
+	len = opt->optlen;
 	if (len < 0)
 		return -EINVAL;
 
@@ -1756,14 +1776,14 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 
 			idx = pos / sizeof(unsigned long);
 			shift = (pos % sizeof(unsigned long)) * 8;
-			if (put_user((u32)(nlk->groups[idx] >> shift),
-				     (u32 __user *)(optval + pos))) {
+			group = (u32)(nlk->groups[idx] >> shift);
+			if (copy_to_iter(&group, sizeof(u32),
+					 &opt->iter_out) != sizeof(u32)) {
 				err = -EFAULT;
 				break;
 			}
 		}
-		if (put_user(ALIGN(BITS_TO_BYTES(nlk->ngroups), sizeof(u32)), optlen))
-			err = -EFAULT;
+		opt->optlen = ALIGN(BITS_TO_BYTES(nlk->ngroups), sizeof(u32));
 		netlink_unlock_table();
 		return err;
 	}
@@ -1789,8 +1809,8 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 	len = sizeof(int);
 	val = test_bit(flag, &nlk->flags);
 
-	if (put_user(len, optlen) ||
-	    copy_to_user(optval, &val, len))
+	opt->optlen = len;
+	if (copy_to_iter(&val, len, &opt->iter_out) != len)
 		return -EFAULT;
 
 	return 0;
@@ -2704,12 +2724,19 @@ static int netlink_native_seq_show(struct seq_file *seq, void *v)
 	} else {
 		struct sock *s = v;
 		struct netlink_sock *nlk = nlk_sk(s);
+		const unsigned long *groups;
+
+		/* Lockless read : netlink_realloc_groups() can change
+		 * nlk->groups under us. The old buffer is freed after an
+		 * RCU grace period, and this walk is RCU protected.
+		 */
+		groups = READ_ONCE(nlk->groups);
 
 		seq_printf(seq, "%pK %-3d %-10u %08x %-8d %-8d %-5d %-8d %-8u %-8llu\n",
 			   s,
 			   s->sk_protocol,
 			   nlk->portid,
-			   nlk->groups ? (u32)nlk->groups[0] : 0,
+			   groups ? (u32)groups[0] : 0,
 			   sk_rmem_alloc_get(s),
 			   sk_wmem_alloc_get(s),
 			   READ_ONCE(nlk->cb_running),
@@ -2818,7 +2845,7 @@ static const struct proto_ops netlink_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	sock_no_shutdown,
 	.setsockopt =	netlink_setsockopt,
-	.getsockopt =	netlink_getsockopt,
+	.getsockopt_iter = netlink_getsockopt,
 	.sendmsg =	netlink_sendmsg,
 	.recvmsg =	netlink_recvmsg,
 	.mmap =		sock_no_mmap,

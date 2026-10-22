@@ -876,7 +876,7 @@ static bool wx_clean_tx_irq(struct wx_q_vector *q_vector,
 
 		if (__netif_subqueue_stopped(tx_ring->netdev,
 					     tx_ring->queue_index) &&
-		    netif_running(tx_ring->netdev)) {
+		    !test_bit(WX_STATE_DOWN, wx->state)) {
 			netif_wake_subqueue(tx_ring->netdev,
 					    tx_ring->queue_index);
 			++tx_ring->tx_stats.restart_queue;
@@ -964,7 +964,7 @@ static int wx_poll(struct napi_struct *napi, int budget)
 	if (likely(napi_complete_done(napi, work_done))) {
 		if (wx->adaptive_itr)
 			wx_update_dim_sample(q_vector);
-		if (netif_running(wx->netdev))
+		if (!test_bit(WX_STATE_DOWN, wx->state))
 			wx_intr_enable(wx, WX_INTR_Q(q_vector->v_idx));
 	}
 
@@ -1163,9 +1163,11 @@ dma_error:
 		i--;
 	}
 
-	dev_kfree_skb_any(first->skb);
-	first->skb = NULL;
-
+	/* first->skb is released by the caller, which keeps a reference on it
+	 * until the PTP cleanup has compared it against wx->ptp_tx_skb. That
+	 * prevents the address from being reused by a newer request while the
+	 * comparison is pending.
+	 */
 	tx_ring->next_to_use = i;
 
 	return -ENOMEM;
@@ -1612,9 +1614,11 @@ static netdev_tx_t wx_xmit_frame_ring(struct sk_buff *skb,
 
 	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
 	    wx->ptp_clock) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&wx->ptp_tx_lock, flags);
 		if (wx->tstamp_config.tx_type == HWTSTAMP_TX_ON &&
-		    !test_and_set_bit_lock(WX_STATE_PTP_TX_IN_PROGRESS,
-					   wx->state)) {
+		    !test_and_set_bit(WX_STATE_PTP_TX_IN_PROGRESS, wx->state)) {
 			skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
 			tx_flags |= WX_TX_FLAGS_TSTAMP;
 			wx->ptp_tx_skb = skb_get(skb);
@@ -1622,6 +1626,7 @@ static netdev_tx_t wx_xmit_frame_ring(struct sk_buff *skb,
 		} else {
 			wx->tx_hwtstamp_skipped++;
 		}
+		spin_unlock_irqrestore(&wx->ptp_tx_lock, flags);
 	}
 
 	/* record initial flags and protocol */
@@ -1640,19 +1645,35 @@ static netdev_tx_t wx_xmit_frame_ring(struct sk_buff *skb,
 		wx->atr(tx_ring, first, ptype);
 
 	if (wx_tx_map(tx_ring, first, hdr_len))
-		goto cleanup_tx_tstamp;
+		goto out_drop;
 
 	return NETDEV_TX_OK;
 out_drop:
+	/* The frame never reached the hardware, so no timestamp will ever be
+	 * reported for it and the request has to be cancelled. The slot is
+	 * shared, though: wx_ptp_clear_tx_timestamp() or wx_ptp_tx_hang() may
+	 * have dropped our request already, and a transmit on another queue
+	 * can have claimed the slot since. Only cancel it while it is still
+	 * ours, otherwise we would free somebody else's skb and release their
+	 * in-progress bit.
+	 */
+	if (unlikely(tx_flags & WX_TX_FLAGS_TSTAMP)) {
+		struct sk_buff *ptp_tx_skb = NULL;
+		unsigned long flags;
+
+		spin_lock_irqsave(&wx->ptp_tx_lock, flags);
+		if (wx->ptp_tx_skb == skb) {
+			ptp_tx_skb = wx->ptp_tx_skb;
+			wx->ptp_tx_skb = NULL;
+			clear_bit(WX_STATE_PTP_TX_IN_PROGRESS, wx->state);
+			wx->tx_hwtstamp_errors++;
+		}
+		spin_unlock_irqrestore(&wx->ptp_tx_lock, flags);
+
+		dev_kfree_skb_any(ptp_tx_skb);
+	}
 	dev_kfree_skb_any(first->skb);
 	first->skb = NULL;
-cleanup_tx_tstamp:
-	if (unlikely(tx_flags & WX_TX_FLAGS_TSTAMP)) {
-		dev_kfree_skb_any(wx->ptp_tx_skb);
-		wx->ptp_tx_skb = NULL;
-		wx->tx_hwtstamp_errors++;
-		clear_bit_unlock(WX_STATE_PTP_TX_IN_PROGRESS, wx->state);
-	}
 
 	return NETDEV_TX_OK;
 }
@@ -2343,6 +2364,8 @@ int wx_init_interrupt_scheme(struct wx *wx)
 	}
 
 	wx_cache_ring_rss(wx);
+
+	set_bit(WX_STATE_DOWN, wx->state);
 
 	return 0;
 }
@@ -3317,7 +3340,8 @@ EXPORT_SYMBOL(wx_set_ring);
 
 void wx_service_event_schedule(struct wx *wx)
 {
-	if (!test_and_set_bit(WX_STATE_SERVICE_SCHED, wx->state))
+	if (!test_bit(WX_STATE_DOWN, wx->state) &&
+	    !test_and_set_bit(WX_STATE_SERVICE_SCHED, wx->state))
 		queue_work(system_power_efficient_wq, &wx->service_task);
 }
 EXPORT_SYMBOL(wx_service_event_schedule);
@@ -3344,6 +3368,24 @@ void wx_service_timer(struct timer_list *t)
 	wx_service_event_schedule(wx);
 }
 EXPORT_SYMBOL(wx_service_timer);
+
+void wx_soft_quiesce(struct wx *wx)
+{
+	if (!netif_running(wx->netdev) ||
+	    test_and_set_bit(WX_STATE_DOWN, wx->state))
+		return;
+
+	pci_clear_master(wx->pdev);
+	netif_tx_stop_all_queues(wx->netdev);
+	netif_carrier_off(wx->netdev);
+	netif_tx_disable(wx->netdev);
+	wx_napi_disable_all(wx);
+	wx_ptp_quiesce(wx);
+
+	clear_bit(WX_FLAG_NEED_DO_RESET, wx->flags);
+	timer_delete_sync(&wx->service_timer);
+}
+EXPORT_SYMBOL(wx_soft_quiesce);
 
 MODULE_DESCRIPTION("Common library for Wangxun(R) Ethernet drivers.");
 MODULE_LICENSE("GPL");

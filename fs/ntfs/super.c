@@ -17,7 +17,6 @@
 
 #include "sysctl.h"
 #include "logfile.h"
-#include "quota.h"
 #include "index.h"
 #include "ntfs.h"
 #include "ea.h"
@@ -45,6 +44,28 @@ static const struct constant_table ntfs_param_enums[] = {
 };
 
 enum {
+	NATIVE_SYMLINK_RAW,
+	NATIVE_SYMLINK_REL,
+};
+
+static const struct constant_table ntfs_native_symlink_enums[] = {
+	{ "raw",		NATIVE_SYMLINK_RAW },
+	{ "rel",		NATIVE_SYMLINK_REL },
+	{}
+};
+
+enum {
+	SYMLINK_WSL,
+	SYMLINK_NATIVE,
+};
+
+static const struct constant_table ntfs_symlink_enums[] = {
+	{ "wsl",		SYMLINK_WSL },
+	{ "native",		SYMLINK_NATIVE },
+	{}
+};
+
+enum {
 	Opt_uid,
 	Opt_gid,
 	Opt_umask,
@@ -67,6 +88,8 @@ enum {
 	Opt_acl,
 	Opt_discard,
 	Opt_nocase,
+	Opt_native_symlink,
+	Opt_symlink,
 };
 
 static const struct fs_parameter_spec ntfs_parameters[] = {
@@ -92,6 +115,8 @@ static const struct fs_parameter_spec ntfs_parameters[] = {
 	fsparam_flag("discard",			Opt_discard),
 	fsparam_flag("sparse",			Opt_sparse),
 	fsparam_flag("nocase",			Opt_nocase),
+	fsparam_enum("native_symlink",		Opt_native_symlink, ntfs_native_symlink_enums),
+	fsparam_enum("symlink",			Opt_symlink, ntfs_symlink_enums),
 	{}
 };
 
@@ -216,6 +241,18 @@ static int ntfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		else
 			NVolClearDisableSparse(vol);
 		break;
+	case Opt_native_symlink:
+		if (result.uint_32 == NATIVE_SYMLINK_REL)
+			NVolSetNativeSymlinkRel(vol);
+		else
+			NVolClearNativeSymlinkRel(vol);
+		break;
+	case Opt_symlink:
+		if (result.uint_32 == SYMLINK_NATIVE)
+			NVolSetSymlinkNative(vol);
+		else
+			NVolClearSymlinkNative(vol);
+		break;
 	case Opt_sparse:
 		break;
 	default:
@@ -240,8 +277,7 @@ static int ntfs_reconfigure(struct fs_context *fc)
 	 * flags are set.  Also, empty the logfile journal as it would become
 	 * stale as soon as something is written to the volume and mark the
 	 * volume dirty so that chkdsk is run if the volume is not umounted
-	 * cleanly.  Finally, mark the quotas out of date so Windows rescans
-	 * the volume on boot and updates them.
+	 * cleanly.
 	 *
 	 * When remounting read-only, mark the volume clean if no volume errors
 	 * have occurred.
@@ -270,12 +306,6 @@ static int ntfs_reconfigure(struct fs_context *fc)
 		}
 		if (vol->logfile_ino && !ntfs_empty_logfile(vol->logfile_ino)) {
 			ntfs_error(sb, "Failed to empty journal LogFile%s",
-					es);
-			NVolSetErrors(vol);
-			return -EROFS;
-		}
-		if (!ntfs_mark_quotas_out_of_date(vol)) {
-			ntfs_error(sb, "Failed to mark quotas out of date%s",
 					es);
 			NVolSetErrors(vol);
 			return -EROFS;
@@ -527,8 +557,8 @@ static bool is_boot_sector_ntfs(const struct super_block *sb,
 	 * Check sectors per cluster value is valid and the cluster size
 	 * is not above the maximum (2MB).
 	 */
-	if (b->bpb.sectors_per_cluster > 0x80 &&
-	    b->bpb.sectors_per_cluster < 0xf4)
+	if (b->bpb.sectors_per_cluster < 0xf4 &&
+	    !is_power_of_2(b->bpb.sectors_per_cluster))
 		goto not_ntfs;
 
 	/* Check reserved/unused fields are really zero. */
@@ -615,7 +645,7 @@ static bool parse_ntfs_boot_sector(struct ntfs_volume *vol,
 {
 	unsigned int sectors_per_cluster, sectors_per_cluster_bits, nr_hidden_sects;
 	int clusters_per_mft_record, clusters_per_index_record;
-	s64 ll;
+	u64 ll;
 
 	vol->sector_size = le16_to_cpu(b->bpb.bytes_per_sector);
 	vol->sector_size_bits = ffs(vol->sector_size) - 1;
@@ -725,23 +755,23 @@ static bool parse_ntfs_boot_sector(struct ntfs_volume *vol,
 	 * the same as it is much faster on 32-bit CPUs.
 	 */
 	ll = le64_to_cpu(b->number_of_sectors) >> sectors_per_cluster_bits;
-	if ((u64)ll >= 1ULL << 32) {
+	if (ll >= 1ULL << 32) {
 		ntfs_error(vol->sb, "Cannot handle 64-bit clusters.");
 		return false;
 	}
 	vol->nr_clusters = ll;
 	ntfs_debug("vol->nr_clusters = 0x%llx", vol->nr_clusters);
 	ll = le64_to_cpu(b->mft_lcn);
-	if (ll >= vol->nr_clusters) {
-		ntfs_error(vol->sb, "MFT LCN (%lli, 0x%llx) is beyond end of volume.  Weird.",
+	if (ll >= (u64)vol->nr_clusters) {
+		ntfs_error(vol->sb, "MFT LCN (%llu, 0x%llx) is beyond end of volume.  Weird.",
 				ll, ll);
 		return false;
 	}
 	vol->mft_lcn = ll;
 	ntfs_debug("vol->mft_lcn = 0x%llx", vol->mft_lcn);
 	ll = le64_to_cpu(b->mftmirr_lcn);
-	if (ll >= vol->nr_clusters) {
-		ntfs_error(vol->sb, "MFTMirr LCN (%lli, 0x%llx) is beyond end of volume.  Weird.",
+	if (ll >= (u64)vol->nr_clusters) {
+		ntfs_error(vol->sb, "MFTMirr LCN (%llu, 0x%llx) is beyond end of volume.  Weird.",
 				ll, ll);
 		return false;
 	}
@@ -1187,73 +1217,6 @@ iput_out:
 }
 
 /*
- * load_and_init_quota - load and setup the quota file for a volume if present
- * @vol:	ntfs super block describing device whose quota file to load
- *
- * Return 'true' on success or 'false' on error.  If $Quota is not present, we
- * leave vol->quota_ino as NULL and return success.
- */
-static bool load_and_init_quota(struct ntfs_volume *vol)
-{
-	static const __le16 Quota[7] = { cpu_to_le16('$'),
-			cpu_to_le16('Q'), cpu_to_le16('u'),
-			cpu_to_le16('o'), cpu_to_le16('t'),
-			cpu_to_le16('a'), 0 };
-	static __le16 Q[3] = { cpu_to_le16('$'),
-			cpu_to_le16('Q'), 0 };
-	struct ntfs_name *name = NULL;
-	u64 mref;
-	struct inode *tmp_ino;
-
-	ntfs_debug("Entering.");
-	/*
-	 * Find the inode number for the quota file by looking up the filename
-	 * $Quota in the extended system files directory $Extend.
-	 */
-	inode_lock(vol->extend_ino);
-	mref = ntfs_lookup_inode_by_name(NTFS_I(vol->extend_ino), Quota, 6,
-			&name);
-	inode_unlock(vol->extend_ino);
-	kfree(name);
-	if (IS_ERR_MREF(mref)) {
-		/*
-		 * If the file does not exist, quotas are disabled and have
-		 * never been enabled on this volume, just return success.
-		 */
-		if (MREF_ERR(mref) == -ENOENT) {
-			ntfs_debug("$Quota not present.  Volume does not have quotas enabled.");
-			/*
-			 * No need to try to set quotas out of date if they are
-			 * not enabled.
-			 */
-			NVolSetQuotaOutOfDate(vol);
-			return true;
-		}
-		/* A real error occurred. */
-		ntfs_error(vol->sb, "Failed to find inode number for $Quota.");
-		return false;
-	}
-	/* Get the inode. */
-	tmp_ino = ntfs_iget(vol->sb, MREF(mref));
-	if (IS_ERR(tmp_ino)) {
-		if (!IS_ERR(tmp_ino))
-			iput(tmp_ino);
-		ntfs_error(vol->sb, "Failed to load $Quota.");
-		return false;
-	}
-	vol->quota_ino = tmp_ino;
-	/* Get the $Q index allocation attribute. */
-	tmp_ino = ntfs_index_iget(vol->quota_ino, Q, 2);
-	if (IS_ERR(tmp_ino)) {
-		ntfs_error(vol->sb, "Failed to load $Quota/$Q index.");
-		return false;
-	}
-	vol->quota_q_ino = tmp_ino;
-	ntfs_debug("Done.");
-	return true;
-}
-
-/*
  * load_and_init_attrdef - load the attribute definitions table for a volume
  * @vol:	ntfs super block describing device whose attrdef to load
  *
@@ -1278,9 +1241,9 @@ static bool load_and_init_attrdef(struct ntfs_volume *vol)
 		goto failed;
 	}
 	NInoSetSparseDisabled(NTFS_I(ino));
-	/* The size of FILE_AttrDef must be above 0 and fit inside 31 bits. */
+	/* FILE_AttrDef must hold at least one entry and fit inside 31 bits. */
 	i_size = i_size_read(ino);
-	if (i_size <= 0 || i_size > 0x7fffffff)
+	if (i_size < (s64)sizeof(struct attr_def) || i_size > 0x7fffffff)
 		goto iput_failed;
 	vol->attrdef = kvzalloc(i_size, GFP_NOFS);
 	if (!vol->attrdef)
@@ -1665,18 +1628,6 @@ get_ctx_vol_failed:
 		ntfs_error(sb, "Failed to load $Extend.");
 		goto iput_sec_err_out;
 	}
-	/* Find the quota file, load it if present, and set it up. */
-	if (!load_and_init_quota(vol) &&
-	    vol->on_errors == ON_ERRORS_REMOUNT_RO) {
-		static const char *es1 = "Failed to load $Quota";
-		static const char *es2 = ".  Run chkdsk.";
-
-		sb->s_flags |= SB_RDONLY;
-		ntfs_error(sb, "%s.  Mounting read-only%s", es1, es2);
-		/* This will prevent a read-write remount. */
-		NVolSetErrors(vol);
-	}
-
 	return true;
 
 iput_sec_err_out:
@@ -1733,7 +1684,7 @@ static void ntfs_volume_free(struct ntfs_volume *vol)
 		vol->upcase = NULL;
 	}
 
-	if (!ntfs_nr_upcase_users && default_upcase) {
+	if (!ntfs_nr_upcase_users) {
 		kvfree(default_upcase);
 		default_upcase = NULL;
 	}
@@ -1748,8 +1699,7 @@ static void ntfs_volume_free(struct ntfs_volume *vol)
 
 	unload_nls(vol->nls_map);
 
-	if (vol->lcn_empty_bits_per_page)
-		kvfree(vol->lcn_empty_bits_per_page);
+	kvfree(vol->lcn_empty_bits_per_page);
 	kfree(vol->volume_label);
 	kfree(vol);
 }
@@ -1774,10 +1724,6 @@ static void ntfs_put_super(struct super_block *sb)
 
 	/* NTFS 3.0+ specific. */
 	if (vol->major_ver >= 3) {
-		if (vol->quota_q_ino)
-			ntfs_commit_inode(vol->quota_q_ino);
-		if (vol->quota_ino)
-			ntfs_commit_inode(vol->quota_ino);
 		if (vol->extend_ino)
 			ntfs_commit_inode(vol->extend_ino);
 		if (vol->secure_ino)
@@ -1826,14 +1772,6 @@ static void ntfs_put_super(struct super_block *sb)
 
 	/* NTFS 3.0+ specific clean up. */
 	if (vol->major_ver >= 3) {
-		if (vol->quota_q_ino) {
-			iput(vol->quota_q_ino);
-			vol->quota_q_ino = NULL;
-		}
-		if (vol->quota_ino) {
-			iput(vol->quota_ino);
-			vol->quota_ino = NULL;
-		}
 		if (vol->extend_ino) {
 			iput(vol->extend_ino);
 			vol->extend_ino = NULL;
@@ -1924,7 +1862,8 @@ static int ntfs_sync_fs(struct super_block *sb, int wait)
 		return 0;
 
 	/* If there are some dirty buffers in the bdev inode */
-	if (ntfs_clear_volume_flags(vol, VOLUME_IS_DIRTY)) {
+	if (!NVolErrors(vol) &&
+	    ntfs_clear_volume_flags(vol, VOLUME_IS_DIRTY)) {
 		ntfs_warning(sb, "Failed to clear dirty bit in volume information flags.  Run chkdsk.");
 		err = -EIO;
 	}
@@ -2125,8 +2064,7 @@ static unsigned long __get_nr_free_mft_records(struct ntfs_volume *vol,
 	/* If errors occurred we may well have gone below zero, fix this. */
 	if (nr_free < 0)
 		nr_free = 0;
-	else
-		atomic64_set(&vol->free_mft_records, nr_free);
+	atomic64_set(&vol->free_mft_records, nr_free);
 
 	ntfs_debug("Exiting.");
 	return nr_free;
@@ -2192,7 +2130,14 @@ static int ntfs_statfs(struct dentry *dentry, struct kstatfs *sfs)
 	read_unlock_irqrestore(&mft_ni->size_lock, flags);
 
 	/* Free inodes in fs (based on current total count). */
-	sfs->f_ffree = atomic64_read(&vol->free_mft_records);
+	size = atomic64_read(&vol->free_mft_records);
+	if (unlikely(size < 0 || size > (s64)sfs->f_files))
+		ntfs_warning(vol->sb, "Invalid free MFT record count %lld.", size);
+	if (size < 0)
+		size = 0;
+	else if (size > (s64)sfs->f_files)
+		size = sfs->f_files;
+	sfs->f_ffree = size;
 
 	/*
 	 * File system id. This is extremely *nix flavour dependent and even
@@ -2472,14 +2417,6 @@ static int ntfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	vol->vol_ino = NULL;
 	/* NTFS 3.0+ specific clean up. */
 	if (vol->major_ver >= 3) {
-		if (vol->quota_q_ino) {
-			iput(vol->quota_q_ino);
-			vol->quota_q_ino = NULL;
-		}
-		if (vol->quota_ino) {
-			iput(vol->quota_ino);
-			vol->quota_ino = NULL;
-		}
 		if (vol->extend_ino) {
 			iput(vol->extend_ino);
 			vol->extend_ino = NULL;

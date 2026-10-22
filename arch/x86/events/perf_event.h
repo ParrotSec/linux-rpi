@@ -322,10 +322,8 @@ struct cpu_hw_events {
 	u64			fixed_ctrl_val;
 	u64			active_fixed_ctrl_val;
 
-	/* Intel ACR configuration */
+	/* Intel ACR/arch-PEBS configuration */
 	u64			acr_cfg_b[X86_PMC_IDX_MAX];
-	u64			acr_cfg_c[X86_PMC_IDX_MAX];
-	/* Cached CFG_C values */
 	u64			cfg_c_val[X86_PMC_IDX_MAX];
 
 	/*
@@ -519,10 +517,6 @@ struct cpu_hw_events {
 	__EVENT_CONSTRAINT(c, n, INTEL_ARCH_EVENT_MASK|X86_ALL_EVENT_FLAGS, \
 			  HWEIGHT(n), 0, PERF_X86_EVENT_PEBS_ST)
 
-#define INTEL_HYBRID_LAT_CONSTRAINT(c, n)	\
-	__EVENT_CONSTRAINT(c, n, INTEL_ARCH_EVENT_MASK|X86_ALL_EVENT_FLAGS, \
-			  HWEIGHT(n), 0, PERF_X86_EVENT_PEBS_LAT_HYBRID)
-
 #define INTEL_HYBRID_LDLAT_CONSTRAINT(c, n)	\
 	__EVENT_CONSTRAINT(c, n, INTEL_ARCH_EVENT_MASK|X86_ALL_EVENT_FLAGS, \
 			  HWEIGHT(n), 0, PERF_X86_EVENT_PEBS_LAT_HYBRID|PERF_X86_EVENT_PEBS_LD_HSW)
@@ -670,7 +664,7 @@ union perf_capabilities {
 		u64	perf_metrics:1;
 		u64	pebs_output_pt_available:1;
 		u64	pebs_timing_info:1;
-		u64	anythread_deprecated:1;
+		u64	__reserved:1;
 		u64	rdpmc_metrics_clear:1;
 	};
 	u64	capabilities;
@@ -1346,7 +1340,7 @@ static inline u64 x86_pmu_get_event_config(struct perf_event *event)
 static inline bool x86_pmu_has_rdpmc_user_disable(struct pmu *pmu)
 {
 	return !!(hybrid(pmu, config_mask) &
-		 ARCH_PERFMON_EVENTSEL_RDPMC_USER_DISABLE);
+		  ARCH_PERFMON_EVENTSEL_RDPMC_USER_DISABLE);
 }
 
 extern struct event_constraint emptyconstraint;
@@ -1646,6 +1640,9 @@ static __always_inline void __intel_pmu_lbr_disable(void)
 	wrmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
 }
 
+extern int __intel_pmu_quiesce(void);
+extern void __intel_pmu_resume(int pmu_enabled);
+
 int intel_pmu_save_and_restart(struct perf_event *event);
 
 struct event_constraint *
@@ -1712,7 +1709,9 @@ extern struct event_constraint intel_glp_pebs_event_constraints[];
 
 extern struct event_constraint intel_grt_pebs_event_constraints[];
 
-extern struct event_constraint intel_arw_pebs_event_constraints[];
+extern struct event_constraint intel_cmt_pebs_event_constraints[];
+
+extern struct event_constraint intel_dkt_pebs_event_constraints[];
 
 extern struct event_constraint intel_nehalem_pebs_event_constraints[];
 

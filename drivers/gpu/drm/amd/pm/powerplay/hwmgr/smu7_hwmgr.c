@@ -2216,12 +2216,24 @@ static int smu7_patch_voltage_dependency_tables_with_lookup_table(
 	if (data->vdd_gfx_control == SMU7_VOLTAGE_CONTROL_BY_SVID2) {
 		for (entry_id = 0; entry_id < sclk_table->count; ++entry_id) {
 			voltage_id = sclk_table->entries[entry_id].vddInd;
+			if (voltage_id >= table_info->vddgfx_lookup_table->count) {
+				pr_err("amdgpu: sclk[%u] vddgfx index %u out of bounds (%u)\n",
+				       entry_id, voltage_id,
+				       table_info->vddgfx_lookup_table->count);
+				return -EINVAL;
+			}
 			sclk_table->entries[entry_id].vddgfx =
 				table_info->vddgfx_lookup_table->entries[voltage_id].us_vdd;
 		}
 	} else {
 		for (entry_id = 0; entry_id < sclk_table->count; ++entry_id) {
 			voltage_id = sclk_table->entries[entry_id].vddInd;
+			if (voltage_id >= table_info->vddc_lookup_table->count) {
+				pr_err("amdgpu: sclk[%u] vddc index %u out of bounds (%u)\n",
+				       entry_id, voltage_id,
+				       table_info->vddc_lookup_table->count);
+				return -EINVAL;
+			}
 			sclk_table->entries[entry_id].vddc =
 				table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
 		}
@@ -2229,12 +2241,24 @@ static int smu7_patch_voltage_dependency_tables_with_lookup_table(
 
 	for (entry_id = 0; entry_id < mclk_table->count; ++entry_id) {
 		voltage_id = mclk_table->entries[entry_id].vddInd;
+		if (voltage_id >= table_info->vddc_lookup_table->count) {
+			pr_err("amdgpu: mclk[%u] vddc index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddc_lookup_table->count);
+			return -EINVAL;
+		}
 		mclk_table->entries[entry_id].vddc =
 			table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
 	}
 
 	for (entry_id = 0; entry_id < mm_table->count; ++entry_id) {
 		voltage_id = mm_table->entries[entry_id].vddcInd;
+		if (voltage_id >= table_info->vddc_lookup_table->count) {
+			pr_err("amdgpu: mm[%u] vddc index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddc_lookup_table->count);
+			return -EINVAL;
+		}
 		mm_table->entries[entry_id].vddc =
 			table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
 	}
@@ -5854,6 +5878,24 @@ static int smu7_power_off_asic(struct pp_hwmgr *hwmgr)
 	return result;
 }
 
+static void smu7_notify_ac_dc(struct pp_hwmgr *hwmgr)
+{
+	struct amdgpu_device *adev = (struct amdgpu_device *)(hwmgr->adev);
+	const struct amd_pm_funcs *pp_funcs = adev->powerplay.pp_funcs;
+
+	/*
+	 * Check if the platform already manages the AC/DC switch via dedicated GPIO.
+	 * Otherwise SMU automatically notices DC, but needs to be notified of AC.
+	 */
+	if (adev->pm.ac_power &&
+	    phm_cap_enabled(hwmgr->platform_descriptor.platformCaps,
+			    PHM_PlatformCaps_AutomaticDCTransition))
+		smum_send_msg_to_smc(hwmgr, PPSMC_MSG_RunningOnAC, NULL);
+
+	/* Recompute clocks with updated max_limits. */
+	pp_funcs->pm_compute_clocks(adev->powerplay.pp_handle);
+}
+
 static const struct pp_hwmgr_func smu7_hwmgr_funcs = {
 	.backend_init = &smu7_hwmgr_backend_init,
 	.backend_fini = &smu7_hwmgr_backend_fini,
@@ -5916,6 +5958,7 @@ static const struct pp_hwmgr_func smu7_hwmgr_funcs = {
 	.get_asic_baco_state = smu7_baco_get_state,
 	.set_asic_baco_state = smu7_baco_set_state,
 	.power_off_asic = smu7_power_off_asic,
+	.notify_ac_dc = smu7_notify_ac_dc,
 };
 
 uint8_t smu7_get_sleep_divider_id_from_clock(uint32_t clock,

@@ -101,6 +101,7 @@ static struct pwrseq_unit *pwrseq_unit_new(const struct pwrseq_unit_data *data)
 	}
 
 	kref_init(&unit->ref);
+	INIT_LIST_HEAD(&unit->list);
 	INIT_LIST_HEAD(&unit->deps);
 	unit->enable = data->enable;
 	unit->disable = data->disable;
@@ -504,10 +505,6 @@ pwrseq_device_register(const struct pwrseq_config *config)
 	 */
 	device_initialize(&pwrseq->dev);
 
-	ret = dev_set_name(&pwrseq->dev, "pwrseq.%d", pwrseq->id);
-	if (ret)
-		goto err_put_pwrseq;
-
 	pwrseq->owner = config->owner ?: THIS_MODULE;
 	pwrseq->match = config->match;
 
@@ -515,6 +512,10 @@ pwrseq_device_register(const struct pwrseq_config *config)
 	mutex_init(&pwrseq->state_lock);
 	INIT_LIST_HEAD(&pwrseq->targets);
 	INIT_LIST_HEAD(&pwrseq->units);
+
+	ret = dev_set_name(&pwrseq->dev, "pwrseq.%d", pwrseq->id);
+	if (ret)
+		goto err_put_pwrseq;
 
 	ret = pwrseq_setup_targets(config->targets, pwrseq);
 	if (ret)
@@ -912,6 +913,8 @@ int pwrseq_power_on(struct pwrseq_desc *desc)
 		if (!ret)
 			desc->powered_on = true;
 	}
+	if (ret)
+		return ret;
 
 	if (target->post_enable) {
 		ret = target->post_enable(pwrseq);
@@ -967,6 +970,29 @@ int pwrseq_power_off(struct pwrseq_desc *desc)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pwrseq_power_off);
+
+/**
+ * pwrseq_to_device() - Get the pwrseq device pointer from a descriptor.
+ * @desc: Descriptor referencing the power sequencer.
+ *
+ * Return the 'dev' pointer of the power sequencer device associated with @desc.
+ * Consumer drivers can use this to query the pwrseq provider's device tree
+ * node, for example to check for the existence of specific properties.
+ *
+ * Since pwrseq_get() already takes a reference to the pwrseq device, this
+ * function does not take an additional reference.
+ *
+ * Returns:
+ * Pointer to the pwrseq struct device, or NULL if @desc is NULL.
+ */
+struct device *pwrseq_to_device(struct pwrseq_desc *desc)
+{
+	if (!desc)
+		return NULL;
+
+	return &desc->pwrseq->dev;
+}
+EXPORT_SYMBOL_GPL(pwrseq_to_device);
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
@@ -1048,7 +1074,7 @@ static int pwrseq_debugfs_seq_show(struct seq_file *seq, void *data)
 	struct pwrseq_target *target;
 	struct pwrseq_unit *unit;
 
-	seq_printf(seq, "%s:\n", dev_name(dev));
+	seq_printf(seq, "%s (%s):\n", dev_name(dev), dev_name(dev->parent));
 
 	seq_puts(seq, "  targets:\n");
 	list_for_each_entry(target, &pwrseq->targets, list)

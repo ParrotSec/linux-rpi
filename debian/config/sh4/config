@@ -72,3 +72,28 @@ CONFIG_SPARSE_IRQ=y
 ## file: lib/Kconfig.ubsan
 ##
 # CONFIG_UBSAN is not set
+
+##
+## file: net/Kconfig
+##
+# CONFIG_WIRELESS is not set
+
+##
+## file: net/ieee802154/Kconfig
+##
+# CONFIG_IEEE802154 is not set
+
+##
+## file: net/mac80211/Kconfig
+##
+# CONFIG_MAC80211 is not set
+
+##
+## file: net/rfkill/Kconfig
+##
+# CONFIG_RFKILL is not set
+
+##
+## file: net/wireless/Kconfig
+##
+# CONFIG_CFG80211 is not set

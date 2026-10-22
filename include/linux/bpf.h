@@ -6,6 +6,7 @@
 
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/filter.h>
+#include <linux/bpf_defs.h>
 
 #include <crypto/sha2.h>
 #include <linux/workqueue.h>
@@ -31,6 +32,9 @@
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
 #include <linux/cfi.h>
+#include <linux/xattr.h>
+#include <linux/key.h>
+#include <linux/ftrace.h>
 #include <asm/rqspinlock.h>
 
 struct bpf_verifier_env;
@@ -110,7 +114,7 @@ struct bpf_map_ops {
 	long (*map_pop_elem)(struct bpf_map *map, void *value);
 	long (*map_peek_elem)(struct bpf_map *map, void *value);
 	void *(*map_lookup_percpu_elem)(struct bpf_map *map, void *key, u32 cpu);
-	int (*map_get_hash)(struct bpf_map *map, u32 hash_buf_size, void *hash_buf);
+	int (*map_get_hash)(struct bpf_map *map);
 
 	/* funcs called by prog_array and perf_event_array map */
 	void *(*map_fd_get_ptr)(struct bpf_map *map, struct file *map_file,
@@ -489,6 +493,35 @@ static inline bool btf_record_has_field(const struct btf_record *rec, enum btf_f
 	return rec->field_mask & type;
 }
 
+static inline bool btf_field_is_nmi_safe(enum btf_field_type type)
+{
+	switch (type) {
+	case BPF_SPIN_LOCK:
+	case BPF_RES_SPIN_LOCK:
+	case BPF_TIMER:
+	case BPF_WORKQUEUE:
+	case BPF_TASK_WORK:
+	case BPF_KPTR_UNREF:
+	case BPF_REFCOUNT:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline bool btf_record_has_nmi_unsafe_fields(const struct btf_record *rec)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return false;
+	for (i = 0; i < rec->cnt; i++) {
+		if (!btf_field_is_nmi_safe(rec->fields[i].type))
+			return true;
+	}
+	return false;
+}
+
 static inline void bpf_obj_init(const struct btf_record *rec, void *obj)
 {
 	int i;
@@ -537,7 +570,7 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 
 	if (IS_ERR_OR_NULL(rec)) {
 		if (long_memcpy)
-			bpf_long_memcpy(dst, src, round_up(size, 8));
+			bpf_long_memcpy(dst, src, size);
 		else
 			memcpy(dst, src, size);
 		return;
@@ -560,7 +593,7 @@ static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
 
 static inline void copy_map_value_long(struct bpf_map *map, void *dst, void *src)
 {
-	bpf_obj_memcpy(map->record, dst, src, map->value_size, true);
+	bpf_obj_memcpy(map->record, dst, src, round_up(map->value_size, 8), true);
 }
 
 static inline void bpf_obj_swap_uptrs(const struct btf_record *rec, void *dst, void *src)
@@ -618,6 +651,8 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 		      struct bpf_spin_lock *spin_lock);
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena);
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena);
+u64 bpf_arena_map_kern_vm_start(struct bpf_map *map);
+struct bpf_map *bpf_prog_arena(struct bpf_prog *prog);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
 struct bpf_offload_dev;
@@ -679,6 +714,8 @@ int bpf_dynptr_from_file_sleepable(struct file *file, u32 flags,
 void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 page_cnt, int node_id,
 					  u64 flags);
 void bpf_arena_free_pages_non_sleepable(void *p__map, void *ptr__ign, u32 page_cnt);
+void *bpf_arena_alloc_pages_sleepable(void *p__map, void *addr__ign, u32 page_cnt, int node_id,
+				      u64 flags);
 #else
 static inline void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 page_cnt,
 							int node_id, u64 flags)
@@ -688,6 +725,12 @@ static inline void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr
 
 static inline void bpf_arena_free_pages_non_sleepable(void *p__map, void *ptr__ign, u32 page_cnt)
 {
+}
+
+static inline void *bpf_arena_alloc_pages_sleepable(void *p__map, void *addr__ign, u32 page_cnt,
+						    int node_id, u64 flags)
+{
+	return NULL;
 }
 #endif
 
@@ -851,6 +894,7 @@ enum bpf_arg_type {
 
 	ARG_PTR_TO_CTX,		/* pointer to context */
 	ARG_ANYTHING,		/* any (initialized) argument is ok */
+	ARG_SCALAR,		/* scalar argument */
 	ARG_PTR_TO_SPIN_LOCK,	/* pointer to bpf_spin_lock */
 	ARG_PTR_TO_SOCK_COMMON,	/* pointer to sock_common */
 	ARG_PTR_TO_SOCKET,	/* pointer to bpf_sock (fullsock) */
@@ -1052,7 +1096,7 @@ struct bpf_insn_access_aux {
 		struct {
 			struct btf *btf;
 			u32 btf_id;
-			u32 ref_obj_id;
+			u32 ref_id;
 		};
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
@@ -1073,21 +1117,6 @@ static bool bpf_is_ldimm64(const struct bpf_insn *insn)
 static inline bool bpf_pseudo_func(const struct bpf_insn *insn)
 {
 	return bpf_is_ldimm64(insn) && insn->src_reg == BPF_PSEUDO_FUNC;
-}
-
-/* Given a BPF_ATOMIC instruction @atomic_insn, return true if it is an
- * atomic load or store, and false if it is a read-modify-write instruction.
- */
-static inline bool
-bpf_atomic_is_load_store(const struct bpf_insn *atomic_insn)
-{
-	switch (atomic_insn->imm) {
-	case BPF_LOAD_ACQ:
-	case BPF_STORE_REL:
-		return true;
-	default:
-		return false;
-	}
 }
 
 struct bpf_prog_ops {
@@ -1152,6 +1181,11 @@ struct bpf_prog_offload {
 
 /* The longest tracepoint has 12 args.
  * See include/trace/bpf_probe.h
+ *
+ * Also reuse this macro for maximum number of arguments a BPF function
+ * or a kfunc can have. Args 1-5 are passed in registers, args 6-12 via
+ * stack arg slots. The JIT may map some stack arg slots to registers based
+ * on the native calling convention (e.g., arg 6 to R9 on x86-64).
  */
 #define MAX_BPF_FUNC_ARGS 12
 
@@ -1221,11 +1255,15 @@ struct btf_func_model {
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
- * bytes on x86.
+ * bytes on x86. The trampoline image has to fit in PAGE_SIZE.
  */
 enum {
-#if defined(__s390x__)
+#if defined(__s390x__) || defined(__powerpc64__)
 	BPF_MAX_TRAMP_LINKS = 27,
+#elif defined(__x86_64__)
+	BPF_MAX_TRAMP_LINKS = 36,
+#elif defined(__aarch64__)
+	BPF_MAX_TRAMP_LINKS = 37,
 #else
 	BPF_MAX_TRAMP_LINKS = 38,
 #endif
@@ -1234,9 +1272,9 @@ enum {
 #define BPF_TRAMP_COOKIE_INDEX_SHIFT	8
 #define BPF_TRAMP_IS_RETURN_SHIFT	63
 
-struct bpf_tramp_links {
-	struct bpf_tramp_link *links[BPF_MAX_TRAMP_LINKS];
-	int nr_links;
+struct bpf_tramp_nodes {
+	struct bpf_tramp_node *nodes[BPF_MAX_TRAMP_LINKS];
+	int nr_nodes;
 };
 
 struct bpf_tramp_run_ctx;
@@ -1264,13 +1302,14 @@ struct bpf_tramp_run_ctx;
 struct bpf_tramp_image;
 int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *image_end,
 				const struct btf_func_model *m, u32 flags,
-				struct bpf_tramp_links *tlinks,
+				struct bpf_tramp_nodes *tnodes,
 				void *func_addr);
 void *arch_alloc_bpf_trampoline(unsigned int size);
 void arch_free_bpf_trampoline(void *image, unsigned int size);
 int __must_check arch_protect_bpf_trampoline(void *image, unsigned int size);
+int arch_bpf_trampoline_skip(void *nop, void *target);
 int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
-			     struct bpf_tramp_links *tlinks, void *func_addr);
+			     struct bpf_tramp_nodes *tnodes, void *func_addr);
 
 u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 					     struct bpf_tramp_run_ctx *run_ctx);
@@ -1317,18 +1356,47 @@ enum bpf_tramp_prog_type {
 	BPF_TRAMP_FSESSION,
 };
 
+/*
+ * Each prog call in a trampoline image is preceded by a nop. When the prog is
+ * detached, the nop is patched to a jump to target, right after the call, so
+ * that tasks still running in the image skip the prog.
+ */
+struct bpf_tramp_skip {
+	struct bpf_prog *prog;
+	void *nop;
+	void *target;
+};
+
 struct bpf_tramp_image {
 	void *image;
 	int size;
 	struct bpf_ksym ksym;
 	struct percpu_ref pcref;
-	void *ip_after_call;
-	void *ip_epilogue;
+	bool call_orig;
+	/* entry in tr->images, the image holds a reference on tr */
+	struct bpf_trampoline *tr;
+	struct list_head list;
+	int nr_skips;
+	struct bpf_tramp_skip *skips;
 	union {
 		struct rcu_head rcu;
 		struct work_struct work;
 	};
 };
+
+static inline void bpf_tramp_image_add_skip(struct bpf_tramp_image *im, struct bpf_prog *prog,
+					    void *nop, void *target)
+{
+	struct bpf_tramp_skip *skip;
+
+	/* struct_ops trampolines and arch_bpf_trampoline_size() have no image */
+	if (!im || !im->skips)
+		return;
+	skip = &im->skips[im->nr_skips++];
+	skip->prog = prog;
+	skip->nop = nop;
+	skip->target = target;
+}
 
 struct bpf_trampoline {
 	/* hlist for trampoline_key_table */
@@ -1336,8 +1404,6 @@ struct bpf_trampoline {
 	/* hlist for trampoline_ip_table */
 	struct hlist_node hlist_ip;
 	struct ftrace_ops *fops;
-	/* serializes access to fields of this trampoline */
-	struct mutex mutex;
 	refcount_t refcnt;
 	u32 flags;
 	u64 key;
@@ -1358,6 +1424,13 @@ struct bpf_trampoline {
 	int progs_cnt[BPF_TRAMP_MAX];
 	/* Executable image of trampoline */
 	struct bpf_tramp_image *cur_image;
+	/* Images not freed yet, cur_image and older ones still in use */
+	struct list_head images;
+	/* Used as temporary old image storage for multi_attach */
+	struct {
+		struct bpf_tramp_image *old_image;
+		u32 old_flags;
+	} multi_attach;
 };
 
 struct bpf_attach_target_info {
@@ -1455,17 +1528,25 @@ static inline int bpf_dynptr_check_off_len(const struct bpf_dynptr_kern *ptr, u6
 	return 0;
 }
 
+struct bpf_tracing_multi_link;
+
 #ifdef CONFIG_BPF_JIT
-int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
+int bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 			     struct bpf_trampoline *tr,
 			     struct bpf_prog *tgt_prog);
-int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
+int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node,
 			       struct bpf_trampoline *tr,
 			       struct bpf_prog *tgt_prog);
 struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
 int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_funcs);
+
+int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
+				struct bpf_tracing_multi_link *link);
+int bpf_trampoline_multi_detach(struct bpf_prog *prog,
+				struct bpf_tracing_multi_link *link);
+void bpf_trampoline_set_flags(struct bpf_trampoline *tr, u32 flags);
 
 /*
  * When the architecture supports STATIC_CALL replace the bpf_dispatcher_fn
@@ -1544,14 +1625,15 @@ void bpf_jit_uncharge_modmem(u32 size);
 bool bpf_prog_has_trampoline(const struct bpf_prog *prog);
 bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
 				 int insn_idx);
+u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_prog *prog);
 #else
-static inline int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
+static inline int bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 					   struct bpf_trampoline *tr,
 					   struct bpf_prog *tgt_prog)
 {
 	return -ENOTSUPP;
 }
-static inline int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
+static inline int bpf_trampoline_unlink_prog(struct bpf_tramp_node *node,
 					     struct bpf_trampoline *tr,
 					     struct bpf_prog *tgt_prog)
 {
@@ -1578,6 +1660,17 @@ static inline bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 {
 	return false;
 }
+static inline int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
+					      struct bpf_tracing_multi_link *link)
+{
+	return -ENOTSUPP;
+}
+static inline int bpf_trampoline_multi_detach(struct bpf_prog *prog,
+					      struct bpf_tracing_multi_link *link)
+{
+	return -ENOTSUPP;
+}
+static inline void bpf_trampoline_set_flags(struct bpf_trampoline *tr, u32 flags) {}
 #endif
 
 struct bpf_func_info_aux {
@@ -1615,7 +1708,7 @@ struct bpf_ctx_arg_aux {
 	enum bpf_reg_type reg_type;
 	struct btf *btf;
 	u32 btf_id;
-	u32 ref_obj_id;
+	u32 ref_id;
 	bool refcounted;
 };
 
@@ -1657,6 +1750,19 @@ struct bpf_stream_stage {
 	int len;
 };
 
+enum bpf_sig_verdict {
+	BPF_SIG_UNSIGNED = 0,
+	BPF_SIG_VERIFIED,
+};
+
+enum bpf_sig_keyring {
+	BPF_SIG_KEYRING_NONE = 0,
+	BPF_SIG_KEYRING_BUILTIN,
+	BPF_SIG_KEYRING_SECONDARY,
+	BPF_SIG_KEYRING_PLATFORM,
+	BPF_SIG_KEYRING_USER,
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1688,6 +1794,7 @@ struct bpf_prog_aux {
 	bool offload_requested; /* Program is bound and offloaded to the netdev. */
 	bool attach_btf_trace; /* true if attaching to BTF-enabled raw tp */
 	bool attach_tracing_prog; /* true if tracing another tracing program */
+	bool tramp_linked; /* true if it was ever linked to a trampoline */
 	bool func_proto_unreliable;
 	bool tail_call_reachable;
 	bool xdp_has_frags;
@@ -1699,6 +1806,11 @@ struct bpf_prog_aux {
 	bool changes_pkt_data;
 	bool might_sleep;
 	bool kprobe_write_ctx;
+	struct {
+		s32 keyring_serial;
+		u8 keyring_type;
+		u8 verdict;
+	} sig;
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
@@ -1731,6 +1843,7 @@ struct bpf_prog_aux {
 	struct bpf_map *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	char name[BPF_OBJ_NAME_LEN];
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
+	u16 stack_arg_sp_adjust;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
@@ -1777,8 +1890,9 @@ struct bpf_prog_aux {
 
 struct bpf_prog {
 	u16			pages;		/* Number of allocated pages */
-	u16			jited:1,	/* Is our filter JIT'ed? */
+	u32			jited:1,	/* Is our filter JIT'ed? */
 				jit_requested:1,/* archs need to JIT the prog */
+				jit_required:1,	/* program strictly requires JIT compiler */
 				gpl_compatible:1, /* Is filter GPL compatible? */
 				cb_access:1,	/* Is control block accessed? */
 				dst_needed:1,	/* Do we need dst entry? */
@@ -1874,10 +1988,15 @@ struct bpf_link_ops {
 	__poll_t (*poll)(struct file *file, struct poll_table_struct *pts);
 };
 
-struct bpf_tramp_link {
-	struct bpf_link link;
+struct bpf_tramp_node {
+	struct bpf_link *link;
 	struct hlist_node tramp_hlist;
 	u64 cookie;
+};
+
+struct bpf_tramp_link {
+	struct bpf_link link;
+	struct bpf_tramp_node node;
 };
 
 struct bpf_shim_tramp_link {
@@ -1887,13 +2006,31 @@ struct bpf_shim_tramp_link {
 
 struct bpf_tracing_link {
 	struct bpf_tramp_link link;
+	struct bpf_tramp_node fexit;
 	struct bpf_trampoline *trampoline;
 	struct bpf_prog *tgt_prog;
 };
 
-struct bpf_fsession_link {
-	struct bpf_tracing_link link;
-	struct bpf_tramp_link fexit;
+struct bpf_tracing_multi_node {
+	struct bpf_tramp_node node;
+	struct bpf_trampoline *trampoline;
+	struct ftrace_func_entry entry;
+};
+
+struct bpf_tracing_multi_data {
+	struct ftrace_hash *unreg;
+	struct ftrace_hash *modify;
+	struct ftrace_hash *reg;
+	struct ftrace_func_entry *entry;
+};
+
+struct bpf_tracing_multi_link {
+	struct bpf_link link;
+	struct bpf_tracing_multi_data data;
+	u64 *cookies;
+	struct bpf_tramp_node *fexits;
+	int nodes_cnt;
+	struct bpf_tracing_multi_node nodes[] __counted_by(nodes_cnt);
 };
 
 struct bpf_raw_tp_link {
@@ -1919,6 +2056,8 @@ struct bpf_mount_opts {
 	u64 delegate_maps;
 	u64 delegate_progs;
 	u64 delegate_attachs;
+
+	struct simple_xattr_cache xa_cache;
 };
 
 struct bpf_token {
@@ -2077,6 +2216,12 @@ static inline void bpf_prog_put_recursion_context(struct bpf_prog *prog)
 #endif
 }
 
+static inline bool is_tracing_multi(enum bpf_attach_type type)
+{
+	return type == BPF_TRACE_FENTRY_MULTI || type == BPF_TRACE_FEXIT_MULTI ||
+	       type == BPF_TRACE_FSESSION_MULTI;
+}
+
 #if defined(CONFIG_BPF_JIT) && defined(CONFIG_BPF_SYSCALL)
 /* This macro helps developer to register a struct_ops type and generate
  * type information correctly. Developers should use this macro to register
@@ -2097,8 +2242,8 @@ void bpf_struct_ops_put(const void *kdata);
 int bpf_struct_ops_supported(const struct bpf_struct_ops *st_ops, u32 moff);
 int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map, void *key,
 				       void *value);
-int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_links *tlinks,
-				      struct bpf_tramp_link *link,
+int bpf_struct_ops_prepare_trampoline(struct bpf_tramp_nodes *tnodes,
+				      struct bpf_tramp_node *node,
 				      const struct btf_func_model *model,
 				      void *stub_func,
 				      void **image, u32 *image_off,
@@ -2123,6 +2268,9 @@ int bpf_prog_assoc_struct_ops(struct bpf_prog *prog, struct bpf_map *map);
 void bpf_prog_disassoc_struct_ops(struct bpf_prog *prog);
 void *bpf_prog_get_assoc_struct_ops(const struct bpf_prog_aux *aux);
 u32 bpf_struct_ops_id(const void *kdata);
+int bpf_struct_ops_for_each_prog(const void *kdata,
+				 int (*cb)(struct bpf_prog *prog, void *data),
+				 void *data);
 
 #ifdef CONFIG_NET
 /* Define it here to avoid the use of forward declaration */
@@ -2190,31 +2338,33 @@ static inline void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_op
 
 #endif
 
-static inline int bpf_fsession_cnt(struct bpf_tramp_links *links)
+static inline int bpf_fsession_cnt(struct bpf_tramp_nodes *nodes)
 {
-	struct bpf_tramp_links fentries = links[BPF_TRAMP_FENTRY];
+	struct bpf_tramp_nodes fentries = nodes[BPF_TRAMP_FENTRY];
 	int cnt = 0;
 
-	for (int i = 0; i < links[BPF_TRAMP_FENTRY].nr_links; i++) {
-		if (fentries.links[i]->link.prog->expected_attach_type == BPF_TRACE_FSESSION)
+	for (int i = 0; i < nodes[BPF_TRAMP_FENTRY].nr_nodes; i++) {
+		if (fentries.nodes[i]->link->prog->expected_attach_type == BPF_TRACE_FSESSION)
+			cnt++;
+		if (fentries.nodes[i]->link->prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI)
 			cnt++;
 	}
 
 	return cnt;
 }
 
-static inline bool bpf_prog_calls_session_cookie(struct bpf_tramp_link *link)
+static inline bool bpf_prog_calls_session_cookie(struct bpf_tramp_node *node)
 {
-	return link->link.prog->call_session_cookie;
+	return node->link->prog->call_session_cookie;
 }
 
-static inline int bpf_fsession_cookie_cnt(struct bpf_tramp_links *links)
+static inline int bpf_fsession_cookie_cnt(struct bpf_tramp_nodes *nodes)
 {
-	struct bpf_tramp_links fentries = links[BPF_TRAMP_FENTRY];
+	struct bpf_tramp_nodes fentries = nodes[BPF_TRAMP_FENTRY];
 	int cnt = 0;
 
-	for (int i = 0; i < links[BPF_TRAMP_FENTRY].nr_links; i++) {
-		if (bpf_prog_calls_session_cookie(fentries.links[i]))
+	for (int i = 0; i < nodes[BPF_TRAMP_FENTRY].nr_nodes; i++) {
+		if (bpf_prog_calls_session_cookie(fentries.nodes[i]))
 			cnt++;
 	}
 
@@ -2763,6 +2913,9 @@ void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
 void bpf_link_init_sleepable(struct bpf_link *link, enum bpf_link_type type,
 			     const struct bpf_link_ops *ops, struct bpf_prog *prog,
 			     enum bpf_attach_type attach_type, bool sleepable);
+void bpf_tramp_link_init(struct bpf_tramp_link *link, enum bpf_link_type type,
+			 const struct bpf_link_ops *ops, struct bpf_prog *prog,
+			 enum bpf_attach_type attach_type, u64 cookie);
 int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer);
 int bpf_link_settle(struct bpf_link_primer *primer);
 void bpf_link_cleanup(struct bpf_link_primer *primer);
@@ -2916,7 +3069,9 @@ int bpf_check_uarg_tail_zero(bpfptr_t uaddr, size_t expected_size,
 			     size_t actual_size);
 
 /* verify correctness of eBPF program */
-int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size);
+struct bpf_log_attr;
+int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr,
+	      struct bpf_log_attr *attr_log);
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 int bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth);
@@ -3017,7 +3172,7 @@ int btf_struct_access(struct bpf_verifier_log *log,
 bool btf_struct_ids_match(struct bpf_verifier_log *log,
 			  const struct btf *btf, u32 id, int off,
 			  const struct btf *need_btf, u32 need_type_id,
-			  bool strict);
+			  bool strict, bool walk_flex_arrays);
 
 int btf_distill_func_proto(struct bpf_verifier_log *log,
 			   struct btf *btf,
@@ -3041,7 +3196,6 @@ const struct bpf_func_proto *bpf_base_func_proto(enum bpf_func_id func_id,
 						 const struct bpf_prog *prog);
 void bpf_task_storage_free(struct task_struct *task);
 void bpf_cgrp_storage_free(struct cgroup *cgroup);
-bool bpf_prog_has_kfunc_call(const struct bpf_prog *prog);
 const struct btf_func_model *
 bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 			 const struct bpf_insn *insn);
@@ -3087,6 +3241,56 @@ void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr);
 void bpf_prog_report_arena_violation(bool write, unsigned long addr, unsigned long fault_ip);
 
+static __always_inline u32
+bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
+			     const void *ctx, bpf_prog_run_fn run_prog)
+{
+	const struct bpf_prog_array_item *item;
+	struct bpf_prog *prog;
+	struct bpf_run_ctx *old_run_ctx;
+	struct bpf_trace_run_ctx run_ctx;
+	u32 ret = 1;
+
+	if (unlikely(!array))
+		return ret;
+
+	migrate_disable();
+
+	run_ctx.is_uprobe = false;
+
+	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
+	item = &array->items[0];
+	while ((prog = READ_ONCE(item->prog))) {
+		/* Skip dummy_bpf_prog placeholder (len == 0) */
+		if (unlikely(!prog->len)) {
+			item++;
+			continue;
+		}
+
+		if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+			bpf_prog_inc_misses_counter(prog);
+			bpf_prog_put_recursion_context(prog);
+			item++;
+			continue;
+		}
+
+		run_ctx.bpf_cookie = item->bpf_cookie;
+
+		if (!prog->sleepable) {
+			guard(rcu)();
+			ret &= run_prog(prog, ctx);
+		} else {
+			ret &= run_prog(prog, ctx);
+		}
+
+		bpf_prog_put_recursion_context(prog);
+		item++;
+	}
+	bpf_reset_run_ctx(old_run_ctx);
+	migrate_enable();
+	return ret;
+}
+
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -3131,6 +3335,12 @@ static inline void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
 static inline void bpf_link_init_sleepable(struct bpf_link *link, enum bpf_link_type type,
 					   const struct bpf_link_ops *ops, struct bpf_prog *prog,
 					   enum bpf_attach_type attach_type, bool sleepable)
+{
+}
+
+static inline void bpf_tramp_link_init(struct bpf_tramp_link *link, enum bpf_link_type type,
+				       const struct bpf_link_ops *ops, struct bpf_prog *prog,
+				       enum bpf_attach_type attach_type, u64 cookie)
 {
 }
 
@@ -3322,11 +3532,6 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 
 static inline void bpf_task_storage_free(struct task_struct *task)
 {
-}
-
-static inline bool bpf_prog_has_kfunc_call(const struct bpf_prog *prog)
-{
-	return false;
 }
 
 static inline const struct btf_func_model *
@@ -3625,15 +3830,25 @@ static inline int bpf_fd_reuseport_array_update_elem(struct bpf_map *map,
 #endif /* CONFIG_BPF_SYSCALL */
 #endif /* defined(CONFIG_INET) && defined(CONFIG_BPF_SYSCALL) */
 
-#if defined(CONFIG_KEYS) && defined(CONFIG_BPF_SYSCALL)
+#ifdef CONFIG_KEYS
+struct bpf_key {
+	struct key *key;
+	bool has_ref;
+};
+#endif /* CONFIG_KEYS */
 
+#if defined(CONFIG_KEYS) && defined(CONFIG_BPF_SYSCALL)
 struct bpf_key *bpf_lookup_user_key(s32 serial, u64 flags);
 struct bpf_key *bpf_lookup_system_key(u64 id);
 void bpf_key_put(struct bpf_key *bkey);
-int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
-			       struct bpf_dynptr *sig_p,
+int bpf_verify_pkcs7_signature(const struct bpf_dynptr *data_p,
+			       const struct bpf_dynptr *sig_p,
 			       struct bpf_key *trusted_keyring);
 
+static inline s32 bpf_key_serial(const struct bpf_key *key)
+{
+	return key->has_ref ? key->key->serial : 0;
+}
 #else
 static inline struct bpf_key *bpf_lookup_user_key(u32 serial, u64 flags)
 {
@@ -3649,11 +3864,16 @@ static inline void bpf_key_put(struct bpf_key *bkey)
 {
 }
 
-static inline int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
-					     struct bpf_dynptr *sig_p,
+static inline int bpf_verify_pkcs7_signature(const struct bpf_dynptr *data_p,
+					     const struct bpf_dynptr *sig_p,
 					     struct bpf_key *trusted_keyring)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline s32 bpf_key_serial(const struct bpf_key *key)
+{
+	return 0;
 }
 #endif /* defined(CONFIG_KEYS) && defined(CONFIG_BPF_SYSCALL) */
 
@@ -3930,15 +4150,6 @@ static inline void bpf_cgroup_atype_get(u32 attach_btf_id, int cgroup_atype) {}
 static inline void bpf_cgroup_atype_put(int cgroup_atype) {}
 #endif /* CONFIG_BPF_LSM */
 
-struct key;
-
-#ifdef CONFIG_KEYS
-struct bpf_key {
-	struct key *key;
-	bool has_ref;
-};
-#endif /* CONFIG_KEYS */
-
 static inline bool type_is_alloc(u32 type)
 {
 	return type & MEM_ALLOC;
@@ -3978,7 +4189,7 @@ bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
 }
 #endif
 
-static inline bool bpf_map_supports_cpu_flags(enum bpf_map_type map_type)
+static inline bool bpf_map_is_percpu_map(enum bpf_map_type map_type)
 {
 	switch (map_type) {
 	case BPF_MAP_TYPE_PERCPU_ARRAY:
@@ -4005,13 +4216,13 @@ static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 all
 		return -EINVAL;
 
 	if (flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) {
-		if (!bpf_map_supports_cpu_flags(map->map_type))
+		if (!bpf_map_is_percpu_map(map->map_type))
 			return -EINVAL;
 		if ((flags & BPF_F_CPU) && (flags & BPF_F_ALL_CPUS))
 			return -EINVAL;
 
 		cpu = flags >> 32;
-		if ((flags & BPF_F_CPU) && cpu >= num_possible_cpus())
+		if ((flags & BPF_F_CPU) && (cpu >= nr_cpu_ids || !cpu_possible(cpu)))
 			return -ERANGE;
 	}
 

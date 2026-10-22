@@ -1037,7 +1037,7 @@ static irqreturn_t pac1921_trigger_handler(int irq, void *p)
 	iio_for_each_active_channel(idev, bit) {
 		u16 val;
 
-		ret = pac1921_read_res(priv, idev->channels[ch].address, &val);
+		ret = pac1921_read_res(priv, idev->channels[bit].address, &val);
 		if (ret)
 			goto done;
 
@@ -1310,7 +1310,7 @@ static int pac1921_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id pac1921_id[] = {
-	{ .name = "pac1921", 0 },
+	{ .name = "pac1921" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, pac1921_id);

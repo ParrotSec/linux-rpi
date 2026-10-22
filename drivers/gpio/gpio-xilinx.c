@@ -271,14 +271,7 @@ static void xgpio_save_regs(struct xgpio_instance *chip)
 
 static int xgpio_request(struct gpio_chip *chip, unsigned int offset)
 {
-	int ret;
-
-	ret = pm_runtime_get_sync(chip->parent);
-	/*
-	 * If the device is already active pm_runtime_get() will return 1 on
-	 * success, but gpio_request still needs to return 0.
-	 */
-	return ret < 0 ? ret : 0;
+	return pm_runtime_resume_and_get(chip->parent);
 }
 
 static void xgpio_free(struct gpio_chip *chip, unsigned int offset)
@@ -495,13 +488,11 @@ static void xgpio_irqhandler(struct irq_desc *desc)
 
 	xgpio_read_ch_all(chip, XGPIO_DATA_OFFSET, hw);
 
-	bitmap_complement(rising, chip->last_irq_read, 64);
-	bitmap_and(rising, rising, hw, 64);
+	bitmap_andnot(rising, hw, chip->last_irq_read, 64);
 	bitmap_and(rising, rising, chip->enable, 64);
 	bitmap_and(rising, rising, chip->rising_edge, 64);
 
-	bitmap_complement(falling, hw, 64);
-	bitmap_and(falling, falling, chip->last_irq_read, 64);
+	bitmap_andnot(falling, chip->last_irq_read, hw, 64);
 	bitmap_and(falling, falling, chip->enable, 64);
 	bitmap_and(falling, falling, chip->falling_edge, 64);
 

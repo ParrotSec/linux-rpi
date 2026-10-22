@@ -24,7 +24,7 @@ Export the currently un-exported symbols it depends on.
 
 --- a/fs/file.c
 +++ b/fs/file.c
-@@ -887,6 +887,7 @@
+@@ -886,6 +886,7 @@
  
  	return file;
  }
@@ -84,17 +84,17 @@ Export the currently un-exported symbols it depends on.
   * task_work_cancel_match - cancel a pending work added by task_work_add()
 --- a/mm/list_lru.c
 +++ b/mm/list_lru.c
-@@ -217,6 +218,7 @@
- 	unlock_list_lru(l, false);
- 	return false;
+@@ -231,6 +232,7 @@
+ 	list_lru_unlock(l);
+ 	return ret;
  }
 +EXPORT_SYMBOL_GPL(list_lru_del);
  
- bool list_lru_del_obj(struct list_lru *lru, struct list_head *item)
- {
+ bool list_lru_add_irq(struct list_lru *lru, struct list_head *item,
+ 		      int nid, struct mem_cgroup *memcg)
 --- a/mm/memory.c
 +++ b/mm/memory.c
-@@ -2231,6 +2231,7 @@
+@@ -2247,6 +2247,7 @@
  	zap_vma_range_batched(&tlb, vma, address, size, NULL);
  	tlb_finish_mmu(&tlb);
  }

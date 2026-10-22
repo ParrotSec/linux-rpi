@@ -17,16 +17,14 @@ Signed-off-by: Ben Hutchings <benh@debian.org>
  tools/perf/Makefile.perf | 4 +++-
  1 file changed, 3 insertions(+), 1 deletion(-)
 
-diff --git a/tools/perf/Makefile.perf b/tools/perf/Makefile.perf
-index cee19c923c06..899a4249a42f 100644
 --- a/tools/perf/Makefile.perf
 +++ b/tools/perf/Makefile.perf
-@@ -1152,7 +1152,10 @@ install-bin: install-tools install-tests
+@@ -897,7 +897,10 @@
  install: install-bin try-install-man
  
  install-python_ext:
--	$(PYTHON_WORD) util/setup.py --quiet install --root='/$(DESTDIR_SQ)' --install-layout=deb
-+	$(PYTHON_WORD) util/setup.py --quiet \
+-	$(PYTHON_WORD) util/setup.py $(python_setup_quiet) install --root='/$(DESTDIR_SQ)' --install-layout=deb
++	$(PYTHON_WORD) util/setup.py $(python_setup_quiet) \
 +		$(if $(OUTPUT),egg_info --egg-base $(OUTPUT)) \
 +		install --root='/$(DESTDIR_SQ)' \
 +		--install-layout=deb

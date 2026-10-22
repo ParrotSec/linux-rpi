@@ -768,10 +768,23 @@ int ni_create_attr_list(struct ntfs_inode *ni)
 	rs = sbi->record_size;
 
 	/*
-	 * Skip estimating exact memory requirement.
-	 * Looks like one record_size is always enough.
+	 * Compute the exact size of the attribute list.  Each attribute in the
+	 * record yields one ATTR_LIST_ENTRY of le_size(name_len) bytes.  The
+	 * minimum on-disk attribute is SIZEOF_RESIDENT (0x18) bytes, but an
+	 * unnamed one expands to le_size(0) (0x20) here, so a record crafted
+	 * with many such attributes needs more than a single record_size; the
+	 * previous fixed kzalloc(record_size) could therefore be overflowed by
+	 * an attacker-controlled record.
 	 */
-	le = kzalloc(al_aligned(rs), GFP_NOFS);
+	lsize = 0;
+	attr = NULL;
+	while ((attr = mi_enum_attr(ni, &ni->mi, attr)))
+		lsize += le_size(attr->name_len);
+
+	if (!lsize)
+		return -EINVAL;
+
+	le = kzalloc(al_aligned(lsize), GFP_NOFS);
 	if (!le)
 		return -ENOMEM;
 
@@ -781,7 +794,6 @@ int ni_create_attr_list(struct ntfs_inode *ni)
 	attr = NULL;
 	nb = 0;
 	free_b = 0;
-	attr = NULL;
 
 	for (; (attr = mi_enum_attr(ni, &ni->mi, attr)); le = Add2Ptr(le, sz)) {
 		sz = le_size(attr->name_len);
@@ -1855,8 +1867,8 @@ enum REPARSE_SIGN ni_parse_reparse(struct ntfs_inode *ni, struct ATTRIB *attr,
 static struct folio *ntfs_lock_new_page(struct address_space *mapping,
 					pgoff_t index, gfp_t gfp)
 {
-	struct folio *folio = __filemap_get_folio(mapping, index,
-			FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp);
+	struct folio *folio = __filemap_get_folio(
+		mapping, index, FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp);
 
 	if (IS_ERR(folio))
 		return folio;
@@ -2443,6 +2455,15 @@ int ni_read_frame(struct ntfs_inode *ni, u64 frame_vbo, struct page **pages,
 			err = unc_size;
 		else if (!unc_size || unc_size > frame_size)
 			err = -EINVAL;
+		else if (unc_size < frame_size) {
+			/*
+			 * Partial decompress: zero the [unc_size, frame_size)
+			 * tail.  decompress_lznt() leaves it untouched, so
+			 * without this the freshly vmapped pages would expose
+			 * uninitialized kernel memory to userspace.
+			 */
+			memset(frame_mem + unc_size, 0, frame_size - unc_size);
+		}
 	}
 	if (!err && valid_size < frame_vbo + frame_size) {
 		size_t ok = valid_size - frame_vbo;
@@ -2894,8 +2915,14 @@ loff_t ni_seek_data_or_hole(struct ntfs_inode *ni, loff_t offset, bool data)
 			 * the file offset is set to offset.
 			 */
 			if (lcn != SPARSE_LCN) {
-				vbo = (u64)vcn << cluster_bits;
-				return max(vbo, offset);
+				/* Normal cluster. */
+				break;
+			}
+
+			if ((ni->std_fa & FILE_ATTRIBUTE_COMPRESSED) &&
+			    (vcn & (NTFS_LZNT_CLUSTERS - 1))) {
+				/* Compressed cluster in compressed frame. */
+				break;
 			}
 		} else {
 			/*
@@ -2909,12 +2936,15 @@ loff_t ni_seek_data_or_hole(struct ntfs_inode *ni, loff_t offset, bool data)
 			    /* native compression hole begins at aligned vcn. */
 			    (!(ni->std_fa & FILE_ATTRIBUTE_COMPRESSED) ||
 			     !(vcn & (NTFS_LZNT_CLUSTERS - 1)))) {
-				vbo = (u64)vcn << cluster_bits;
-				return max(vbo, offset);
+				/* Hole in sparsed or compressed file frame. */
+				break;
 			}
 		}
 
 	}
+
+	vbo = (u64)vcn << cluster_bits;
+	return max(vbo, offset);
 }
 
 /*

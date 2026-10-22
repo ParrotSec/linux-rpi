@@ -1228,9 +1228,9 @@ dma_addr_t iommu_dma_map_phys(struct device *dev, phys_addr_t phys, size_t size,
 	 * If both the physical buffer start address and size are page aligned,
 	 * we don't need to use a bounce page.
 	 */
-	if (dev_use_swiotlb(dev, size, dir) &&
+	if (!(attrs & DMA_ATTR_MMIO) && dev_use_swiotlb(dev, size, dir) &&
 	    iova_unaligned(iovad, phys, size)) {
-		if (attrs & (DMA_ATTR_MMIO | DMA_ATTR_REQUIRE_COHERENT))
+		if (attrs & DMA_ATTR_REQUIRE_COHERENT)
 			return DMA_MAPPING_ERROR;
 
 		phys = iommu_dma_map_swiotlb(dev, phys, size, dir, attrs);
@@ -1671,13 +1671,16 @@ void *iommu_dma_alloc(struct device *dev, size_t size, dma_addr_t *handle,
 	}
 
 	if (IS_ENABLED(CONFIG_DMA_DIRECT_REMAP) &&
-	    !gfpflags_allow_blocking(gfp) && !coherent)
+	    !gfpflags_allow_blocking(gfp) && !coherent) {
 		page = dma_alloc_from_pool(dev, PAGE_ALIGN(size), &cpu_addr,
-					       gfp, NULL);
-	else
+					   gfp, NULL);
+		if (!page)
+			return NULL;
+	} else {
 		cpu_addr = iommu_dma_alloc_pages(dev, size, &page, gfp, attrs);
-	if (!cpu_addr)
-		return NULL;
+		if (!cpu_addr)
+			return NULL;
+	}
 
 	*handle = __iommu_dma_map(dev, page_to_phys(page), size, ioprot,
 			dev->coherent_dma_mask);
@@ -2149,18 +2152,21 @@ EXPORT_SYMBOL_GPL(dma_iova_destroy);
 
 void iommu_setup_dma_ops(struct device *dev, struct iommu_domain *domain)
 {
+	bool dma_iommu;
+
 	if (dev_is_pci(dev))
 		dev->iommu->pci_32bit_workaround = !iommu_dma_forcedac;
 
-	dev->dma_iommu = iommu_is_dma_domain(domain);
-	if (dev->dma_iommu && iommu_dma_init_domain(domain, dev))
+	dma_iommu = iommu_is_dma_domain(domain);
+	dev_assign_dma_iommu(dev, dma_iommu);
+	if (dma_iommu && iommu_dma_init_domain(domain, dev))
 		goto out_err;
 
 	return;
 out_err:
 	pr_warn("Failed to set up IOMMU for device %s; retaining platform DMA ops\n",
 		dev_name(dev));
-	dev->dma_iommu = false;
+	dev_clear_dma_iommu(dev);
 }
 
 static bool has_msi_cookie(const struct iommu_domain *domain)
@@ -2201,6 +2207,19 @@ static struct iommu_dma_msi_page *iommu_dma_get_msi_page(struct device *dev,
 	dma_addr_t iova;
 	int prot = IOMMU_WRITE | IOMMU_NOEXEC | IOMMU_MMIO;
 	size_t size = cookie_msi_granule(domain);
+	static DEFINE_MUTEX(msi_prepare_lock);
+
+	/*
+	 * Normally a device's default domain is only ever attached to that
+	 * device's own group, and the group mutex held by
+	 * iommu_group_mutex_assert()'s callers is enough on its own. A VFIO
+	 * type1 container is the one case that breaks that assumption: it
+	 * can merge devices from different groups onto one domain, so two
+	 * devices' group mutexes don't serialize each other here. A static
+	 * lock is sufficient due to the expectation that this is a corner
+	 * case that will never be contended in practice.
+	 */
+	guard(mutex)(&msi_prepare_lock);
 
 	msi_addr &= ~(phys_addr_t)(size - 1);
 	list_for_each_entry(msi_page, msi_page_list, list)

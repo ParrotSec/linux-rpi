@@ -63,7 +63,8 @@ void ucsi_notify_common(struct ucsi *ucsi, u32 cci)
 EXPORT_SYMBOL_GPL(ucsi_notify_common);
 
 int ucsi_sync_control_common(struct ucsi *ucsi, u64 command, u32 *cci,
-			     void *data, size_t size)
+			     void *data, size_t size, void *msg_out,
+			     size_t msg_out_size)
 {
 	bool ack = UCSI_COMMAND(command) == UCSI_ACK_CC_CI;
 	int ret;
@@ -75,11 +76,23 @@ int ucsi_sync_control_common(struct ucsi *ucsi, u64 command, u32 *cci,
 
 	reinit_completion(&ucsi->complete);
 
+	if (msg_out && msg_out_size) {
+		if (!ucsi->ops->write_message_out) {
+			ret = -EOPNOTSUPP;
+			goto out_clear_bit;
+		}
+
+		ret = ucsi->ops->write_message_out(ucsi, msg_out, msg_out_size);
+		if (ret)
+			goto out_clear_bit;
+	}
+
 	ret = ucsi->ops->async_control(ucsi, command);
 	if (ret)
 		goto out_clear_bit;
 
-	if (!wait_for_completion_timeout(&ucsi->complete, 5 * HZ))
+	if (!wait_for_completion_timeout(&ucsi->complete,
+					 msecs_to_jiffies(UCSI_TIMEOUT_MS)))
 		ret = -ETIMEDOUT;
 
 out_clear_bit:
@@ -110,11 +123,12 @@ static int ucsi_acknowledge(struct ucsi *ucsi, bool conn_ack)
 		ctrl |= UCSI_ACK_CONNECTOR_CHANGE;
 	}
 
-	return ucsi->ops->sync_control(ucsi, ctrl, NULL, NULL, 0);
+	return ucsi->ops->sync_control(ucsi, ctrl, NULL, NULL, 0, NULL, 0);
 }
 
 static int ucsi_run_command(struct ucsi *ucsi, u64 command, u32 *cci,
-			    void *data, size_t size, bool conn_ack)
+			    void *data, size_t size, void *msg_out,
+			    size_t msg_out_size, bool conn_ack)
 {
 	int ret, err;
 
@@ -123,10 +137,12 @@ static int ucsi_run_command(struct ucsi *ucsi, u64 command, u32 *cci,
 	if (size > UCSI_MAX_DATA_LENGTH(ucsi))
 		return -EINVAL;
 
-	ret = ucsi->ops->sync_control(ucsi, command, cci, data, size);
+	ret = ucsi->ops->sync_control(ucsi, command, cci, data, size,
+				      msg_out, msg_out_size);
 
 	if (*cci & UCSI_CCI_BUSY)
-		return ucsi_run_command(ucsi, UCSI_CANCEL, cci, NULL, 0, false) ?: -EBUSY;
+		return ucsi_run_command(ucsi, UCSI_CANCEL, cci,
+					NULL, 0, NULL, 0, false) ?: -EBUSY;
 	if (ret)
 		return ret;
 
@@ -158,7 +174,8 @@ static int ucsi_read_error(struct ucsi *ucsi, u8 connector_num)
 	int ret;
 
 	command = UCSI_GET_ERROR_STATUS | UCSI_CONNECTOR_NUMBER(connector_num);
-	ret = ucsi_run_command(ucsi, command, &cci, &error, sizeof(error), false);
+	ret = ucsi_run_command(ucsi, command, &cci, &error,
+			       sizeof(error), NULL, 0, false);
 	if (ret < 0)
 		return ret;
 
@@ -208,7 +225,8 @@ static int ucsi_read_error(struct ucsi *ucsi, u8 connector_num)
 }
 
 static int ucsi_send_command_common(struct ucsi *ucsi, u64 cmd,
-				    void *data, size_t size, bool conn_ack)
+				    void *data, size_t size, void *msg_out,
+				    size_t msg_out_size, bool conn_ack)
 {
 	u8 connector_num;
 	u32 cci;
@@ -236,7 +254,8 @@ static int ucsi_send_command_common(struct ucsi *ucsi, u64 cmd,
 
 	mutex_lock(&ucsi->ppm_lock);
 
-	ret = ucsi_run_command(ucsi, cmd, &cci, data, size, conn_ack);
+	ret = ucsi_run_command(ucsi, cmd, &cci, data, size,
+			       msg_out, msg_out_size, conn_ack);
 
 	if (cci & UCSI_CCI_ERROR)
 		ret = ucsi_read_error(ucsi, connector_num);
@@ -250,9 +269,22 @@ static int ucsi_send_command_common(struct ucsi *ucsi, u64 cmd,
 int ucsi_send_command(struct ucsi *ucsi, u64 command,
 		      void *data, size_t size)
 {
-	return ucsi_send_command_common(ucsi, command, data, size, false);
+	return ucsi_send_command_common(ucsi, command, data,
+					size, NULL, 0, false);
 }
 EXPORT_SYMBOL_GPL(ucsi_send_command);
+
+int ucsi_write_message_out_command(struct ucsi *ucsi, u64 command,
+				   void *data, size_t size, void *msg_out,
+				   size_t msg_out_size)
+{
+	if (msg_out_size > UCSI_MAX_MSG_OUT_DATA_LEN(ucsi))
+		return -EINVAL;
+
+	return ucsi_send_command_common(ucsi, command, data,
+					size, msg_out, msg_out_size, false);
+}
+EXPORT_SYMBOL_GPL(ucsi_write_message_out_command);
 
 /* -------------------------------------------------------------------------- */
 
@@ -819,7 +851,8 @@ static int ucsi_get_connector_status(struct ucsi_connector *con, bool conn_ack)
 			  UCSI_MAX_DATA_LENGTH(con->ucsi));
 	int ret;
 
-	ret = ucsi_send_command_common(con->ucsi, command, &con->status, size, conn_ack);
+	ret = ucsi_send_command_common(con->ucsi, command, &con->status, size,
+				       NULL, 0, conn_ack);
 
 	return ret < 0 ? ret : 0;
 }
@@ -1768,10 +1801,21 @@ static struct fwnode_handle *ucsi_find_fwnode(struct ucsi_connector *con)
 {
 	struct fwnode_handle *fwnode;
 	int i = 1;
+	int ret;
+	u32 port;
 
-	device_for_each_child_node(con->ucsi->dev, fwnode)
-		if (i++ == con->num)
-			return fwnode;
+	device_for_each_child_node(con->ucsi->dev, fwnode) {
+		ret = fwnode_property_read_u32(fwnode, "reg", &port);
+		if (ret < 0) {
+			if (i == con->num)
+				return fwnode;
+		} else {
+			if (port == con->num - 1)
+				return fwnode;
+		}
+
+		i++;
+	}
 	return NULL;
 }
 
@@ -2333,6 +2377,8 @@ void ucsi_unregister(struct ucsi *ucsi)
 	/* Make sure that we are not in the middle of driver initialization */
 	cancel_delayed_work_sync(&ucsi->work);
 	cancel_work_sync(&ucsi->resume_work);
+
+	ucsi_debugfs_unregister(ucsi);
 
 	/* Disable notifications */
 	ucsi->ops->async_control(ucsi, cmd);

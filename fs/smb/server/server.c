@@ -15,6 +15,7 @@
 
 #include "server.h"
 #include "smb_common.h"
+#include "smb2pdu.h"
 #include "../common/smb2status.h"
 #include "connection.h"
 #include "transport_ipc.h"
@@ -22,6 +23,7 @@
 #include "crypto_ctx.h"
 #include "auth.h"
 #include "stats.h"
+#include "compress.h"
 
 int ksmbd_debug_types;
 
@@ -111,6 +113,7 @@ static int __process_request(struct ksmbd_work *work, struct ksmbd_conn *conn,
 {
 	struct smb_version_cmds *cmds;
 	u16 command;
+	bool signed_req;
 	int ret;
 
 	if (check_conn_state(work))
@@ -137,7 +140,14 @@ andx_again:
 		return SERVER_HANDLER_ABORT;
 	}
 
-	if (work->sess && conn->ops->is_sign_req(work, command)) {
+	signed_req = conn->ops->is_sign_req && conn->ops->is_sign_req(work, command);
+	if (work->sess && work->sess->sign && !work->encrypted &&
+	    !signed_req) {
+		conn->ops->set_rsp_status(work, STATUS_ACCESS_DENIED);
+		return SERVER_HANDLER_ABORT;
+	}
+
+	if (work->sess && signed_req) {
 		ret = conn->ops->check_sign_req(work);
 		if (!ret) {
 			conn->ops->set_rsp_status(work, STATUS_ACCESS_DENIED);
@@ -146,8 +156,11 @@ andx_again:
 	}
 
 	ret = cmds->proc(work);
-	if (conn->ops->inc_reqs)
-		conn->ops->inc_reqs(command);
+	if (conn->ops->inc_reqs) {
+		struct smb2_hdr *rsp = ksmbd_resp_buf_curr(work);
+
+		conn->ops->inc_reqs(command, rsp->Status);
+	}
 
 	if (ret < 0)
 		ksmbd_debug(CONN, "Failed to process %u [%d]\n", command, ret);
@@ -173,9 +186,33 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 	if (conn->ops->is_transform_hdr &&
 	    conn->ops->is_transform_hdr(work->request_buf)) {
 		rc = conn->ops->decrypt_req(work);
-		if (rc < 0)
+		if (rc < 0) {
+			ksmbd_conn_abort(conn);
 			return;
+		}
 		work->encrypted = true;
+
+		/*
+		 * SMB3 applies compression before encryption.  The receive loop
+		 * handles a plain compression transform before allocating work, but
+		 * an encrypted request exposes that transform only after decryption.
+		 */
+		if (((struct smb2_hdr *)smb_get_msg(work->request_buf))->ProtocolId ==
+		    SMB2_COMPRESSION_TRANSFORM_ID) {
+			rc = ksmbd_decompress_work_request(work);
+			if (rc < 0) {
+				ksmbd_conn_abort(conn);
+				return;
+			}
+		}
+
+		/* The decrypted payload must now be a complete SMB2 request. */
+		if (((struct smb2_hdr *)smb_get_msg(work->request_buf))->ProtocolId !=
+			SMB2_PROTO_NUMBER ||
+		    get_rfc1002_len(work->request_buf) < sizeof(struct smb2_pdu)) {
+			ksmbd_conn_abort(conn);
+			return;
+		}
 	}
 
 	if (conn->ops->allocate_rsp_buf(work))
@@ -195,9 +232,22 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 				if (rc == -EINVAL)
 					conn->ops->set_rsp_status(work,
 						STATUS_INVALID_PARAMETER);
+				else if (rc == -EKEYEXPIRED)
+					conn->ops->set_rsp_status(work,
+						STATUS_NETWORK_SESSION_EXPIRED);
 				else
 					conn->ops->set_rsp_status(work,
 						STATUS_USER_SESSION_DELETED);
+				if (conn->ops->is_sign_req(work, conn->ops->get_cmd_val(work))) {
+					struct smb2_hdr *rsp_hdr;
+
+					rsp_hdr = ksmbd_resp_buf_curr(work);
+					if (rc == -EKEYEXPIRED && work->sess &&
+					    conn->ops->set_sign_rsp)
+						conn->ops->set_sign_rsp(work);
+					else
+						rsp_hdr->Flags |= SMB2_FLAGS_SIGNED;
+				}
 				goto send;
 			} else if (rc > 0) {
 				rc = conn->ops->get_ksmbd_tcon(work);
@@ -214,8 +264,10 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 		}
 
 		rc = __process_request(work, conn, &command);
-		if (rc == SERVER_HANDLER_ABORT)
+		if (rc == SERVER_HANDLER_ABORT) {
+			smb2_complete_request_open(work);
 			break;
+		}
 
 		/*
 		 * Call smb2_set_rsp_credits() function to set number of credits
@@ -228,22 +280,55 @@ static void __handle_ksmbd_work(struct ksmbd_work *work,
 			if (rc < 0) {
 				conn->ops->set_rsp_status(work,
 					STATUS_INVALID_PARAMETER);
+				smb2_complete_request_open(work);
 				goto send;
 			}
 		}
+
+		smb2_complete_request_open(work);
 
 		is_chained = is_chained_smb2_message(work);
 
 		if (work->sess &&
 		    (work->sess->sign || smb3_11_final_sess_setup_resp(work) ||
-		     conn->ops->is_sign_req(work, command)))
-			conn->ops->set_sign_rsp(work);
+		     conn->ops->is_sign_req(work, command))) {
+			if (command == SMB2_SESSION_SETUP_HE &&
+			    work->sess->dialect >= SMB30_PROT_ID &&
+			    conn->dialect < SMB30_PROT_ID)
+				smb3_set_sign_rsp(work);
+			else
+				conn->ops->set_sign_rsp(work);
+		}
 	} while (is_chained == true);
 
 send:
+	smb2_complete_request_open(work);
+	/*
+	 * Release any credit charge still outstanding for this request.  On
+	 * the normal path smb2_set_rsp_credits() already returned it, but the
+	 * abort, error and send-no-response paths skip that call, so the
+	 * charge would otherwise leak and eventually exhaust the connection's
+	 * outstanding credit window.
+	 */
+	if (work->credit_charge) {
+		spin_lock(&conn->credits_lock);
+		conn->outstanding_credits -= work->credit_charge;
+		work->credit_charge = 0;
+		spin_unlock(&conn->credits_lock);
+	}
+
 	if (work->tcon)
 		ksmbd_tree_connect_put(work->tcon);
 	smb3_preauth_hash_rsp(work);
+	/*
+	 * Preauthentication hashes cover the original SMB2 response. Apply the
+	 * transport compression wrapper only after updating the hash.
+	 */
+	if (work->compress_response) {
+		rc = ksmbd_compress_response(work);
+		if (rc < 0)
+			ksmbd_debug(CONN, "Failed to compress response: %d\n", rc);
+	}
 	if (work->sess && work->sess->enc && work->encrypted &&
 	    conn->ops->encrypt_resp) {
 		rc = conn->ops->encrypt_resp(work);
@@ -318,7 +403,7 @@ static int ksmbd_server_process_request(struct ksmbd_conn *conn)
 
 static int ksmbd_server_terminate_conn(struct ksmbd_conn *conn)
 {
-	ksmbd_sessions_deregister(conn);
+	ksmbd_conn_sessions_cleanup(conn);
 	destroy_lease_table(conn);
 	return 0;
 }
@@ -559,18 +644,25 @@ static int __init ksmbd_server_init(void)
 		return ret;
 	}
 
-	ksmbd_proc_init();
-	create_proc_sessions();
+	ret = ksmbd_proc_init();
+	if (ret)
+		goto err_unregister;
+
+	if (create_proc_sessions())
+		pr_warn("Unable to create sessions procfs entry\n");
+
+	if (create_proc_shares())
+		pr_warn("Unable to create shares procfs entry\n");
 
 	ksmbd_server_tcp_callbacks_init();
 
 	ret = server_conf_init();
 	if (ret)
-		goto err_unregister;
+		goto err_proc_cleanup;
 
 	ret = ksmbd_work_pool_init();
 	if (ret)
-		goto err_unregister;
+		goto err_proc_cleanup;
 
 	ret = ksmbd_init_file_cache();
 	if (ret)
@@ -616,6 +708,8 @@ err_exit_file_cache:
 	ksmbd_exit_file_cache();
 err_destroy_work_pools:
 	ksmbd_work_pool_destroy();
+err_proc_cleanup:
+	ksmbd_proc_cleanup();
 err_unregister:
 	class_unregister(&ksmbd_control_class);
 

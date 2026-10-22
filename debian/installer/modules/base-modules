@@ -64,3 +64,6 @@ crc16
 crc7 ?
 crc8 ?
 crc64 ?
+
+# Other
+configfs ?

@@ -167,27 +167,27 @@ static void amdgpu_userq_hang_detect_work(struct work_struct *work)
 void amdgpu_userq_start_hang_detect_work(struct amdgpu_usermode_queue *queue)
 {
 	struct amdgpu_device *adev;
-	unsigned long timeout_ms;
+	unsigned long timeout_jiffies;
 
 	adev = queue->userq_mgr->adev;
 	/* Determine timeout based on queue type */
 	switch (queue->queue_type) {
 	case AMDGPU_RING_TYPE_GFX:
-		timeout_ms = adev->gfx_timeout;
+		timeout_jiffies = adev->gfx_timeout;
 		break;
 	case AMDGPU_RING_TYPE_COMPUTE:
-		timeout_ms = adev->compute_timeout;
+		timeout_jiffies = adev->compute_timeout;
 		break;
 	case AMDGPU_RING_TYPE_SDMA:
-		timeout_ms = adev->sdma_timeout;
+		timeout_jiffies = adev->sdma_timeout;
 		break;
 	default:
-		timeout_ms = adev->gfx_timeout;
+		timeout_jiffies = adev->gfx_timeout;
 		break;
 	}
 
 	queue_delayed_work(adev->reset_domain->wq, &queue->hang_detect_work,
-			   msecs_to_jiffies(timeout_ms));
+			   timeout_jiffies);
 }
 
 void amdgpu_userq_process_fence_irq(struct amdgpu_device *adev, u32 doorbell)
@@ -439,6 +439,7 @@ amdgpu_userq_get_doorbell_index(struct amdgpu_userq_mgr *uq_mgr,
 	u64 doorbell_index;
 	struct drm_gem_object *gobj;
 	struct amdgpu_userq_obj *db_obj = db_info->db_obj;
+	struct amdgpu_bo *abo;
 	int r, db_size;
 
 	gobj = drm_gem_object_lookup(filp, db_info->doorbell_handle);
@@ -447,7 +448,17 @@ amdgpu_userq_get_doorbell_index(struct amdgpu_userq_mgr *uq_mgr,
 		return -EINVAL;
 	}
 
-	db_obj->obj = amdgpu_bo_ref(gem_to_amdgpu_bo(gobj));
+	/*
+	 * Pinning a regular BO into the doorbell domain would discard its
+	 * contents, possibly those of a buffer shared by another client.
+	 */
+	abo = gem_to_amdgpu_bo(gobj);
+	if (!(abo->preferred_domains & AMDGPU_GEM_DOMAIN_DOORBELL)) {
+		drm_gem_object_put(gobj);
+		return -EINVAL;
+	}
+
+	db_obj->obj = amdgpu_bo_ref(abo);
 	drm_gem_object_put(gobj);
 
 	r = amdgpu_bo_reserve(db_obj->obj, true);
@@ -929,12 +940,12 @@ amdgpu_userq_bo_validate(struct amdgpu_device *adev, struct drm_exec *exec,
 	struct amdgpu_bo *bo;
 	int ret;
 
-	spin_lock(&vm->status_lock);
-	while (!list_empty(&vm->invalidated)) {
-		bo_va = list_first_entry(&vm->invalidated,
+	spin_lock(&vm->individual_lock);
+	while (!list_empty(&vm->always_valid.evicted)) {
+		bo_va = list_first_entry(&vm->always_valid.evicted,
 					 struct amdgpu_bo_va,
 					 base.vm_status);
-		spin_unlock(&vm->status_lock);
+		spin_unlock(&vm->individual_lock);
 
 		bo = bo_va->base.bo;
 		ret = drm_exec_prepare_obj(exec, &bo->tbo.base, 2);
@@ -946,14 +957,14 @@ amdgpu_userq_bo_validate(struct amdgpu_device *adev, struct drm_exec *exec,
 		if (ret)
 			return ret;
 
-		/* This moves the bo_va to the done list */
+		/* This moves the bo_va to the idle list */
 		ret = amdgpu_vm_bo_update(adev, bo_va, false);
 		if (ret)
 			return ret;
 
-		spin_lock(&vm->status_lock);
+		spin_lock(&vm->individual_lock);
 	}
-	spin_unlock(&vm->status_lock);
+	spin_unlock(&vm->individual_lock);
 
 	return 0;
 }
@@ -970,6 +981,7 @@ amdgpu_userq_vm_validate(struct amdgpu_userq_mgr *uq_mgr)
 	struct amdgpu_vm *vm = &fpriv->vm;
 	unsigned long key, tmp_key;
 	struct amdgpu_bo_va *bo_va;
+	struct amdgpu_usermode_queue *queue;
 	struct amdgpu_bo *bo;
 	struct drm_exec exec;
 	struct xarray xa;
@@ -985,7 +997,7 @@ retry_lock:
 		if (unlikely(ret))
 			goto unlock_all;
 
-		ret = amdgpu_vm_lock_done_list(vm, &exec, 1);
+		ret = amdgpu_vm_lock_individual(vm, &exec, TTM_NUM_MOVE_FENCES + 1);
 		drm_exec_retry_on_contention(&exec);
 		if (unlikely(ret))
 			goto unlock_all;
@@ -1028,7 +1040,7 @@ retry_lock:
 
 	key = 0;
 	/* Validate User Ptr BOs */
-	list_for_each_entry(bo_va, &vm->done, base.vm_status) {
+	list_for_each_entry(bo_va, &vm->always_valid.idle, base.vm_status) {
 		bo = bo_va->base.bo;
 		if (!bo)
 			continue;
@@ -1078,12 +1090,30 @@ retry_lock:
 
 	/*
 	 * We need to wait for all VM updates to finish before restarting the
-	 * queues. Using the done list like that is now ok since everything is
+	 * queues. Using the idle list like that is now ok since everything is
 	 * locked in place.
 	 */
-	list_for_each_entry(bo_va, &vm->done, base.vm_status)
+	list_for_each_entry(bo_va, &vm->always_valid.idle, base.vm_status)
 		dma_fence_wait(bo_va->last_pt_update, false);
 	dma_fence_wait(vm->last_update, false);
+
+	xa_for_each(&uq_mgr->userq_xa, tmp_key, queue) {
+		bo = queue->wptr_obj.obj;
+		if (!bo) {
+			ret = -EINVAL;
+			goto unlock_all;
+		}
+
+		ret = amdgpu_ttm_alloc_gart(&bo->tbo);
+		if (unlikely(ret)) {
+			drm_file_err(uq_mgr->file,
+				     "failed to bind wptr bo to gart on resume, qid=%lu ret=%d\n",
+				     tmp_key, ret);
+			goto unlock_all;
+		}
+
+		queue->wptr_obj.gpu_addr = amdgpu_bo_gpu_offset(bo);
+	}
 
 	ret = amdgpu_evf_mgr_rearm(&fpriv->evf_mgr, &exec);
 	if (ret)
@@ -1149,7 +1179,7 @@ amdgpu_userq_evict_all(struct amdgpu_userq_mgr *uq_mgr)
 	return ret;
 }
 
-static void
+void
 amdgpu_userq_wait_for_signal(struct amdgpu_userq_mgr *uq_mgr)
 {
 	struct amdgpu_usermode_queue *queue;
@@ -1168,8 +1198,6 @@ amdgpu_userq_wait_for_signal(struct amdgpu_userq_mgr *uq_mgr)
 void
 amdgpu_userq_evict(struct amdgpu_userq_mgr *uq_mgr)
 {
-	/* Wait for any pending userqueue fence work to finish */
-	amdgpu_userq_wait_for_signal(uq_mgr);
 	amdgpu_userq_evict_all(uq_mgr);
 }
 

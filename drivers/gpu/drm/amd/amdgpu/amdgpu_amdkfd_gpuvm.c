@@ -1795,6 +1795,12 @@ int amdgpu_amdkfd_gpuvm_alloc_memory_of_gpu(
 		size >>= 1;
 	aligned_size = PAGE_ALIGN(size);
 
+	/* reject AQL queue with size < 2 */
+	if (!aligned_size) {
+		ret = -EINVAL;
+		goto err_alignment_size;
+	}
+
 	(*mem)->alloc_flags = flags;
 
 	amdgpu_sync_create(&(*mem)->sync);
@@ -1886,6 +1892,7 @@ err_bo_create:
 	amdgpu_amdkfd_unreserve_mem_limit(adev, aligned_size, flags, xcp_id);
 err_reserve_limit:
 	amdgpu_sync_free(&(*mem)->sync);
+err_alignment_size:
 	mutex_destroy(&(*mem)->lock);
 	if (gobj)
 		drm_gem_object_put(gobj);
@@ -3001,7 +3008,7 @@ int amdgpu_amdkfd_gpuvm_restore_process_bos(void *info, struct dma_fence __rcu *
 	/* Validate PDs, PTs and evicted DMABuf imports last. Otherwise BO
 	 * validations above would invalidate DMABuf imports again.
 	 */
-	ret = process_validate_vms(process_info, &exec.ticket);
+	ret = process_validate_vms(process_info, drm_exec_ticket(&exec));
 	if (ret) {
 		pr_debug("Validating VMs failed, ret: %d\n", ret);
 		goto validate_map_fail;
@@ -3042,7 +3049,7 @@ int amdgpu_amdkfd_gpuvm_restore_process_bos(void *info, struct dma_fence __rcu *
 			goto validate_map_fail;
 		}
 
-		ret = amdgpu_vm_handle_moved(adev, peer_vm, &exec.ticket);
+		ret = amdgpu_vm_handle_moved(adev, peer_vm, drm_exec_ticket(&exec));
 		if (ret) {
 			dev_dbg(adev->dev,
 				"Memory eviction: handle moved failed, pid %8d. Try again.\n",
@@ -3096,7 +3103,7 @@ int amdgpu_amdkfd_gpuvm_restore_process_bos(void *info, struct dma_fence __rcu *
 		process_info->eviction_fence = new_fence;
 		replace_eviction_fence(ef, dma_fence_get(&new_fence->base));
 	} else {
-		WARN_ONCE(*ef != &process_info->eviction_fence->base,
+		WARN_ONCE(rcu_access_pointer(*ef) != &process_info->eviction_fence->base,
 			  "KFD eviction fence doesn't match KGD process_info");
 	}
 

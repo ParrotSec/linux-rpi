@@ -10,6 +10,7 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/sched/signal.h>
+#include <linux/uio.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -60,6 +61,7 @@ enum {
 	BT_SK_BIG_SYNC,
 	BT_SK_PA_SYNC,
 	BT_SK_KILLED,
+	BT_SK_CONNECTING,
 };
 
 struct iso_pinfo {
@@ -349,6 +351,9 @@ static int __iso_chan_add(struct iso_conn *conn, struct sock *sk,
 		return -EBUSY;
 	}
 
+	if (iso_pi(sk)->conn)
+		return -EISCONN;
+
 	if (!conn->hcon) {
 		BT_ERR("conn->hcon missing");
 		return -EIO;
@@ -408,6 +413,11 @@ static int iso_connect_bis(struct sock *sk)
 
 	hci_dev_lock(hdev);
 	lock_sock(sk);
+
+	if (iso_pi(sk)->conn) {
+		err = -EISCONN;
+		goto unlock;
+	}
 
 	if (!bis_capable(hdev)) {
 		err = -EOPNOTSUPP;
@@ -495,6 +505,7 @@ static int iso_connect_cis(struct sock *sk)
 	struct hci_dev  *hdev;
 	bdaddr_t src, dst;
 	u8 src_type;
+	bool already_attached;
 	int err;
 
 	lock_sock(sk);
@@ -560,6 +571,13 @@ static int iso_connect_cis(struct sock *sk)
 
 	lockdep_assert_held(&hcon->hdev->lock);
 
+	/* The socket lock keeps the current attachment and its hcon stable. */
+	if (iso_pi(sk)->conn && iso_pi(sk)->conn->hcon != hcon) {
+		hci_conn_drop(hcon);
+		err = -EISCONN;
+		goto unlock;
+	}
+
 	conn = iso_conn_add(hcon);
 	if (!conn) {
 		hci_conn_drop(hcon);
@@ -567,8 +585,14 @@ static int iso_connect_cis(struct sock *sk)
 		goto unlock;
 	}
 
+	iso_conn_lock(conn);
+	already_attached = iso_pi(sk)->conn == conn && conn->sk == sk;
+	iso_conn_unlock(conn);
+
 	err = iso_chan_add(conn, sk, NULL);
 	iso_conn_put(conn);
+	if (already_attached || err == -EBUSY)
+		hci_conn_drop(hcon);
 	if (err)
 		goto unlock;
 
@@ -818,19 +842,24 @@ static void iso_sock_destruct(struct sock *sk)
 	skb_queue_purge(&sk->sk_error_queue);
 }
 
-static void iso_sock_cleanup_listen(struct sock *parent)
+/* Close not yet accepted channels */
+static void iso_sock_flush_accept_q(struct sock *parent)
 {
 	struct sock *sk;
 
-	BT_DBG("parent %p", parent);
-
-	/* Close not yet accepted channels */
 	while ((sk = bt_accept_dequeue(parent, NULL))) {
 		iso_sock_close(sk);
 		iso_sock_kill(sk);
 		/* Drop the reference handed back by bt_accept_dequeue(). */
 		sock_put(sk);
 	}
+}
+
+static void iso_sock_cleanup_listen(struct sock *parent)
+{
+	BT_DBG("parent %p", parent);
+
+	iso_sock_flush_accept_q(parent);
 
 	/* If listening socket has a hcon, properly disconnect it */
 	if (iso_pi(parent)->conn && iso_pi(parent)->conn->hcon) {
@@ -1256,17 +1285,26 @@ static int iso_sock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 	    addr->sa_family != AF_BLUETOOTH)
 		return -EINVAL;
 
-	if (sk->sk_state != BT_OPEN && sk->sk_state != BT_BOUND)
-		return -EBADFD;
+	lock_sock(sk);
 
-	if (sk->sk_type != SOCK_SEQPACKET)
-		return -EINVAL;
+	if ((sk->sk_state != BT_OPEN && sk->sk_state != BT_BOUND) ||
+	    test_bit(BT_SK_CONNECTING, &iso_pi(sk)->flags)) {
+		err = -EBADFD;
+		goto done;
+	}
+
+	if (sk->sk_type != SOCK_SEQPACKET) {
+		err = -EINVAL;
+		goto done;
+	}
 
 	/* Check if the address type is of LE type */
-	if (!bdaddr_type_is_le(sa->iso_bdaddr_type))
-		return -EINVAL;
+	if (!bdaddr_type_is_le(sa->iso_bdaddr_type)) {
+		err = -EINVAL;
+		goto done;
+	}
 
-	lock_sock(sk);
+	set_bit(BT_SK_CONNECTING, &iso_pi(sk)->flags);
 
 	bacpy(&iso_pi(sk)->dst, &sa->iso_bdaddr);
 	iso_pi(sk)->dst_type = sa->iso_bdaddr_type;
@@ -1278,16 +1316,18 @@ static int iso_sock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 	else
 		err = iso_connect_bis(sk);
 
-	if (err)
-		return err;
-
 	lock_sock(sk);
+
+	clear_bit(BT_SK_CONNECTING, &iso_pi(sk)->flags);
+	if (err)
+		goto done;
 
 	if (!test_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags)) {
 		err = bt_sock_wait_state(sk, BT_CONNECTED,
 					 sock_sndtimeo(sk, flags & O_NONBLOCK));
 	}
 
+done:
 	release_sock(sk);
 	return err;
 }
@@ -1326,6 +1366,11 @@ static int iso_listen_bis(struct sock *sk)
 
 	hci_dev_lock(hdev);
 	lock_sock(sk);
+
+	if (sk->sk_state != BT_BOUND || iso_pi(sk)->conn) {
+		err = -EBADFD;
+		goto unlock;
+	}
 
 	/* Fail if user set invalid QoS */
 	if (iso_pi(sk)->qos_user_set && !check_bcast_qos(&iso_pi(sk)->qos)) {
@@ -1736,6 +1781,13 @@ static int iso_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 		switch (sk->sk_state) {
 		case BT_CONNECT2:
 			if (test_bit(BT_SK_PA_SYNC, &pi->flags)) {
+				/* Move to BT_LISTEN before requesting the BIG
+				 * sync: the BIS connections are matched to a
+				 * parent socket in BT_LISTEN state, and they
+				 * may be notified before the request returns.
+				 */
+				sk->sk_state = BT_LISTEN;
+
 				release_sock(sk);
 				err = iso_conn_big_sync(sk);
 				lock_sock(sk);
@@ -1744,12 +1796,20 @@ static int iso_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 				 * connection may have been torn down
 				 * meanwhile and iso_chan_del() may have
 				 * already moved the socket to BT_CLOSED.
-				 * Only move on to BT_LISTEN if the BIG sync
-				 * was actually started and nothing else has
-				 * changed the state.
+				 * Only move back if the BIG sync could not be
+				 * started and nothing else has changed the
+				 * state.
 				 */
-				if (!err && sk->sk_state == BT_CONNECT2)
-					sk->sk_state = BT_LISTEN;
+				if (err && sk->sk_state == BT_LISTEN) {
+					/* Discard any child socket that may
+					 * have been queued while the socket
+					 * was in BT_LISTEN, as the cleanup of
+					 * BT_CONNECT2 doesn't drain the
+					 * accept queue.
+					 */
+					iso_sock_flush_accept_q(sk);
+					sk->sk_state = BT_CONNECT2;
+				}
 			} else {
 				iso_conn_defer_accept(pi->conn->hcon);
 				sk->sk_state = BT_CONFIG;
@@ -1759,12 +1819,22 @@ static int iso_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			break;
 		case BT_CONNECTED:
 			if (test_bit(BT_SK_PA_SYNC, &iso_pi(sk)->flags)) {
+				/* As above, the BIS connections may be
+				 * notified before the request returns.
+				 */
+				sk->sk_state = BT_LISTEN;
+
 				release_sock(sk);
 				err = iso_conn_big_sync(sk);
 				lock_sock(sk);
 
-				if (!err && sk->sk_state == BT_CONNECTED)
-					sk->sk_state = BT_LISTEN;
+				if (err && sk->sk_state == BT_LISTEN) {
+					/* As above, don't leave any child
+					 * socket behind in the accept queue.
+					 */
+					iso_sock_flush_accept_q(sk);
+					sk->sk_state = BT_CONNECTED;
+				}
 				early_ret = true;
 			}
 
@@ -1981,18 +2051,17 @@ static int iso_sock_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int iso_sock_getsockopt(struct socket *sock, int level, int optname,
-			       char __user *optval, int __user *optlen)
+			       sockopt_t *opt)
 {
 	struct sock *sk = sock->sk;
-	int len, err = 0;
 	struct bt_iso_qos *qos;
+	int len, val, err = 0;
 	u8 base_len;
 	u8 *base;
 
 	BT_DBG("sk %p", sk);
 
-	if (get_user(len, optlen))
-		return -EFAULT;
+	len = opt->optlen;
 
 	lock_sock(sk);
 
@@ -2003,15 +2072,17 @@ static int iso_sock_getsockopt(struct socket *sock, int level, int optname,
 			break;
 		}
 
-		if (put_user(test_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags),
-			     (u32 __user *)optval))
+		val = test_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags);
+		if (copy_to_iter(&val, sizeof(val), &opt->iter_out) !=
+		    sizeof(val))
 			err = -EFAULT;
 
 		break;
 
 	case BT_PKT_STATUS:
-		if (put_user(test_bit(BT_SK_PKT_STATUS, &bt_sk(sk)->flags),
-			     (int __user *)optval))
+		val = test_bit(BT_SK_PKT_STATUS, &bt_sk(sk)->flags);
+		if (copy_to_iter(&val, sizeof(val), &opt->iter_out) !=
+		    sizeof(val))
 			err = -EFAULT;
 		break;
 
@@ -2019,7 +2090,7 @@ static int iso_sock_getsockopt(struct socket *sock, int level, int optname,
 		qos = iso_sock_get_qos(sk);
 
 		len = min_t(unsigned int, len, sizeof(*qos));
-		if (copy_to_user(optval, qos, len))
+		if (copy_to_iter(qos, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
@@ -2035,9 +2106,8 @@ static int iso_sock_getsockopt(struct socket *sock, int level, int optname,
 		}
 
 		len = min_t(unsigned int, len, base_len);
-		if (copy_to_user(optval, base, len))
-			err = -EFAULT;
-		if (put_user(len, optlen))
+		opt->optlen = len;
+		if (copy_to_iter(base, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
@@ -2276,10 +2346,19 @@ static void iso_conn_ready(struct iso_conn *conn)
 
 		lock_sock(parent);
 
+		/* The listener may have been closed concurrently. */
+		if (parent->sk_state != BT_LISTEN ||
+		    sock_flag(parent, SOCK_ZAPPED)) {
+			release_sock(parent);
+			sock_put(parent);
+			return;
+		}
+
 		sk = iso_sock_alloc(sock_net(parent), NULL,
 				    BTPROTO_ISO, GFP_ATOMIC, 0);
 		if (!sk) {
 			release_sock(parent);
+			sock_put(parent);
 			return;
 		}
 
@@ -2844,7 +2923,7 @@ static const struct proto_ops iso_sock_ops = {
 	.socketpair	= sock_no_socketpair,
 	.shutdown	= iso_sock_shutdown,
 	.setsockopt	= iso_sock_setsockopt,
-	.getsockopt	= iso_sock_getsockopt
+	.getsockopt_iter = iso_sock_getsockopt
 };
 
 static const struct net_proto_family iso_sock_family_ops = {

@@ -49,7 +49,7 @@ ath12k_mem_profile_based_param ath12k_mem_profile_based_param[] = {
 		.dp_params = {
 			.tx_comp_ring_size = 32768,
 			.rxdma_monitor_buf_ring_size = 4096,
-			.rxdma_monitor_dst_ring_size = 8092,
+			.rxdma_monitor_dst_ring_size = 8192,
 			.num_pool_tx_desc = 32768,
 			.rx_desc_count = 12288,
 		},
@@ -637,31 +637,6 @@ u32 ath12k_core_get_max_peers_per_radio(struct ath12k_base *ab)
 }
 EXPORT_SYMBOL(ath12k_core_get_max_peers_per_radio);
 
-struct reserved_mem *ath12k_core_get_reserved_mem(struct ath12k_base *ab,
-						  int index)
-{
-	struct device *dev = ab->dev;
-	struct reserved_mem *rmem;
-	struct device_node *node;
-
-	node = of_parse_phandle(dev->of_node, "memory-region", index);
-	if (!node) {
-		ath12k_dbg(ab, ATH12K_DBG_BOOT,
-			   "failed to parse memory-region for index %d\n", index);
-		return NULL;
-	}
-
-	rmem = of_reserved_mem_lookup(node);
-	of_node_put(node);
-	if (!rmem) {
-		ath12k_dbg(ab, ATH12K_DBG_BOOT,
-			   "unable to get memory-region for index %d\n", index);
-		return NULL;
-	}
-
-	return rmem;
-}
-
 static inline
 void ath12k_core_to_group_ref_get(struct ath12k_base *ab)
 {
@@ -1006,6 +981,27 @@ static void ath12k_core_device_cleanup(struct ath12k_base *ab)
 	mutex_unlock(&ab->core_lock);
 }
 
+static int ath12k_core_device_setup(struct ath12k_base *ab)
+{
+	int ret;
+
+	guard(mutex)(&ab->core_lock);
+
+	ret = ath12k_core_pdev_create(ab);
+	if (ret) {
+		ath12k_err(ab, "failed to create pdev core %d\n", ret);
+		return ret;
+	}
+
+	ath12k_hif_irq_enable(ab);
+
+	ret = ath12k_core_rfkill_config(ab);
+	if (ret && ret != -EOPNOTSUPP)
+		return ret;
+
+	return 0;
+}
+
 static void ath12k_core_hw_group_stop(struct ath12k_hw_group *ag)
 {
 	struct ath12k_base *ab;
@@ -1014,10 +1010,6 @@ static void ath12k_core_hw_group_stop(struct ath12k_hw_group *ag)
 	lockdep_assert_held(&ag->mutex);
 
 	clear_bit(ATH12K_GROUP_FLAG_REGISTERED, &ag->flags);
-
-	ath12k_mac_unregister(ag);
-
-	ath12k_mac_mlo_teardown(ag);
 
 	for (i = ag->num_devices - 1; i >= 0; i--) {
 		ab = ag->ab[i];
@@ -1028,6 +1020,12 @@ static void ath12k_core_hw_group_stop(struct ath12k_hw_group *ag)
 
 		ath12k_core_device_cleanup(ab);
 	}
+
+	/* Unregister MAC (drops wiphys) only after per-device cleanup */
+	ath12k_mac_unregister(ag);
+
+	/* Teardown MLO state after MAC unregister for symmetry */
+	ath12k_mac_mlo_teardown(ag);
 
 	ath12k_mac_destroy(ag);
 }
@@ -1165,26 +1163,11 @@ core_pdev_create:
 		if (!ab)
 			continue;
 
-		mutex_lock(&ab->core_lock);
-
 		set_bit(ATH12K_FLAG_REGISTERED, &ab->dev_flags);
 
-		ret = ath12k_core_pdev_create(ab);
-		if (ret) {
-			ath12k_err(ab, "failed to create pdev core %d\n", ret);
-			mutex_unlock(&ab->core_lock);
+		ret = ath12k_core_device_setup(ab);
+		if (ret)
 			goto err;
-		}
-
-		ath12k_hif_irq_enable(ab);
-
-		ret = ath12k_core_rfkill_config(ab);
-		if (ret && ret != -EOPNOTSUPP) {
-			mutex_unlock(&ab->core_lock);
-			goto err;
-		}
-
-		mutex_unlock(&ab->core_lock);
 	}
 
 	return 0;
@@ -1516,7 +1499,7 @@ static void ath12k_core_pre_reconfigure_recovery(struct ath12k_base *ab)
 			complete_all(&ar->scan.completed);
 			complete(&ar->scan.on_channel);
 			complete(&ar->peer_assoc_done);
-			complete(&ar->peer_delete_done);
+			ath12k_peer_delete_wait_flush(ar);
 			complete(&ar->install_key_done);
 			complete(&ar->vdev_setup_done);
 			complete(&ar->vdev_delete_done);
@@ -1536,6 +1519,8 @@ static void ath12k_core_pre_reconfigure_recovery(struct ath12k_base *ab)
 		}
 
 		wiphy_unlock(ah->hw->wiphy);
+
+		complete(&ah->peer_ml_id_done);
 	}
 
 	wake_up(&ab->wmi_ab.tx_credits_wq);
@@ -1783,29 +1768,6 @@ int ath12k_core_pre_init(struct ath12k_base *ab)
 	ath12k_fw_map(ab);
 
 	return 0;
-}
-
-static int ath12k_core_panic_handler(struct notifier_block *nb,
-				     unsigned long action, void *data)
-{
-	struct ath12k_base *ab = container_of(nb, struct ath12k_base,
-					      panic_nb);
-
-	return ath12k_hif_panic_handler(ab);
-}
-
-static int ath12k_core_panic_notifier_register(struct ath12k_base *ab)
-{
-	ab->panic_nb.notifier_call = ath12k_core_panic_handler;
-
-	return atomic_notifier_chain_register(&panic_notifier_list,
-					      &ab->panic_nb);
-}
-
-static void ath12k_core_panic_notifier_unregister(struct ath12k_base *ab)
-{
-	atomic_notifier_chain_unregister(&panic_notifier_list,
-					 &ab->panic_nb);
 }
 
 static inline
@@ -2223,18 +2185,13 @@ int ath12k_core_init(struct ath12k_base *ab)
 	struct ath12k_hw_group *ag;
 	int ret;
 
-	ret = ath12k_core_panic_notifier_register(ab);
-	if (ret)
-		ath12k_warn(ab, "failed to register panic handler: %d\n", ret);
-
 	mutex_lock(&ath12k_hw_group_mutex);
 
 	ag = ath12k_core_hw_group_assign(ab);
 	if (!ag) {
 		mutex_unlock(&ath12k_hw_group_mutex);
 		ath12k_warn(ab, "unable to get hw group\n");
-		ret = -ENODEV;
-		goto err_unregister_notifier;
+		return -ENODEV;
 	}
 
 	mutex_unlock(&ath12k_hw_group_mutex);
@@ -2259,8 +2216,6 @@ int ath12k_core_init(struct ath12k_base *ab)
 
 err_unassign_hw_group:
 	ath12k_core_hw_group_unassign(ab);
-err_unregister_notifier:
-	ath12k_core_panic_notifier_unregister(ab);
 
 	return ret;
 }
@@ -2269,12 +2224,12 @@ void ath12k_core_deinit(struct ath12k_base *ab)
 {
 	ath12k_core_hw_group_destroy(ab->ag);
 	ath12k_core_hw_group_unassign(ab);
-	ath12k_core_panic_notifier_unregister(ab);
 }
 
 void ath12k_core_free(struct ath12k_base *ab)
 {
 	timer_delete_sync(&ab->rx_replenish_retry);
+	ath12k_wmi_free();
 	destroy_workqueue(ab->workqueue_aux);
 	destroy_workqueue(ab->workqueue);
 	kfree(ab);
@@ -2298,6 +2253,9 @@ struct ath12k_base *ath12k_core_alloc(struct device *dev, size_t priv_size,
 	ab->workqueue_aux = create_singlethread_workqueue("ath12k_aux_wq");
 	if (!ab->workqueue_aux)
 		goto err_free_wq;
+
+	if (ath12k_wmi_alloc() < 0)
+		goto err_free_wq_aux;
 
 	mutex_init(&ab->core_lock);
 	spin_lock_init(&ab->base_lock);
@@ -2333,6 +2291,8 @@ struct ath12k_base *ath12k_core_alloc(struct device *dev, size_t priv_size,
 
 	return ab;
 
+err_free_wq_aux:
+	destroy_workqueue(ab->workqueue_aux);
 err_free_wq:
 	destroy_workqueue(ab->workqueue);
 err_sc_free:

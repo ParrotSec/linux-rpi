@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (c) 2000-2001, 2010, Code Aurora Forum. All rights reserved.
    Copyright 2023-2024 NXP
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
-
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License version 2 as
-   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -5727,10 +5724,11 @@ static void le_conn_complete_evt(struct hci_dev *hdev, u8 status,
 	hci_dev_lock(hdev);
 	hci_store_wake_reason(hdev, bdaddr, bdaddr_type);
 
-	/* All controllers implicitly stop advertising in the event of a
-	 * connection, so ensure that the state bit is cleared.
+	/* Advertising stops when a connection is created. On a failed
+	 * connection it keeps running, so leave the state bit alone.
 	 */
-	hci_dev_clear_flag(hdev, HCI_LE_ADV);
+	if (!status)
+		hci_dev_clear_flag(hdev, HCI_LE_ADV);
 
 	/* Check for existing connection:
 	 *

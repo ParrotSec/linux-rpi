@@ -51,11 +51,9 @@ static inline struct acomp_alg *crypto_acomp_alg(struct crypto_acomp *tfm)
 static int __maybe_unused crypto_acomp_report(
 	struct sk_buff *skb, struct crypto_alg *alg)
 {
-	struct crypto_report_acomp racomp;
-
-	memset(&racomp, 0, sizeof(racomp));
-
-	strscpy(racomp.type, "acomp", sizeof(racomp.type));
+	struct crypto_report_acomp racomp = {
+		.type = "acomp",
+	};
 
 	return nla_put(skb, CRYPTOCFGA_REPORT_ACOMP, sizeof(racomp), &racomp);
 }
@@ -561,12 +559,22 @@ EXPORT_SYMBOL_GPL(acomp_walk_virt);
 struct acomp_req *acomp_request_clone(struct acomp_req *req,
 				      size_t total, gfp_t gfp)
 {
+	struct crypto_tfm *tfm = req->base.tfm;
 	struct acomp_req *nreq;
+	size_t len;
 
-	nreq = container_of(crypto_request_clone(&req->base, total, gfp),
-			    struct acomp_req, base);
-	if (nreq == req)
+	len = sizeof(*req) +
+	      crypto_acomp_reqsize(crypto_acomp_reqtfm(req));
+	len = ALIGN(len, CRYPTO_MINALIGN);
+
+	nreq = kzalloc(len, gfp);
+	if (!nreq) {
+		req->base.tfm = tfm->fb;
 		return req;
+	}
+
+	memcpy(nreq, req, sizeof(*req));
+	nreq->base.flags &= ~CRYPTO_TFM_REQ_ON_STACK;
 
 	if (req->src == &req->chain.ssg)
 		nreq->src = &nreq->chain.ssg;

@@ -1,0 +1,4 @@
+lib/modules/7.2.11+parrot7-test/kernel      usr/lib/debug/lib/modules/7.2.11+parrot7-test
+lib/modules/7.2.11+parrot7-test/System.map  usr/lib/debug/lib/modules/7.2.11+parrot7-test
+lib/modules/7.2.11+parrot7-test/vdso        usr/lib/debug/lib/modules/7.2.11+parrot7-test
+lib/modules/7.2.11+parrot7-test/vmlinux     usr/lib/debug/lib/modules/7.2.11+parrot7-test

@@ -448,6 +448,13 @@ static int __add_disk(struct device *parent, struct gendisk *disk,
 	}
 
 	/*
+	 * We do not support partitions with zoned block devices, so do not try
+	 * to scan the partitions table.
+	 */
+	if (blk_queue_is_zoned(disk->queue))
+		disk->flags |= GENHD_FL_NO_PART;
+
+	/*
 	 * If the driver provides an explicit major number it also must provide
 	 * the number of minors numbers supported, and those will be used to
 	 * setup the gendisk.
@@ -681,6 +688,7 @@ static bool __blk_mark_disk_dead(struct gendisk *disk)
  */
 void blk_mark_disk_dead(struct gendisk *disk)
 {
+	blk_queue_flag_set(QUEUE_FLAG_DYING, disk->queue);
 	__blk_mark_disk_dead(disk);
 	blk_report_disk_dead(disk, true);
 }
@@ -1300,7 +1308,7 @@ static void disk_release(struct device *dev)
 
 	disk_release_events(disk);
 	kfree(disk->random);
-	disk_free_zone_resources(disk);
+	disk_release_zone_resources(disk);
 	xa_destroy(&disk->part_tbl);
 
 	kobject_put(&disk->queue_kobj);
@@ -1485,6 +1493,10 @@ struct gendisk *__alloc_disk_node(struct request_queue *q, int node_id,
 	lockdep_init_map(&disk->lockdep_map, "(bio completion)", lkclass, 0);
 #ifdef CONFIG_BLOCK_HOLDER_DEPRECATED
 	INIT_LIST_HEAD(&disk->slave_bdevs);
+#endif
+#ifdef CONFIG_BLK_ERROR_INJECTION
+	mutex_init(&disk->error_injection_lock);
+	INIT_LIST_HEAD(&disk->error_injection_list);
 #endif
 	mutex_init(&disk->rqos_state_mutex);
 	kobject_init(&disk->queue_kobj, &blk_queue_ktype);

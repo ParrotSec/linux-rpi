@@ -232,6 +232,13 @@ static void __remove_profile(struct aa_profile *profile)
 	aa_label_remove(&profile->label);
 	__aafs_profile_rmdir(profile);
 	__list_remove_profile(profile);
+	/* rawdata is only ever referenced by fs lookup, that is no
+	 * longer possible here, so put the reference to it. This will
+	 * enable the rawdata to be freed if for some reason the profile
+	 * is pinned and going to live for a while.
+	 */
+	aa_put_profile_loaddata(profile->rawdata);
+	profile->rawdata = NULL;
 }
 
 /**
@@ -712,7 +719,7 @@ struct aa_profile *aa_alloc_null(struct aa_profile *parent, const char *name,
 }
 
 /**
- * aa_new_learning_profile - create or find a null-X learning profile
+ * __aa_new_learning_profile - create or find a null-X learning profile
  * @parent: profile that caused this profile to be created (NOT NULL)
  * @hat: true if the null- learning profile is a hat
  * @base: name to base the null profile off of
@@ -729,8 +736,9 @@ struct aa_profile *aa_alloc_null(struct aa_profile *parent, const char *name,
  *
  * Returns: new refcounted profile else NULL on failure
  */
-struct aa_profile *aa_new_learning_profile(struct aa_profile *parent, bool hat,
-					   const char *base, gfp_t gfp)
+struct aa_profile *__aa_new_learning_profile(struct aa_profile *parent,
+					     bool hat, const char *base,
+					     gfp_t gfp)
 {
 	struct aa_profile *p, *profile;
 	const char *bname;
@@ -738,6 +746,7 @@ struct aa_profile *aa_new_learning_profile(struct aa_profile *parent, bool hat,
 	size_t name_sz;
 
 	AA_BUG(!parent);
+	AA_BUG(!mutex_is_locked(&parent->ns->lock));
 
 	if (base) {
 		name_sz = strlen(parent->base.hname) + 8 + strlen(base);
@@ -771,7 +780,6 @@ name:
 	if (hat)
 		profile->label.flags |= FLAG_HAT;
 
-	mutex_lock_nested(&profile->ns->lock, profile->ns->level);
 	p = __find_child(&parent->base.profiles, bname);
 	if (p) {
 		aa_free_profile(profile);
@@ -779,7 +787,6 @@ name:
 	} else {
 		__add_profile(&parent->base.profiles, profile);
 	}
-	mutex_unlock(&profile->ns->lock);
 
 	/* refcount released by caller */
 out:
@@ -791,6 +798,18 @@ fail:
 	kfree(name);
 	aa_free_profile(profile);
 	return NULL;
+}
+
+struct aa_profile *aa_new_learning_profile(struct aa_profile *parent, bool hat,
+					   const char *base, gfp_t gfp)
+{
+	struct aa_profile *profile;
+
+	mutex_lock_nested(&parent->ns->lock, parent->ns->level);
+	profile = __aa_new_learning_profile(parent, hat, base, gfp);
+	mutex_unlock(&parent->ns->lock);
+
+	return profile;
 }
 
 /**

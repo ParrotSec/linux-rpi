@@ -258,8 +258,7 @@ static int aml_spisg_setup_transfer(struct spisg_device *spisg,
 	int ret;
 
 	memset(desc, 0, sizeof(*desc));
-	if (exdesc)
-		memset(exdesc, 0, sizeof(*exdesc));
+	memset(exdesc, 0, sizeof(*exdesc));
 	aml_spisg_set_speed(spisg, xfer->speed_hz);
 	xfer->effective_speed_hz = spisg->effective_speed_hz;
 
@@ -601,14 +600,11 @@ static int aml_spisg_prepare_message(struct spi_controller *ctlr,
 
 	spisg->bytes_per_word = spi->bits_per_word >> 3;
 
-	spisg->cfg_spi &= ~CFG_SLAVE_SELECT;
-	spisg->cfg_spi |= FIELD_PREP(CFG_SLAVE_SELECT, spi_get_chipselect(spi, 0));
-
-	spisg->cfg_bus &= ~(CFG_CPOL | CFG_CPHA | CFG_B_L_ENDIAN | CFG_HALF_DUPLEX);
-	spisg->cfg_bus |= FIELD_PREP(CFG_CPOL, !!(spi->mode & SPI_CPOL)) |
-			  FIELD_PREP(CFG_CPHA, !!(spi->mode & SPI_CPHA)) |
-			  FIELD_PREP(CFG_B_L_ENDIAN, !!(spi->mode & SPI_LSB_FIRST)) |
-			  FIELD_PREP(CFG_HALF_DUPLEX, !!(spi->mode & SPI_3WIRE));
+	FIELD_MODIFY(CFG_SLAVE_SELECT, &spisg->cfg_spi, spi_get_chipselect(spi, 0));
+	FIELD_MODIFY(CFG_CPOL, &spisg->cfg_bus, !!(spi->mode & SPI_CPOL));
+	FIELD_MODIFY(CFG_CPHA, &spisg->cfg_bus, !!(spi->mode & SPI_CPHA));
+	FIELD_MODIFY(CFG_B_L_ENDIAN, &spisg->cfg_bus, !!(spi->mode & SPI_LSB_FIRST));
+	FIELD_MODIFY(CFG_HALF_DUPLEX, &spisg->cfg_bus, !!(spi->mode & SPI_3WIRE));
 
 	return 0;
 }
@@ -640,7 +636,7 @@ static int aml_spisg_target_abort(struct spi_controller *ctlr)
 static int aml_spisg_clk_init(struct spisg_device *spisg, void __iomem *base)
 {
 	struct device *dev = &spisg->pdev->dev;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct clk_divider *div;
 	struct clk_div_table *tbl;
 	char name[32];

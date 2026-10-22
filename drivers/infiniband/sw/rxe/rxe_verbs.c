@@ -22,19 +22,13 @@ static int rxe_query_device(struct ib_device *ibdev,
 	struct rxe_dev *rxe = to_rdev(ibdev);
 	int err;
 
-	if (udata->inlen || udata->outlen) {
-		rxe_dbg_dev(rxe, "malformed udata\n");
-		err = -EINVAL;
-		goto err_out;
-	}
+	err = ib_is_udata_in_empty(udata);
+	if (err)
+		return err;
 
 	memcpy(attr, &rxe->attr, sizeof(*attr));
 
-	return 0;
-
-err_out:
-	rxe_err_dev(rxe, "returned err = %d\n", err);
-	return err;
+	return ib_respond_empty_udata(udata);
 }
 
 static int rxe_query_port(struct ib_device *ibdev,
@@ -50,7 +44,7 @@ static int rxe_query_port(struct ib_device *ibdev,
 		goto err_out;
 	}
 
-	ndev = rxe_ib_device_get_netdev(ibdev);
+	ndev = ib_device_get_netdev(ibdev, 1);
 	if (!ndev) {
 		err = -ENODEV;
 		goto err_out;
@@ -1333,19 +1327,20 @@ static struct ib_mr *rxe_rereg_user_mr(struct ib_mr *ibmr, int flags,
 	if (err)
 		return ERR_PTR(err);
 
+	if ((flags & IB_MR_REREG_ACCESS) &&
+	    (access & ~RXE_ACCESS_SUPPORTED_MR)) {
+		rxe_err_mr(mr, "access = %#x not supported\n", access);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
 	if (flags & IB_MR_REREG_PD) {
 		rxe_put(old_pd);
 		rxe_get(pd);
 		mr->ibmr.pd = ibpd;
 	}
 
-	if (flags & IB_MR_REREG_ACCESS) {
-		if (access & ~RXE_ACCESS_SUPPORTED_MR) {
-			rxe_err_mr(mr, "access = %#x not supported\n", access);
-			return ERR_PTR(-EOPNOTSUPP);
-		}
+	if (flags & IB_MR_REREG_ACCESS)
 		mr->access = access;
-	}
 
 	return NULL;
 }
@@ -1446,7 +1441,7 @@ static int rxe_enable_driver(struct ib_device *ib_dev)
 	struct rxe_dev *rxe = container_of(ib_dev, struct rxe_dev, ib_dev);
 	struct net_device *ndev;
 
-	ndev = rxe_ib_device_get_netdev(ib_dev);
+	ndev = ib_device_get_netdev(ib_dev, 1);
 	if (!ndev)
 		return -ENODEV;
 
@@ -1501,6 +1496,7 @@ static const struct ib_device_ops rxe_dev_ops = {
 	.post_recv = rxe_post_recv,
 	.post_send = rxe_post_send,
 	.post_srq_recv = rxe_post_srq_recv,
+	.process_mad = rxe_process_mad,
 	.query_ah = rxe_query_ah,
 	.query_device = rxe_query_device,
 	.query_pkey = rxe_query_pkey,

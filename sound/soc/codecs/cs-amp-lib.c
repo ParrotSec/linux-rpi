@@ -314,6 +314,8 @@ static void *cs_amp_alloc_get_efi_variable(efi_char16_t *name,
 	unsigned long size = 0;
 
 	status = cs_amp_get_efi_variable(name, guid, NULL, &size, NULL);
+	if (status == EFI_SUCCESS)
+		return ERR_PTR(-ENOENT);
 	if (status != EFI_BUFFER_TOO_SMALL)
 		return ERR_PTR(cs_amp_convert_efi_status(status));
 
@@ -748,10 +750,7 @@ static const char *cs_amp_devm_get_dell_ssidex(struct device *dev,
 	char *ssidex_buf __free(kfree) = cs_amp_alloc_get_efi_variable(DELL_SSIDEXV2_EFI_NAME,
 								       &DELL_SSIDEXV2_EFI_GUID,
 								       NULL);
-	ret = PTR_ERR_OR_ZERO(ssidex_buf);
-	if (ret == -ENOENT)
-		return ERR_PTR(-ENOENT);
-	else if (ret < 0)
+	if (IS_ERR(ssidex_buf))
 		return ssidex_buf;
 
 	/*

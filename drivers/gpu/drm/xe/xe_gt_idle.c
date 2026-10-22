@@ -3,6 +3,8 @@
  * Copyright © 2023 Intel Corporation
  */
 
+#include <linux/time64.h>
+
 #include <drm/drm_managed.h>
 
 #include <generated/xe_wa_oob.h>
@@ -93,7 +95,7 @@ static u64 get_residency_ms(struct xe_gt_idle *gtidle, u64 cur_residency)
 	gtidle->cur_residency = cur_residency;
 
 	/* residency multiplier in ns, convert to ms */
-	cur_residency = mul_u64_u32_div(cur_residency, gtidle->residency_multiplier, 1e6);
+	cur_residency = mul_u64_u32_div(cur_residency, gtidle->residency_multiplier, NSEC_PER_MSEC);
 
 	return cur_residency;
 }
@@ -246,7 +248,8 @@ int xe_gt_idle_pg_print(struct xe_gt *gt, struct drm_printer *p)
 		pg_status = xe_mmio_read32(&gt->mmio, POWERGATE_DOMAIN_STATUS);
 	}
 
-	if (gt->info.engine_mask & XE_HW_ENGINE_RCS_MASK) {
+	if (gt->info.engine_mask &
+	    (XE_HW_ENGINE_RCS_MASK | XE_HW_ENGINE_CCS_MASK)) {
 		drm_printf(p, "Render Power Gating Enabled: %s\n",
 			   str_yes_no(pg_enabled & RENDER_POWERGATE_ENABLE));
 

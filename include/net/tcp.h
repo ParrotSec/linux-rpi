@@ -388,7 +388,6 @@ static inline bool tcp_release_cb_cond(struct sock *sk)
 	return false;
 }
 
-void tcp_wfree(struct sk_buff *skb);
 void tcp_write_timer_handler(struct sock *sk);
 void tcp_delack_timer_handler(struct sock *sk);
 int tcp_ioctl(struct sock *sk, int cmd, int *karg);
@@ -766,8 +765,7 @@ int tcp_fragment(struct sock *sk, enum tcp_queue tcp_queue,
 void tcp_send_probe0(struct sock *);
 int tcp_write_wakeup(struct sock *, int mib);
 void tcp_send_fin(struct sock *sk);
-void tcp_send_active_reset(struct sock *sk, gfp_t priority,
-			   enum sk_rst_reason reason);
+void tcp_send_active_reset(struct sock *sk, enum sk_rst_reason reason);
 int tcp_send_synack(struct sock *);
 void tcp_push_one(struct sock *, unsigned int mss_now);
 void __tcp_send_ack(struct sock *sk, u32 rcv_nxt, u16 flags);
@@ -1013,6 +1011,16 @@ static inline u32 tcp_time_stamp_ts(const struct tcp_sock *tp)
 	return tcp_time_stamp_ms(tp);
 }
 
+/* Refresh clocks of a TCP socket,
+ * ensuring monotically increasing values.
+ */
+static inline void tcp_mstamp_refresh_inline(struct tcp_sock *tp)
+{
+	u64 val = tcp_clock_ns();
+
+	tp->tcp_clock_cache = val;
+	tp->tcp_mstamp = div_u64(val, NSEC_PER_USEC);
+}
 void tcp_mstamp_refresh(struct tcp_sock *tp);
 
 static inline u32 tcp_stamp_us_delta(u64 t1, u64 t0)
@@ -1224,9 +1232,9 @@ static inline bool tcp_skb_can_collapse_to(const struct sk_buff *skb)
 static inline bool tcp_skb_can_collapse(const struct sk_buff *to,
 					const struct sk_buff *from)
 {
-	/* skb_cmp_decrypted() not needed, use tcp_write_collapse_fence() */
 	return likely(tcp_skb_can_collapse_to(to) &&
 		      mptcp_skb_can_collapse(to, from) &&
+		      !skb_cmp_decrypted(to, from) &&
 		      skb_pure_zcopy_same(to, from) &&
 		      skb_frags_readable(to) == skb_frags_readable(from));
 }
@@ -2025,40 +2033,6 @@ struct tcp6_pseudohdr {
 	__be32		protocol;	/* including padding */
 };
 
-/*
- * struct tcp_sigpool - per-CPU pool of ahash_requests
- * @scratch: per-CPU temporary area, that can be used between
- *	     tcp_sigpool_start() and tcp_sigpool_end() to perform
- *	     crypto request
- * @req: pre-allocated ahash request
- */
-struct tcp_sigpool {
-	void *scratch;
-	struct ahash_request *req;
-};
-
-int tcp_sigpool_alloc_ahash(const char *alg, size_t scratch_size);
-void tcp_sigpool_get(unsigned int id);
-void tcp_sigpool_release(unsigned int id);
-int tcp_sigpool_hash_skb_data(struct tcp_sigpool *hp,
-			      const struct sk_buff *skb,
-			      unsigned int header_len);
-
-/**
- * tcp_sigpool_start - disable bh and start using tcp_sigpool_ahash
- * @id: tcp_sigpool that was previously allocated by tcp_sigpool_alloc_ahash()
- * @c: returned tcp_sigpool for usage (uninitialized on failure)
- *
- * Returns: 0 on success, error otherwise.
- */
-int tcp_sigpool_start(unsigned int id, struct tcp_sigpool *c);
-/**
- * tcp_sigpool_end - enable bh and stop using tcp_sigpool
- * @c: tcp_sigpool context that was returned by tcp_sigpool_start()
- */
-void tcp_sigpool_end(struct tcp_sigpool *c);
-size_t tcp_sigpool_algo(unsigned int id, char *buf, size_t buf_len);
-/* - functions */
 void tcp_v4_md5_hash_skb(char *md5_hash, const struct tcp_md5sig_key *key,
 			 const struct sock *sk, const struct sk_buff *skb);
 int tcp_md5_do_add(struct sock *sk, const union tcp_md5_addr *addr,
@@ -2353,7 +2327,7 @@ static inline void tcp_rtx_queue_unlink_and_free(struct sk_buff *skb, struct soc
 
 static inline void tcp_write_collapse_fence(struct sock *sk)
 {
-	struct sk_buff *skb = tcp_write_queue_tail(sk);
+	struct sk_buff *skb = tcp_write_queue_tail(sk) ?: tcp_rtx_queue_tail(sk);
 
 	if (skb)
 		TCP_SKB_CB(skb)->eor = 1;
@@ -2518,9 +2492,9 @@ struct tcp_sock_af_ops {
 	struct tcp_ao_key *(*ao_lookup)(const struct sock *sk,
 					struct sock *addr_sk,
 					int sndid, int rcvid);
-	int (*ao_calc_key_sk)(struct tcp_ao_key *mkt, u8 *key,
-			      const struct sock *sk,
-			      __be32 sisn, __be32 disn, bool send);
+	void (*ao_calc_key_sk)(struct tcp_ao_key *mkt, u8 *key,
+			       const struct sock *sk,
+			       __be32 sisn, __be32 disn, bool send);
 	int (*calc_ao_hash)(char *location, struct tcp_ao_key *ao,
 			    const struct sock *sk, const struct sk_buff *skb,
 			    const u8 *tkey, int hash_offset, u32 sne);
@@ -2541,7 +2515,7 @@ struct tcp_request_sock_ops {
 	struct tcp_ao_key *(*ao_lookup)(const struct sock *sk,
 					struct request_sock *req,
 					int sndid, int rcvid);
-	int (*ao_calc_key)(struct tcp_ao_key *mkt, u8 *key, struct request_sock *sk);
+	void (*ao_calc_key)(struct tcp_ao_key *mkt, u8 *key, struct request_sock *sk);
 	int (*ao_synack_hash)(char *ao_hash, struct tcp_ao_key *mkt,
 			      struct request_sock *req, const struct sk_buff *skb,
 			      int hash_offset, u32 sne);
@@ -2572,19 +2546,27 @@ extern const struct tcp_request_sock_ops tcp_request_sock_ipv6_ops;
 
 #ifdef CONFIG_SYN_COOKIES
 static inline __u32 cookie_init_sequence(const struct tcp_request_sock_ops *ops,
-					 const struct sock *sk, struct sk_buff *skb,
-					 __u16 *mss)
+					 struct sk_buff *skb, __u16 *mss)
 {
-	tcp_synq_overflow(sk);
-	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESSENT);
 	return ops->cookie_init_seq(skb, mss);
 }
 #else
 static inline __u32 cookie_init_sequence(const struct tcp_request_sock_ops *ops,
-					 const struct sock *sk, struct sk_buff *skb,
-					 __u16 *mss)
+					 struct sk_buff *skb, __u16 *mss)
 {
 	return 0;
+}
+#endif
+
+#ifdef CONFIG_SYN_COOKIES
+static inline void cookie_record_sent(const struct sock *sk)
+{
+	tcp_synq_overflow(sk);
+	__NET_INC_STATS(sock_net(sk), LINUX_MIB_SYNCOOKIESSENT);
+}
+#else
+static inline void cookie_record_sent(const struct sock *sk)
+{
 }
 #endif
 

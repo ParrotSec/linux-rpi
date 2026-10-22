@@ -309,6 +309,13 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 		return -EOPNOTSUPP;
 
 	inode_lock(inode);
+
+	/*
+	 * Prevent concurrent direct I/O and buffered I/O to the same file
+	 * range. Wait for in-flight DIO to finish before dirtying pages.
+	 */
+	inode_dio_wait(inode);
+
 	ret = ext4_write_checks(iocb, from);
 	if (ret <= 0)
 		goto out;
@@ -400,8 +407,7 @@ static int ext4_dio_write_end_io(struct kiocb *iocb, ssize_t size,
 		error = ext4_convert_unwritten_extents_atomic(NULL, inode, pos,
 							      size);
 	else if (!error && size && flags & IOMAP_DIO_UNWRITTEN)
-		error = ext4_convert_unwritten_extents(NULL, inode, pos, size,
-						       NULL);
+		error = ext4_convert_unwritten_extents(NULL, inode, pos, size);
 	if (error)
 		return error;
 	/*

@@ -213,9 +213,10 @@ static int __symbol__account_cycles(struct cyc_hist *ch,
 }
 
 static int __symbol__inc_addr_samples(struct map_symbol *ms,
-				      struct annotated_source *src, struct evsel *evsel, u64 addr,
+				      struct annotated_source *src, u64 addr,
 				      struct perf_sample *sample)
 {
+	struct evsel *evsel = sample->evsel;
 	struct symbol *sym = ms->sym;
 	long hash_key;
 	u64 offset;
@@ -235,7 +236,8 @@ static int __symbol__inc_addr_samples(struct map_symbol *ms,
 	h = annotated_source__histogram(src, evsel);
 	if (h == NULL) {
 		pr_debug("%s(%d): ENOMEM! sym->name=%s, start=%#" PRIx64 ", addr=%#" PRIx64 ", end=%#" PRIx64 ", func: %d\n",
-			 __func__, __LINE__, sym->name, sym->start, addr, sym->end, sym->type == STT_FUNC);
+			 __func__, __LINE__, sym->name, sym->start, addr, sym->end,
+			 symbol__type(sym) == STT_FUNC);
 		return -ENOMEM;
 	}
 
@@ -318,7 +320,7 @@ alloc_histograms:
 }
 
 static int symbol__inc_addr_samples(struct map_symbol *ms,
-				    struct evsel *evsel, u64 addr,
+				    u64 addr,
 				    struct perf_sample *sample)
 {
 	struct symbol *sym = ms->sym;
@@ -326,8 +328,8 @@ static int symbol__inc_addr_samples(struct map_symbol *ms,
 
 	if (sym == NULL)
 		return 0;
-	src = symbol__hists(sym, evsel->evlist->core.nr_entries);
-	return src ? __symbol__inc_addr_samples(ms, src, evsel, addr, sample) : 0;
+	src = symbol__hists(sym, evlist__nr_entries(sample->evsel->evlist));
+	return src ? __symbol__inc_addr_samples(ms, src, addr, sample) : 0;
 }
 
 static int symbol__account_br_cntr(struct annotated_branch *branch,
@@ -337,7 +339,7 @@ static int symbol__account_br_cntr(struct annotated_branch *branch,
 {
 	unsigned int br_cntr_nr = evsel__leader(evsel)->br_cntr_nr;
 	unsigned int base = evsel__leader(evsel)->br_cntr_idx;
-	unsigned int off = offset * evsel->evlist->nr_br_cntr;
+	unsigned int off = offset * evlist__nr_br_cntr(evsel->evlist);
 	u64 *branch_br_cntr = branch->br_cntr;
 	unsigned int i, mask, width;
 
@@ -367,7 +369,7 @@ static int symbol__account_cycles(u64 addr, u64 start, struct symbol *sym,
 
 	if (sym == NULL)
 		return 0;
-	branch = symbol__find_branch_hist(sym, evsel->evlist->nr_br_cntr);
+	branch = symbol__find_branch_hist(sym, evlist__nr_br_cntr(evsel->evlist));
 	if (!branch)
 		return -ENOMEM;
 	if (addr < sym->start || addr >= sym->end)
@@ -509,7 +511,7 @@ static void annotation__count_and_fill(struct annotation *notes, u64 start, u64 
 static int annotation__compute_ipc(struct annotation *notes, size_t size,
 				   struct evsel *evsel)
 {
-	unsigned int br_cntr_nr = evsel->evlist->nr_br_cntr;
+	unsigned int br_cntr_nr = evlist__nr_br_cntr(evsel->evlist);
 	int err = 0;
 	s64 offset;
 
@@ -581,16 +583,14 @@ static int annotation__compute_ipc(struct annotation *notes, size_t size,
 	return 0;
 }
 
-int addr_map_symbol__inc_samples(struct addr_map_symbol *ams, struct perf_sample *sample,
-				 struct evsel *evsel)
+int addr_map_symbol__inc_samples(struct addr_map_symbol *ams, struct perf_sample *sample)
 {
-	return symbol__inc_addr_samples(&ams->ms, evsel, ams->al_addr, sample);
+	return symbol__inc_addr_samples(&ams->ms, ams->al_addr, sample);
 }
 
-int hist_entry__inc_addr_samples(struct hist_entry *he, struct perf_sample *sample,
-				 struct evsel *evsel, u64 ip)
+int hist_entry__inc_addr_samples(struct hist_entry *he, struct perf_sample *sample, u64 ip)
 {
-	return symbol__inc_addr_samples(&he->ms, evsel, ip, sample);
+	return symbol__inc_addr_samples(&he->ms, ip, sample);
 }
 
 
@@ -982,24 +982,43 @@ void symbol__calc_percent(struct symbol *sym, struct evsel *evsel)
 	annotation__calc_percent(notes, evsel, symbol__size(sym));
 }
 
-int thread__get_arch(struct thread *thread, const struct arch **parch)
+
+
+int map_symbol__get_arch(struct map_symbol *ms, const struct arch **parch)
 {
 	const struct arch *arch;
-	struct machine *machine;
-	uint32_t e_flags;
-	uint16_t e_machine;
+	struct machine *machine = NULL;
+	struct map *map = ms->map;
+	struct dso *dso = map ? map__dso(map) : NULL;
+	uint32_t e_flags = 0;
+	uint16_t e_machine = EM_NONE;
 
-	if (!thread) {
-		*parch = NULL;
-		return -1;
+	const char *cpuid = NULL;
+
+	if (ms->thread) {
+		machine = maps__machine(thread__maps(ms->thread));
+		e_machine = thread__e_machine(ms->thread, machine, &e_flags);
+		if (machine && machine->env)
+			cpuid = machine->env->cpuid;
+	} else if (dso) {
+		struct maps *kmaps = (map && dso__kernel(dso)) ? map__kmaps(map) : NULL;
+		struct machine *kmap_machine = kmaps ? maps__machine(kmaps) : NULL;
+
+		e_machine = dso__e_machine(dso, kmap_machine, &e_flags);
+		if (kmap_machine && kmap_machine->env)
+			cpuid = kmap_machine->env->cpuid;
 	}
 
-	machine = maps__machine(thread__maps(thread));
-	e_machine = thread__e_machine(thread, machine, &e_flags);
-	arch = arch__find(e_machine, e_flags, machine->env ? machine->env->cpuid : NULL);
+	if (e_machine == EM_NONE)
+		e_machine = thread__e_machine(NULL, NULL, &e_flags);
+
+	arch = arch__find(e_machine, e_flags, cpuid);
 	if (arch == NULL) {
 		pr_err("%s: unsupported arch %d\n", __func__, e_machine);
-		return errno;
+		/* TODO: Refactor annotate/disassemble subsystem error
+		 * codes to uniformly return negative integers.
+		 */
+		return errno ? errno : ENOTSUP;
 	}
 	if (parch)
 		*parch = arch;
@@ -1018,7 +1037,7 @@ int symbol__annotate(struct map_symbol *ms, struct evsel *evsel,
 	const struct arch *arch = NULL;
 	int err, nr;
 
-	err = thread__get_arch(ms->thread, &arch);
+	err = map_symbol__get_arch(ms, &arch);
 	if (err)
 		return err;
 
@@ -1251,6 +1270,11 @@ int hist_entry__annotate_printf(struct hist_entry *he, struct evsel *evsel)
 		evsel_name = buf;
 	}
 
+	if (map_symbol__get_arch(ms, &apd.arch)) {
+		free(filename);
+		return ENOTSUP;
+	}
+
 	graph_dotted_len = printf(" %-*.*s|	Source code & Disassembly of %s for %s (%" PRIu64 " samples, "
 				  "percent: %s)\n",
 				  width, width, symbol_conf.show_total_period ? "Period" :
@@ -1266,7 +1290,6 @@ int hist_entry__annotate_printf(struct hist_entry *he, struct evsel *evsel)
 
 	apd.addr_fmt_width = annotated_source__addr_fmt_width(&notes->src->source,
 							      notes->src->start);
-	thread__get_arch(ms->thread, &apd.arch);
 	apd.dbg = dso__debuginfo(dso);
 
 	list_for_each_entry(pos, &notes->src->source, node) {
@@ -1371,7 +1394,7 @@ static int symbol__annotate_fprintf2(struct symbol *sym, FILE *fp,
 	struct annotation_line *al;
 
 	if (annotate_opts.code_with_type) {
-		thread__get_arch(apd->he->ms.thread, &apd->arch);
+		map_symbol__get_arch(&apd->he->ms, &apd->arch);
 		apd->dbg = dso__debuginfo(map__dso(apd->he->ms.map));
 	}
 
@@ -1813,7 +1836,7 @@ int annotation_br_cntr_abbr_list(char **str, struct evsel *evsel, bool header)
 	struct evsel *pos;
 	struct strbuf sb;
 
-	if (evsel->evlist->nr_br_cntr <= 0)
+	if (evlist__nr_br_cntr(evsel->evlist) <= 0)
 		return -ENOTSUP;
 
 	strbuf_init(&sb, /*hint=*/ 0);
@@ -2224,7 +2247,7 @@ int symbol__annotate2(struct map_symbol *ms, struct evsel *evsel,
 
 	annotation__init_column_widths(notes, sym);
 	annotation__update_column_widths(notes);
-	sym->annotate2 = 1;
+	symbol__set_annotate2(sym, true);
 
 	return 0;
 }

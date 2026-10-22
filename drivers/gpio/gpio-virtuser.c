@@ -23,7 +23,6 @@
 #include <linux/limits.h>
 #include <linux/list.h>
 #include <linux/lockdep.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
@@ -693,7 +692,8 @@ static int gpio_virtuser_interrupts_set(void *data, u64 val)
 		atomic_set(&ld->irq, irq);
 	} else {
 		irq = atomic_xchg(&ld->irq, 0);
-		free_irq(irq, ld);
+		if (irq)
+			free_irq(irq, ld);
 	}
 
 	return 0;

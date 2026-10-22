@@ -289,7 +289,8 @@ sign-code:
         debian/certs/ci-test-sign/ci-test-sign.pem
   artifacts:
     paths:
-      - ${WORKING_DIR}/linux-signed*-${BUILD_ARCH}_*
+      - ${WORKING_DIR}/linux-signed*-${BUILD_ARCH}_*.dsc
+      - ${WORKING_DIR}/linux-signed*-${BUILD_ARCH}_*.tar*
   needs:
     - job: build
       artifacts: true

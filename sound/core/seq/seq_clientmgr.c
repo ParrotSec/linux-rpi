@@ -528,13 +528,17 @@ static int bounce_error_event(struct snd_seq_client *client,
 			      struct snd_seq_event *event,
 			      int err, int atomic, int hop)
 {
-	struct snd_seq_event bounce_ev;
+	struct snd_seq_event bounce_ev, quoted;
 	int result;
 
 	if (client == NULL ||
 	    ! (client->filter & SNDRV_SEQ_FILTER_BOUNCE) ||
 	    ! client->accept_input)
 		return 0; /* ignored */
+
+	if (event->type == SNDRV_SEQ_EVENT_BOUNCE ||
+	    event->type == SNDRV_SEQ_EVENT_KERNEL_ERROR)
+		return err; /* avoid re-bouncing */
 
 	/* set up quoted error */
 	memset(&bounce_ev, 0, sizeof(bounce_ev));
@@ -544,15 +548,19 @@ static int bounce_error_event(struct snd_seq_client *client,
 		 * For user clients, send SNDRV_SEQ_EVENT_BOUNCE with the
 		 * original event embedded as variable-length data.  This
 		 * avoids exposing data.quote.event (a kernel pointer) to
-		 * userspace.  The variable-length path in snd_seq_event_dup()
-		 * copies the event data from data.ext.ptr into chained cells,
-		 * and snd_seq_expand_var_event() copies only the data content
-		 * -- never the pointer -- to userspace.
+		 * userspace.  Sanitise the embedded copy too - a queued
+		 * variable-length event carries the address of its own
+		 * extension cell, and the payload goes out verbatim.
 		 */
+		quoted = *event;
+		if (snd_seq_ev_is_variable(&quoted)) {
+			quoted.data.ext.len &= ~SNDRV_SEQ_EXT_MASK;
+			quoted.data.ext.ptr = NULL;
+		}
 		bounce_ev.type = SNDRV_SEQ_EVENT_BOUNCE;
 		bounce_ev.flags = SNDRV_SEQ_EVENT_LENGTH_VARIABLE;
 		bounce_ev.data.ext.len = sizeof(struct snd_seq_event);
-		bounce_ev.data.ext.ptr = (char *)event;
+		bounce_ev.data.ext.ptr = (char *)&quoted;
 	} else {
 		/*
 		 * For kernel clients, quote the event pointer directly.
@@ -1310,7 +1318,7 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client, void *arg)
 		port_idx = -1;
 	if (port_idx >= SNDRV_SEQ_ADDRESS_UNKNOWN)
 		return -EINVAL;
-	err = snd_seq_create_port(client, port_idx, &port);
+	err = snd_seq_create_port(client, &port);
 	if (err < 0)
 		return err;
 
@@ -1329,9 +1337,13 @@ static int snd_seq_ioctl_create_port(struct snd_seq_client *client, void *arg)
 		}
 	}
 
-	info->addr = port->addr;
-
 	snd_seq_set_port_info(port, info);
+	err = snd_seq_insert_port(client, port_idx, port);
+	if (err < 0) {
+		kfree(port);
+		return err;
+	}
+	info->addr = port->addr;
 	if (info->capability & SNDRV_SEQ_PORT_CAP_UMP_ENDPOINT)
 		client->ump_endpoint_port = port->addr.port;
 	snd_seq_system_client_ev_port_start(port->addr.client, port->addr.port);

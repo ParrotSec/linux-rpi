@@ -22,7 +22,7 @@ from .config_v2 import (
 )
 from .dataclasses_deb822 import write_deb822
 from .debian import Changelog, PackageArchitecture, \
-    Version, SourcePackage, BinaryPackage
+    Version, SourcePackage, BinaryPackage, TestsControl
 from .utils import Templates
 
 
@@ -147,6 +147,7 @@ class PackagesBundle:
     makefile: Makefile
     source: SourcePackage
     packages: BinaryPackages
+    tests: list[TestsControl]
 
     def __init__(
             self,
@@ -163,6 +164,7 @@ class PackagesBundle:
         self.makefile = Makefile()
         self.source = list(self.templates.get_source_control(source_template, replace))[0]
         self.packages = self.BinaryPackages()
+        self.tests = []
 
         if not self.source.name:
             self.source.name = override_name
@@ -214,6 +216,11 @@ class PackagesBundle:
                         out = f'{package_name}.{name}'
                     with self.open(out) as f:
                         f.write(template)
+
+        try:
+            self.tests.extend(self.templates.get_tests_control(f'{pkgid}.tests-control', replace))
+        except KeyError:
+            pass
 
         return ret
 
@@ -356,6 +363,7 @@ class PackagesBundle:
 
     def write(self) -> None:
         self.write_control()
+        self.write_tests_control()
         self.write_makefile()
 
     def write_control(self) -> None:
@@ -366,6 +374,15 @@ class PackagesBundle:
         )
         with self.open('control') as f:
             write_deb822(p, f)
+
+    def write_tests_control(self) -> None:
+        if self.tests:
+            p = sorted(
+                self.tests,
+                key=lambda i: (i.tests, i.test_command),
+            )
+            with self.open('tests/control') as f:
+                write_deb822(p, f)
 
     def write_makefile(self) -> None:
         with self.open('rules.gen') as f:

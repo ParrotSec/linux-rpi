@@ -62,8 +62,7 @@ static inline bool kvm_pkvm_ioctl_allowed(struct kvm *kvm, unsigned int ioctl)
 	int r;
 
 	r = kvm_get_cap_for_kvm_ioctl(ioctl, &ext);
-
-	if (WARN_ON_ONCE(r < 0))
+	if (r < 0)
 		return false;
 
 	return kvm_pkvm_ext_allowed(kvm, ext);
@@ -188,8 +187,7 @@ static inline size_t pkvm_host_sve_state_size(void)
 	if (!system_supports_sve())
 		return 0;
 
-	return size_add(sizeof(struct cpu_sve_state),
-			SVE_SIG_REGS_SIZE(sve_vq_from_vl(kvm_host_sve_max_vl)));
+	return SVE_SIG_REGS_SIZE(sve_vq_from_vl(kvm_host_sve_max_vl));
 }
 
 struct pkvm_mapping {

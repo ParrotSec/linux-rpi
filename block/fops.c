@@ -46,7 +46,7 @@ static bool blkdev_dio_invalid(struct block_device *bdev, struct kiocb *iocb,
 static inline int blkdev_iov_iter_get_pages(struct bio *bio,
 		struct iov_iter *iter, struct block_device *bdev)
 {
-	return bio_iov_iter_get_pages(bio, iter,
+	return bio_iov_iter_get_pages(bio, iter, bdev_dma_alignment(bdev),
 			bdev_logical_block_size(bdev) - 1);
 }
 
@@ -218,8 +218,7 @@ static ssize_t __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
 
 		ret = blkdev_iov_iter_get_pages(bio, iter, bdev);
 		if (unlikely(ret)) {
-			bio->bi_status = BLK_STS_IOERR;
-			bio_endio(bio);
+			bio_endio_status(bio, BLK_STS_IOERR);
 			break;
 		}
 		if (iocb->ki_flags & IOCB_NOWAIT) {
@@ -239,8 +238,10 @@ static ssize_t __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
 		}
 		if (iocb->ki_flags & IOCB_HAS_METADATA) {
 			ret = bio_integrity_map_iter(bio, iocb->private);
-			if (unlikely(ret))
-				goto fail;
+			if (unlikely(ret)) {
+				bio_endio_status(bio, errno_to_blk_status(ret));
+				break;
+			}
 		}
 
 		if (is_read) {
@@ -403,6 +404,11 @@ static ssize_t blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	if (blkdev_dio_invalid(bdev, iocb, iter))
 		return -EINVAL;
 
+	/* HIPRI needs private as bio; HAS_METADATA keeps it as uio_meta */
+	if ((iocb->ki_flags & IOCB_HIPRI) &&
+	    (iocb->ki_flags & IOCB_HAS_METADATA))
+		return -EOPNOTSUPP;
+
 	if (iov_iter_rw(iter) == WRITE) {
 		u16 max_write_streams = bdev_max_write_streams(bdev);
 
@@ -499,36 +505,12 @@ static void blkdev_readahead(struct readahead_control *rac)
 	mpage_readahead(rac, blkdev_get_block);
 }
 
-static int blkdev_write_begin(const struct kiocb *iocb,
-			      struct address_space *mapping, loff_t pos,
-			      unsigned len, struct folio **foliop,
-			      void **fsdata)
-{
-	return block_write_begin(mapping, pos, len, foliop, blkdev_get_block);
-}
-
-static int blkdev_write_end(const struct kiocb *iocb,
-			    struct address_space *mapping,
-			    loff_t pos, unsigned len, unsigned copied,
-			    struct folio *folio, void *fsdata)
-{
-	int ret;
-	ret = block_write_end(pos, len, copied, folio);
-
-	folio_unlock(folio);
-	folio_put(folio);
-
-	return ret;
-}
-
 const struct address_space_operations def_blk_aops = {
 	.dirty_folio	= block_dirty_folio,
 	.invalidate_folio = block_invalidate_folio,
 	.read_folio	= blkdev_read_folio,
 	.readahead	= blkdev_readahead,
 	.writepages	= blkdev_writepages,
-	.write_begin	= blkdev_write_begin,
-	.write_end	= blkdev_write_end,
 	.migrate_folio	= buffer_migrate_folio_norefs,
 	.is_dirty_writeback = buffer_check_dirty_writeback,
 };

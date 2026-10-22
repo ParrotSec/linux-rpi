@@ -246,11 +246,11 @@ struct pcc_acpi {
 	int			ac_brightness;
 	int			dc_brightness;
 	int			current_brightness;
-	u32			*sinf;
 	struct acpi_device	*device;
 	struct input_dev	*input_dev;
 	struct backlight_device	*backlight;
 	struct platform_device	*platform;
+	u32			sinf[] __counted_by(num_sifr);
 };
 
 /*
@@ -360,7 +360,16 @@ static int acpi_pcc_retrieve_biosdata(struct pcc_acpi *pcc)
 		} else
 			pr_err("Invalid HKEY.SINF data\n");
 	}
-	pcc->sinf[hkey->package.count] = -1;
+	/*
+	 * pcc->sinf[] has pcc->num_sifr elements (valid indices
+	 * 0..num_sifr-1). On DSDTs where SINF's package count equals
+	 * num_sifr exactly -- the off-by-one case probe()'s num_sifr++
+	 * already allocates a spare element for -- there is no room left
+	 * for this trailing sentinel; nothing reads it back, so just skip
+	 * the write rather than running one element past the flex array.
+	 */
+	if (hkey->package.count < pcc->num_sifr)
+		pcc->sinf[hkey->package.count] = -1;
 
 end:
 	kfree(buffer.pointer);
@@ -1007,21 +1016,15 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 	 */
 	num_sifr++;
 
-	pcc = kzalloc_obj(struct pcc_acpi);
+	pcc = kzalloc_flex(*pcc, sinf, num_sifr);
 	if (!pcc) {
 		pr_err("Couldn't allocate mem for pcc");
 		return -ENOMEM;
 	}
 
-	pcc->sinf = kcalloc(num_sifr + 1, sizeof(u32), GFP_KERNEL);
-	if (!pcc->sinf) {
-		result = -ENOMEM;
-		goto out_hotkey;
-	}
-
+	pcc->num_sifr = num_sifr;
 	pcc->device = device;
 	pcc->handle = device->handle;
-	pcc->num_sifr = num_sifr;
 	device->driver_data = pcc;
 	strscpy(acpi_device_name(device), ACPI_PCC_DEVICE_NAME);
 	strscpy(acpi_device_class(device), ACPI_PCC_CLASS);
@@ -1029,7 +1032,7 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 	result = acpi_pcc_init_input(pcc);
 	if (result) {
 		pr_err("Error installing keyinput handler\n");
-		goto out_sinf;
+		goto out_hotkey;
 	}
 
 	if (!acpi_pcc_retrieve_biosdata(pcc)) {
@@ -1110,10 +1113,8 @@ out_backlight:
 	backlight_device_unregister(pcc->backlight);
 out_input:
 	input_unregister_device(pcc->input_dev);
-out_sinf:
-	device->driver_data = NULL;
-	kfree(pcc->sinf);
 out_hotkey:
+	device->driver_data = NULL;
 	kfree(pcc);
 
 	return result;
@@ -1143,7 +1144,6 @@ static void acpi_pcc_hotkey_remove(struct platform_device *pdev)
 
 	device->driver_data = NULL;
 
-	kfree(pcc->sinf);
 	kfree(pcc);
 }
 

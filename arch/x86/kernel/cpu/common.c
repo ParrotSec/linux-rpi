@@ -1251,9 +1251,6 @@ static const __initconst struct x86_cpu_id cpu_vuln_whitelist[] = {
 #define VULNBL_INTEL_STEPS(vfm, max_stepping, issues)		   \
 	X86_MATCH_VFM_STEPS(vfm, X86_STEP_MIN, max_stepping, issues)
 
-#define VULNBL_INTEL_TYPE(vfm, cpu_type, issues)	\
-	X86_MATCH_VFM_CPU_TYPE(vfm, INTEL_CPU_TYPE_##cpu_type, issues)
-
 #define VULNBL_AMD(family, blacklist)		\
 	VULNBL(AMD, family, X86_MODEL_ANY, blacklist)
 
@@ -1316,11 +1313,9 @@ static const struct x86_cpu_id cpu_vuln_blacklist[] __initconst = {
 	VULNBL_INTEL_STEPS(INTEL_TIGERLAKE,	     X86_STEP_MAX,	GDS | ITS | ITS_NATIVE_ONLY),
 	VULNBL_INTEL_STEPS(INTEL_LAKEFIELD,	     X86_STEP_MAX,	MMIO | MMIO_SBDS | RETBLEED),
 	VULNBL_INTEL_STEPS(INTEL_ROCKETLAKE,	     X86_STEP_MAX,	MMIO | RETBLEED | GDS | ITS | ITS_NATIVE_ONLY),
-	VULNBL_INTEL_TYPE(INTEL_ALDERLAKE,		     ATOM,	RFDS | VMSCAPE),
-	VULNBL_INTEL_STEPS(INTEL_ALDERLAKE,	     X86_STEP_MAX,	VMSCAPE),
+	VULNBL_INTEL_STEPS(INTEL_ALDERLAKE,	     X86_STEP_MAX,	RFDS | VMSCAPE),
 	VULNBL_INTEL_STEPS(INTEL_ALDERLAKE_L,	     X86_STEP_MAX,	RFDS | VMSCAPE),
-	VULNBL_INTEL_TYPE(INTEL_RAPTORLAKE,		     ATOM,	RFDS | VMSCAPE),
-	VULNBL_INTEL_STEPS(INTEL_RAPTORLAKE,	     X86_STEP_MAX,	VMSCAPE),
+	VULNBL_INTEL_STEPS(INTEL_RAPTORLAKE,	     X86_STEP_MAX,	RFDS | VMSCAPE),
 	VULNBL_INTEL_STEPS(INTEL_RAPTORLAKE_P,	     X86_STEP_MAX,	RFDS | VMSCAPE),
 	VULNBL_INTEL_STEPS(INTEL_RAPTORLAKE_S,	     X86_STEP_MAX,	RFDS | VMSCAPE),
 	VULNBL_INTEL_STEPS(INTEL_METEORLAKE_L,	     X86_STEP_MAX,	VMSCAPE),
@@ -1388,7 +1383,21 @@ static bool __init vulnerable_to_rfds(u64 x86_arch_cap_msr)
 		return true;
 
 	/* Only consult the blacklist when there is no enumeration: */
-	return cpu_matches(cpu_vuln_blacklist, RFDS);
+	if (!cpu_matches(cpu_vuln_blacklist, RFDS))
+		return false;
+
+	/*
+	 * ADL and RPL are affected only if they have Atom CPUs. Hybrids have
+	 * both Core and Atom CPUs. Mark unaffected when Atom CPUs are not
+	 * present.
+	 */
+	if ((boot_cpu_data.x86_model == 0x97 ||
+	     boot_cpu_data.x86_model == 0xB7) &&
+	     boot_cpu_data.topo.intel_type != INTEL_CPU_TYPE_ATOM &&
+	     !boot_cpu_has(X86_FEATURE_HYBRID_CPU))
+		return false;
+
+	return true;
 }
 
 static bool __init vulnerable_to_its(u64 x86_arch_cap_msr)
@@ -1737,13 +1746,6 @@ static void __init cpu_parse_early_param(void)
 	int arglen;
 
 #ifdef CONFIG_X86_32
-	if (cmdline_find_option_bool(boot_command_line, "no387"))
-#ifdef CONFIG_MATH_EMULATION
-		setup_clear_cpu_cap(X86_FEATURE_FPU);
-#else
-		pr_err("Option 'no387' required CONFIG_MATH_EMULATION enabled.\n");
-#endif
-
 	if (cmdline_find_option_bool(boot_command_line, "nofxsr"))
 		setup_clear_cpu_cap(X86_FEATURE_FXSR);
 #endif
@@ -1791,6 +1793,7 @@ static void __init cpu_parse_early_param(void)
 static void __init early_identify_cpu(struct cpuinfo_x86 *c)
 {
 	memset(&c->x86_capability, 0, sizeof(c->x86_capability));
+	memset(&c->cpuid, 0, sizeof(c->cpuid));
 	c->extended_cpuid_level = 0;
 
 	if (!cpuid_feature())
@@ -1798,6 +1801,7 @@ static void __init early_identify_cpu(struct cpuinfo_x86 *c)
 
 	/* cyrix could have cpuid enabled via c_identify()*/
 	if (cpuid_feature()) {
+		cpuid_scan_cpu(c);
 		cpu_detect(c);
 		get_cpu_vendor(c);
 		intel_unlock_cpuid_leafs(c);
@@ -1970,8 +1974,8 @@ static void generic_identify(struct cpuinfo_x86 *c)
 	if (!cpuid_feature())
 		return;
 
+	cpuid_scan_cpu(c);
 	cpu_detect(c);
-
 	get_cpu_vendor(c);
 	intel_unlock_cpuid_leafs(c);
 	get_cpu_cap(c);
@@ -2023,6 +2027,7 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 #endif
 	c->x86_cache_alignment = c->x86_clflush_size;
 	memset(&c->x86_capability, 0, sizeof(c->x86_capability));
+	memset(&c->cpuid, 0, sizeof(c->cpuid));
 #ifdef CONFIG_X86_VMX_FEATURE_NAMES
 	memset(&c->vmx_capability, 0, sizeof(c->vmx_capability));
 #endif

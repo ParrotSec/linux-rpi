@@ -56,8 +56,8 @@ static const struct reg_default sgtl5000_reg_defaults[] = {
 	{ SGTL5000_CHIP_PLL_CTRL,		0x5000 },
 	{ SGTL5000_CHIP_CLK_TOP_CTRL,		0x0000 },
 	{ SGTL5000_CHIP_ANA_STATUS,		0x0000 },
-	{ SGTL5000_CHIP_SHORT_CTRL,		0x0000 },
 	{ SGTL5000_CHIP_ANA_TEST2,		0x0000 },
+	{ SGTL5000_CHIP_SHORT_CTRL,		0x0000 },
 	{ SGTL5000_DAP_CTRL,			0x0000 },
 	{ SGTL5000_DAP_PEQ,			0x0000 },
 	{ SGTL5000_DAP_BASS_ENHANCE,		0x0040 },
@@ -1809,8 +1809,8 @@ static void sgtl5000_i2c_shutdown(struct i2c_client *client)
 }
 
 static const struct i2c_device_id sgtl5000_id[] = {
-	{"sgtl5000"},
-	{},
+	{ .name = "sgtl5000" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(i2c, sgtl5000_id);

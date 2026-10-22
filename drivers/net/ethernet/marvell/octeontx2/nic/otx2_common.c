@@ -333,7 +333,8 @@ int otx2_set_rss_table(struct otx2_nic *pfvf, int ctx_id, const u32 *ind_tbl)
 	/* Get memory to put this msg */
 	for (idx = 0; idx < rss->rss_size; idx++) {
 		/* Ignore the queue if AF_XDP zero copy is enabled */
-		if (test_bit(ind_tbl[idx], pfvf->af_xdp_zc_qidx))
+		if (pfvf->af_xdp_zc_qidx &&
+		    test_bit(ind_tbl[idx], pfvf->af_xdp_zc_qidx))
 			continue;
 
 		aq = otx2_mbox_alloc_msg_nix_aq_enq(mbox);
@@ -393,7 +394,7 @@ int otx2_rss_init(struct otx2_nic *pfvf)
 	struct otx2_rss_info *rss = &pfvf->hw.rss_info;
 	int idx, ret = 0;
 
-	rss->rss_size = sizeof(*rss->ind_tbl);
+	rss->rss_size = ARRAY_SIZE(rss->ind_tbl);
 
 	/* Init RSS key if it is not setup already */
 	if (!rss->enable)
@@ -1055,6 +1056,7 @@ int otx2_cq_init(struct otx2_nic *pfvf, u16 qidx)
 	struct nix_aq_enq_req *aq;
 	struct otx2_cq_queue *cq;
 	struct otx2_pool *pool;
+	u8 bpid_idx;
 
 	cq = &qset->cq[qidx];
 	cq->cq_idx = qidx;
@@ -1132,11 +1134,8 @@ int otx2_cq_init(struct otx2_nic *pfvf, u16 qidx)
 		if (!is_otx2_lbkvf(pfvf->pdev)) {
 			/* Enable receive CQ backpressure */
 			aq->cq.bp_ena = 1;
-#ifdef CONFIG_DCB
-			aq->cq.bpid = pfvf->bpid[pfvf->queue_to_pfc_map[qidx]];
-#else
-			aq->cq.bpid = pfvf->bpid[0];
-#endif
+			bpid_idx = otx2_get_bpid_idx(pfvf, qidx);
+			aq->cq.bpid = pfvf->bpid[bpid_idx];
 
 			/* Set backpressure level is same as cq pass level */
 			aq->cq.bp = RQ_PASS_LVL_CQ(pfvf->hw.rq_skid, qset->rqe_cnt);
@@ -1378,6 +1377,7 @@ int otx2_aura_aq_init(struct otx2_nic *pfvf, int aura_id,
 {
 	struct npa_aq_enq_req *aq;
 	struct otx2_pool *pool;
+	u8 bpid_idx;
 	int err;
 
 	pool = &pfvf->qset.pool[pool_id];
@@ -1433,11 +1433,8 @@ int otx2_aura_aq_init(struct otx2_nic *pfvf, int aura_id,
 		 */
 		if (pfvf->nix_blkaddr == BLKADDR_NIX1)
 			aq->aura.bp_ena = 1;
-#ifdef CONFIG_DCB
-		aq->aura.nix0_bpid = pfvf->bpid[pfvf->queue_to_pfc_map[aura_id]];
-#else
-		aq->aura.nix0_bpid = pfvf->bpid[0];
-#endif
+		bpid_idx = otx2_get_bpid_idx(pfvf, aura_id);
+		aq->aura.nix0_bpid = pfvf->bpid[bpid_idx];
 
 		/* Set backpressure level for RQ's Aura */
 		aq->aura.bp = RQ_BP_LVL_AURA;
@@ -1510,7 +1507,8 @@ int otx2_pool_aq_init(struct otx2_nic *pfvf, u16 pool_id,
 	if (type != AURA_NIX_RQ)
 		return 0;
 
-	if (!test_bit(pool_id, pfvf->af_xdp_zc_qidx)) {
+	if (!pfvf->af_xdp_zc_qidx ||
+	    !test_bit(pool_id, pfvf->af_xdp_zc_qidx)) {
 		pp_params.order = get_order(buf_size);
 		pp_params.flags = PP_FLAG_DMA_MAP;
 		pp_params.pool_size = min(OTX2_PAGE_POOL_SZ, numptrs);

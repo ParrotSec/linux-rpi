@@ -221,7 +221,10 @@ static int vl53l0x_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
+		if (!iio_device_claim_direct(indio_dev))
+			return -EBUSY;
 		ret = vl53l0x_read_proximity(data, chan, val);
+		iio_device_release_direct(indio_dev);
 		if (ret < 0)
 			return ret;
 
@@ -392,7 +395,7 @@ static int vl53l0x_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id vl53l0x_id[] = {
-	{ "vl53l0x" },
+	{ .name = "vl53l0x" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, vl53l0x_id);

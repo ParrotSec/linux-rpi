@@ -24,18 +24,9 @@ Reviewed-by: Ian Rogers <irogers@google.com>
  tools/tracing/rtla/tests/timerlat.t |  4 ++--
  2 files changed, 21 insertions(+), 14 deletions(-)
 
-diff --git a/tools/tracing/rtla/Makefile b/tools/tracing/rtla/Makefile
-index 45690ee14544..f54da7be735d 100644
 --- a/tools/tracing/rtla/Makefile
 +++ b/tools/tracing/rtla/Makefile
-@@ -66,30 +66,37 @@ ifeq ($(config),1)
-   include Makefile.config
- endif
- 
-+INCLUDES	= -I$(OUTPUT)src
-+
- CFLAGS		+= $(INCLUDES) $(LIB_INCLUDES)
- 
+@@ -95,25 +95,30 @@
  export CFLAGS OUTPUT srctree
  
  ifeq ($(BUILD_BPF_SKEL),1)
@@ -74,16 +65,16 @@ index 45690ee14544..f54da7be735d 100644
  	$(Q)echo "BPF skeleton support is disabled, skipping tests/bpf/bpf_action_map.o"
  endif
  
-@@ -103,7 +110,7 @@ static: $(RTLA_IN)
+@@ -127,7 +132,7 @@
  rtla.%: fixdep FORCE
  	make -f $(srctree)/tools/build/Makefile.build dir=. $@
  
--$(RTLA_IN): fixdep FORCE src/timerlat.skel.h
-+$(RTLA_IN): fixdep FORCE $(OUTPUT)src/timerlat.skel.h
+-$(RTLA_IN): fixdep FORCE src/timerlat.skel.h $(LIBSUBCMD_INCLUDES)
++$(RTLA_IN): fixdep FORCE $(OUTPUT)src/timerlat.skel.h $(LIBSUBCMD_INCLUDES)
  	make $(build)=rtla
  
- clean: doc_clean fixdep-clean
-@@ -111,10 +118,10 @@ clean: doc_clean fixdep-clean
+ $(LIBSUBCMD_OUTPUT):
+@@ -163,10 +168,10 @@
  	$(Q)find . -name '*.o' -delete -o -name '\.*.cmd' -delete -o -name '\.*.d' -delete
  	$(Q)rm -f rtla rtla-static fixdep FEATURE-DUMP rtla-*
  	$(Q)rm -rf feature
@@ -97,22 +88,3 @@ index 45690ee14544..f54da7be735d 100644
 -examples: example/timerlat_bpf_action.o
 +examples: $(OUTPUT)example/timerlat_bpf_action.o
  .PHONY: FORCE clean check
-diff --git a/tools/tracing/rtla/tests/timerlat.t b/tools/tracing/rtla/tests/timerlat.t
-index fd4935fd7b49..e0f3fc4df655 100644
---- a/tools/tracing/rtla/tests/timerlat.t
-+++ b/tools/tracing/rtla/tests/timerlat.t
-@@ -74,12 +74,12 @@ then
- 	# Test BPF action program properly in BPF mode
- 	[ -z "$BPFTOOL" ] && BPFTOOL=bpftool
- 	check "hist with BPF action program (BPF mode)" \
--		"timerlat hist -T 2 --bpf-action tests/bpf/bpf_action_map.o --on-threshold shell,command='$BPFTOOL map dump name rtla_test_map'" \
-+		"timerlat hist -T 2 --bpf-action ${OUTPUT}tests/bpf/bpf_action_map.o --on-threshold shell,command='$BPFTOOL map dump name rtla_test_map'" \
- 		2 '"value": 42'
- else
- 	# Test BPF action program failure in non-BPF mode
- 	check "hist with BPF action program (non-BPF mode)" \
--		"timerlat hist -T 2 --bpf-action tests/bpf/bpf_action_map.o" \
-+		"timerlat hist -T 2 --bpf-action ${OUTPUT}tests/bpf/bpf_action_map.o" \
- 		1 "BPF actions are not supported in tracefs-only mode"
- fi
- done

@@ -1,4 +1,4 @@
-Package: linux-image@source_suffix@-@arch@-signed-template
+Package: @signedtemplate_source@-template
 Meta-Rules-Target: signed-template
 Build-Profiles: <!pkg.linux.nokernel>
 Depends: dpkg-dev, python3:any, ${misc:Depends}

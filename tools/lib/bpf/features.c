@@ -577,10 +577,10 @@ static int probe_ldimm64_full_range_off(int token_fd)
 static int probe_uprobe_syscall(int token_fd)
 {
 	/*
-	 * If kernel supports uprobe() syscall, it will return -ENXIO when called
+	 * If kernel supports uprobe() syscall, it will return -EPROTO when called
 	 * from the outside of a kernel-generated uprobe trampoline.
 	 */
-	return syscall(__NR_uprobe) < 0 && errno == ENXIO;
+	return syscall(__NR_uprobe) < 0 && errno == EPROTO;
 }
 #else
 static int probe_uprobe_syscall(int token_fd)
@@ -613,6 +613,11 @@ static int probe_kern_btf_layout(int token_fd)
 
 	return probe_fd(libbpf__load_raw_btf_hdr(&hdr, (char *)types, strs,
 						 (char *)layout, token_fd));
+}
+
+static int probe_bpf_syscall_common_attrs(int token_fd)
+{
+	return probe_sys_bpf_ext();
 }
 
 typedef int (*feature_probe_fn)(int /* token_fd */);
@@ -698,6 +703,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_LAYOUT] = {
 		"kernel supports BTF layout", probe_kern_btf_layout,
+	},
+	[FEAT_BPF_SYSCALL_COMMON_ATTRS] = {
+		"BPF syscall common attributes support", probe_bpf_syscall_common_attrs,
 	},
 };
 

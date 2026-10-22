@@ -5,10 +5,10 @@
  *  Copyright (C) 2024 Thomas Weißschuh <linux@weissschuh.net>
  */
 
+#include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/hwmon.h>
 #include <linux/math.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/cros_ec_commands.h>
@@ -25,6 +25,7 @@
 
 struct cros_ec_hwmon_priv {
 	struct cros_ec_device *cros_ec;
+	struct device *hwmon_dev;
 	const char *temp_sensor_names[EC_TEMP_SENSOR_ENTRIES + EC_TEMP_SENSOR_B_ENTRIES];
 	u8 usable_fans;
 	bool fan_control_supported;
@@ -402,6 +403,8 @@ static int cros_ec_hwmon_cooling_get_cur_state(struct thermal_cooling_device *cd
 	u8 read_val;
 	int ret;
 
+	guard(hwmon_lock)(priv->hwmon_priv->hwmon_dev);
+
 	ret = cros_ec_hwmon_read_pwm_value(priv->hwmon_priv->cros_ec, priv->index, &read_val);
 	if (ret)
 		return ret;
@@ -414,6 +417,8 @@ static int cros_ec_hwmon_cooling_set_cur_state(struct thermal_cooling_device *cd
 					       unsigned long val)
 {
 	const struct cros_ec_hwmon_cooling_priv *priv = cdev->devdata;
+
+	guard(hwmon_lock)(priv->hwmon_priv->hwmon_dev);
 
 	return cros_ec_hwmon_write_pwm_input(priv->hwmon_priv->cros_ec, priv->index, val);
 }
@@ -532,8 +537,8 @@ static void cros_ec_hwmon_register_fan_cooling_devices(struct device *dev,
 
 		cpriv->hwmon_priv = priv;
 		cpriv->index = i;
-		cdev = devm_thermal_of_cooling_device_register(dev, NULL, type, cpriv,
-							       &cros_ec_thermal_cooling_ops);
+		cdev = devm_thermal_cooling_device_register(dev, type, cpriv,
+							    &cros_ec_thermal_cooling_ops);
 		if (IS_ERR(cdev)) {
 			dev_warn(dev, "failed to register fan %zu as a cooling device: %pe\n", i,
 				 cdev);
@@ -548,7 +553,6 @@ static int cros_ec_hwmon_probe(struct platform_device *pdev)
 	struct cros_ec_dev *ec_dev = dev_get_drvdata(dev->parent);
 	struct cros_ec_device *cros_ec = ec_dev->ec_dev;
 	struct cros_ec_hwmon_priv *priv;
-	struct device *hwmon_dev;
 	u8 thermal_version;
 	int ret;
 
@@ -571,13 +575,17 @@ static int cros_ec_hwmon_probe(struct platform_device *pdev)
 	priv->fan_control_supported = cros_ec_hwmon_probe_fan_control_supported(priv->cros_ec);
 	priv->temp_threshold_supported = is_cros_ec_cmd_available(priv->cros_ec,
 								  EC_CMD_THERMAL_GET_THRESHOLD, 1);
+
+	priv->hwmon_dev = devm_hwmon_device_register_with_info(dev, "cros_ec", priv,
+							       &cros_ec_hwmon_chip_info, NULL);
+	if (IS_ERR(priv->hwmon_dev))
+		return PTR_ERR(priv->hwmon_dev);
+
 	cros_ec_hwmon_register_fan_cooling_devices(dev, priv);
 
-	hwmon_dev = devm_hwmon_device_register_with_info(dev, "cros_ec", priv,
-							 &cros_ec_hwmon_chip_info, NULL);
 	platform_set_drvdata(pdev, priv);
 
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	return 0;
 }
 
 static int cros_ec_hwmon_suspend(struct platform_device *pdev, pm_message_t state)
@@ -654,9 +662,10 @@ static int cros_ec_hwmon_resume(struct platform_device *pdev)
 }
 
 static const struct platform_device_id cros_ec_hwmon_id[] = {
-	{ DRV_NAME, 0 },
-	{}
+	{ .name = DRV_NAME },
+	{ }
 };
+MODULE_DEVICE_TABLE(platform, cros_ec_hwmon_id);
 
 static struct platform_driver cros_ec_hwmon_driver = {
 	.driver.name	= DRV_NAME,
@@ -667,7 +676,6 @@ static struct platform_driver cros_ec_hwmon_driver = {
 };
 module_platform_driver(cros_ec_hwmon_driver);
 
-MODULE_DEVICE_TABLE(platform, cros_ec_hwmon_id);
 MODULE_DESCRIPTION("ChromeOS EC Hardware Monitoring Driver");
 MODULE_AUTHOR("Thomas Weißschuh <linux@weissschuh.net");
 MODULE_LICENSE("GPL");

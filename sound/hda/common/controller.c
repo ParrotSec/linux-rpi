@@ -491,9 +491,9 @@ static int azx_get_time_info(struct snd_pcm_substream *substream,
 			struct snd_pcm_audio_tstamp_config *audio_tstamp_config,
 			struct snd_pcm_audio_tstamp_report *audio_tstamp_report)
 {
+	struct system_device_crosststamp xtstamp = { .clock_id = CLOCK_REALTIME };
 	struct azx_dev *azx_dev = get_azx_dev(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct system_device_crosststamp xtstamp;
 	int ret;
 	u64 nsec;
 
@@ -527,7 +527,7 @@ static int azx_get_time_info(struct snd_pcm_substream *substream,
 			break;
 
 		default:
-			*system_ts = ktime_to_timespec64(xtstamp.sys_realtime);
+			*system_ts = ktime_to_timespec64(xtstamp.sys_systime);
 			break;
 
 		}
@@ -586,11 +586,11 @@ static int azx_pcm_open(struct snd_pcm_substream *substream)
 	snd_hda_codec_pcm_get(apcm->info);
 	mutex_lock(&chip->open_mutex);
 	azx_dev = azx_assign_device(chip, substream);
-	trace_azx_pcm_open(chip, azx_dev);
 	if (azx_dev == NULL) {
 		err = -EBUSY;
 		goto unlock;
 	}
+	trace_azx_pcm_open(chip, azx_dev);
 	runtime->private_data = azx_dev;
 
 	runtime->hw = azx_pcm_hw;

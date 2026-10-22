@@ -23,7 +23,6 @@
 #include "xfs_attr_sf.h"
 #include "xfs_bmap.h"
 #include "xfs_defer.h"
-#include "xfs_log.h"
 #include "xfs_xattr.h"
 #include "xfs_parent.h"
 #include "xfs_trans_space.h"
@@ -194,7 +193,7 @@ xfs_parent_addname(
 	const struct xfs_name	*parent_name,
 	struct xfs_inode	*child)
 {
-	int			error;
+	int			error, local;
 
 	error = xfs_parent_iread_extents(tp, child);
 	if (error)
@@ -202,7 +201,11 @@ xfs_parent_addname(
 
 	xfs_inode_to_parent_rec(&ppargs->rec, dp);
 	xfs_parent_da_args_init(&ppargs->args, tp, &ppargs->rec, child,
-			child->i_ino, parent_name);
+			I_INO(child), parent_name);
+
+	/* Growing the attr fork needs a real reservation in args->total. */
+	ppargs->args.total = xfs_attr_calc_size(&ppargs->args, &local);
+	ASSERT(local);
 
 	return xfs_attr_setname(&ppargs->args, 0);
 }
@@ -224,7 +227,7 @@ xfs_parent_removename(
 
 	xfs_inode_to_parent_rec(&ppargs->rec, dp);
 	xfs_parent_da_args_init(&ppargs->args, tp, &ppargs->rec, child,
-			child->i_ino, parent_name);
+			I_INO(child), parent_name);
 
 	return xfs_attr_removename(&ppargs->args);
 }
@@ -240,7 +243,7 @@ xfs_parent_replacename(
 	const struct xfs_name	*new_name,
 	struct xfs_inode	*child)
 {
-	int			error;
+	int			error, local;
 
 	error = xfs_parent_iread_extents(tp, child);
 	if (error)
@@ -248,7 +251,11 @@ xfs_parent_replacename(
 
 	xfs_inode_to_parent_rec(&ppargs->rec, old_dp);
 	xfs_parent_da_args_init(&ppargs->args, tp, &ppargs->rec, child,
-			child->i_ino, old_name);
+			I_INO(child), old_name);
+
+	/* Growing the attr fork needs a real reservation in args->total. */
+	ppargs->args.total = xfs_attr_calc_size(&ppargs->args, &local);
+	ASSERT(local);
 
 	xfs_inode_to_parent_rec(&ppargs->new_rec, new_dp);
 
@@ -312,7 +319,7 @@ xfs_parent_lookup(
 	struct xfs_da_args		*scratch)
 {
 	memset(scratch, 0, sizeof(struct xfs_da_args));
-	xfs_parent_da_args_init(scratch, tp, pptr, ip, ip->i_ino, parent_name);
+	xfs_parent_da_args_init(scratch, tp, pptr, ip, I_INO(ip), parent_name);
 	return xfs_attr_get_ilocked(scratch);
 }
 

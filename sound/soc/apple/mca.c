@@ -210,10 +210,10 @@ static void mca_fe_early_trigger(struct snd_pcm_substream *substream, int cmd,
 			   SERDES_STATUS_EN | SERDES_STATUS_RST,
 			   SERDES_STATUS_RST);
 		/*
-		 * Experiments suggest that it takes at most ~1 us
-		 * for the bit to clear, so wait 2 us for good measure.
+		 * The SERDES cluster needs a bit of time to reset itself
+		 * and settle before we start poking it. This is... slow...
 		 */
-		udelay(2);
+		udelay(25);
 		WARN_ON(readl_relaxed(cl->base + serdes_unit + REG_SERDES_STATUS) &
 			SERDES_STATUS_RST);
 		mca_modify(cl, serdes_conf, SERDES_CONF_SYNC_SEL,
@@ -307,7 +307,7 @@ static bool mca_fe_clocks_in_use(struct mca_cluster *cl)
 	struct mca_cluster *be_cl;
 	int stream, i;
 
-	mutex_lock(&mca->port_mutex);
+	guard(mutex)(&mca->port_mutex);
 	for (i = 0; i < mca->nclusters; i++) {
 		be_cl = &mca->clusters[i];
 
@@ -316,12 +316,10 @@ static bool mca_fe_clocks_in_use(struct mca_cluster *cl)
 
 		for_each_pcm_streams(stream) {
 			if (be_cl->clocks_in_use[stream]) {
-				mutex_unlock(&mca->port_mutex);
 				return true;
 			}
 		}
 	}
-	mutex_unlock(&mca->port_mutex);
 	return false;
 }
 
@@ -765,9 +763,8 @@ static int mca_be_startup(struct snd_pcm_substream *substream,
 		       cl->base + REG_PORT_CLOCK_SEL);
 	writel_relaxed(PORT_DATA_SEL_TXA(fe_cl->no),
 		       cl->base + REG_PORT_DATA_SEL);
-	mutex_lock(&mca->port_mutex);
-	cl->port_driver = fe_cl->no;
-	mutex_unlock(&mca->port_mutex);
+	scoped_guard(mutex, &mca->port_mutex)
+		cl->port_driver = fe_cl->no;
 	cl->port_started[substream->stream] = true;
 
 	return 0;
@@ -788,9 +785,8 @@ static void mca_be_shutdown(struct snd_pcm_substream *substream,
 		 */
 		writel_relaxed(0, cl->base + REG_PORT_ENABLES);
 		writel_relaxed(0, cl->base + REG_PORT_DATA_SEL);
-		mutex_lock(&mca->port_mutex);
-		cl->port_driver = -1;
-		mutex_unlock(&mca->port_mutex);
+		scoped_guard(mutex, &mca->port_mutex)
+			cl->port_driver = -1;
 	}
 }
 

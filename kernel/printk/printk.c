@@ -188,7 +188,7 @@ static int __init control_devkmsg(char *str)
 	/*
 	 * Sysctl cannot change it anymore. The kernel command line setting of
 	 * this parameter is to force the setting to be permanent throughout the
-	 * runtime of the system. This is a precation measure against userspace
+	 * runtime of the system. This is a precautionary measure against userspace
 	 * trying to be a smarta** and attempting to change it up on us.
 	 */
 	devkmsg_log |= DEVKMSG_LOG_MASK_LOCK;
@@ -1975,7 +1975,7 @@ int console_lock_spinning_disable_and_check(int cookie)
  * the current owner is running and cannot reschedule until it
  * is ready to lose the lock.
  *
- * Return: 1 if we got the lock, 0 othrewise
+ * Return: 1 if we got the lock, 0 otherwise
  */
 static int console_trylock_spinning(void)
 {
@@ -3264,10 +3264,8 @@ static bool console_flush_one_record(bool do_cond_resched, u64 *next_seq, bool *
 		if (flags & CON_NBCON) {
 			progress = nbcon_legacy_emit_next_record(con, handover, cookie,
 								 !do_cond_resched);
-			printk_seq = nbcon_seq_read(con);
 		} else {
 			progress = console_emit_next_record(con, handover, cookie);
-			printk_seq = con->seq;
 		}
 
 		/*
@@ -3277,6 +3275,15 @@ static bool console_flush_one_record(bool do_cond_resched, u64 *next_seq, bool *
 		if (*handover)
 			goto fail;
 
+		/*
+		 * @con can be used here now that it is certain that this
+		 * context is still holding the SRCU read lock.
+		 */
+		if (flags & CON_NBCON)
+			printk_seq = nbcon_seq_read(con);
+		else
+			printk_seq = con->seq;
+
 		/* Track the next of the highest seq flushed. */
 		if (printk_seq > *next_seq)
 			*next_seq = printk_seq;
@@ -3285,7 +3292,7 @@ static bool console_flush_one_record(bool do_cond_resched, u64 *next_seq, bool *
 			continue;
 
 		/*
-		 * An usable console made a progress. There might still be
+		 * A usable console made progress. There might still be
 		 * pending messages.
 		 */
 		*try_again = true;
@@ -3725,7 +3732,7 @@ static bool legacy_kthread_create(void)
 	lockdep_assert_console_list_lock_held();
 
 	kt = kthread_run(legacy_kthread_func, NULL, "pr/legacy");
-	if (WARN_ON(IS_ERR(kt))) {
+	if (IS_ERR(kt)) {
 		pr_err("failed to start legacy printing thread\n");
 		return false;
 	}

@@ -37,7 +37,6 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
@@ -331,6 +330,7 @@ static int srf04_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_err(data->dev, "pm_runtime_set_active: %d\n", ret);
 			iio_device_unregister(indio_dev);
+			return ret;
 		}
 
 		pm_runtime_enable(data->dev);

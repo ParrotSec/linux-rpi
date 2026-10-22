@@ -685,10 +685,18 @@ static int vega10_patch_voltage_dependency_tables_with_lookup_table(
 			case 3: vdt = table_info->vdd_dep_on_pixclk; break;
 			case 4: vdt = table_info->vdd_dep_on_dispclk; break;
 			case 5: vdt = table_info->vdd_dep_on_phyclk; break;
+			default:
+				continue;
 		}
 
 		for (entry_id = 0; entry_id < vdt->count; entry_id++) {
 			voltage_id = vdt->entries[entry_id].vddInd;
+			if (voltage_id >= table_info->vddc_lookup_table->count) {
+				pr_err("amdgpu: clk_dep[%u][%u] vddc index %u out of bounds (%u)\n",
+				       i, entry_id, voltage_id,
+				       table_info->vddc_lookup_table->count);
+				return -EINVAL;
+			}
 			vdt->entries[entry_id].vddc =
 					table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
 		}
@@ -696,22 +704,47 @@ static int vega10_patch_voltage_dependency_tables_with_lookup_table(
 
 	for (entry_id = 0; entry_id < mm_table->count; ++entry_id) {
 		voltage_id = mm_table->entries[entry_id].vddcInd;
+		if (voltage_id >= table_info->vddc_lookup_table->count) {
+			pr_err("amdgpu: mm[%u] vddc index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddc_lookup_table->count);
+			return -EINVAL;
+		}
 		mm_table->entries[entry_id].vddc =
 			table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
 	}
 
 	for (entry_id = 0; entry_id < mclk_table->count; ++entry_id) {
 		voltage_id = mclk_table->entries[entry_id].vddInd;
+		if (voltage_id >= table_info->vddc_lookup_table->count) {
+			pr_err("amdgpu: mclk[%u] vddc index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddc_lookup_table->count);
+			return -EINVAL;
+		}
 		mclk_table->entries[entry_id].vddc =
 				table_info->vddc_lookup_table->entries[voltage_id].us_vdd;
+
 		voltage_id = mclk_table->entries[entry_id].vddciInd;
+		if (voltage_id >= table_info->vddci_lookup_table->count) {
+			pr_err("amdgpu: mclk[%u] vddci index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddci_lookup_table->count);
+			return -EINVAL;
+		}
 		mclk_table->entries[entry_id].vddci =
 				table_info->vddci_lookup_table->entries[voltage_id].us_vdd;
+
 		voltage_id = mclk_table->entries[entry_id].mvddInd;
+		if (voltage_id >= table_info->vddmem_lookup_table->count) {
+			pr_err("amdgpu: mclk[%u] vddmem index %u out of bounds (%u)\n",
+			       entry_id, voltage_id,
+			       table_info->vddmem_lookup_table->count);
+			return -EINVAL;
+		}
 		mclk_table->entries[entry_id].mvdd =
 				table_info->vddmem_lookup_table->entries[voltage_id].us_vdd;
 	}
-
 
 	return 0;
 
@@ -814,9 +847,6 @@ static int vega10_set_private_data_based_on_pptable(struct pp_hwmgr *hwmgr)
 
 static int vega10_hwmgr_backend_fini(struct pp_hwmgr *hwmgr)
 {
-	kfree(hwmgr->dyn_state.vddc_dep_on_dal_pwrl);
-	hwmgr->dyn_state.vddc_dep_on_dal_pwrl = NULL;
-
 	kfree(hwmgr->backend);
 	hwmgr->backend = NULL;
 
@@ -4386,20 +4416,6 @@ static uint32_t vega10_get_fan_control_mode(struct pp_hwmgr *hwmgr)
 		return AMD_FAN_CTRL_AUTO;
 }
 
-static int vega10_get_dal_power_level(struct pp_hwmgr *hwmgr,
-		struct amd_pp_simple_clock_info *info)
-{
-	struct phm_ppt_v2_information *table_info =
-			(struct phm_ppt_v2_information *)hwmgr->pptable;
-	struct phm_clock_and_voltage_limits *max_limits =
-			&table_info->max_clock_voltage_on_ac;
-
-	info->engine_max_clock = max_limits->sclk;
-	info->memory_max_clock = max_limits->mclk;
-
-	return 0;
-}
-
 static void vega10_get_sclks(struct pp_hwmgr *hwmgr,
 		struct pp_clock_levels_with_latency *clocks)
 {
@@ -5644,7 +5660,6 @@ static const struct pp_hwmgr_func vega10_hwmgr_funcs = {
 	.set_fan_control_mode = vega10_set_fan_control_mode,
 	.get_fan_control_mode = vega10_get_fan_control_mode,
 	.read_sensor = vega10_read_sensor,
-	.get_dal_power_level = vega10_get_dal_power_level,
 	.get_clock_by_type_with_latency = vega10_get_clock_by_type_with_latency,
 	.get_clock_by_type_with_voltage = vega10_get_clock_by_type_with_voltage,
 	.set_watermarks_for_clocks_ranges = vega10_set_watermarks_for_clocks_ranges,

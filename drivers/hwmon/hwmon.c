@@ -371,18 +371,17 @@ static ssize_t pec_store(struct device *dev, struct device_attribute *devattr,
 	 * handling is not required.
 	 */
 	hwdev = to_hwmon_device(hdev);
-	guard(mutex)(&hwdev->lock);
-	if (hwdev->chip->ops->write) {
-		err = hwdev->chip->ops->write(hdev, hwmon_chip, hwmon_chip_pec, 0, val);
-		if (err && err != -EOPNOTSUPP)
-			goto put;
+	scoped_guard(mutex, &hwdev->lock) {
+		if (hwdev->chip->ops->write) {
+			err = hwdev->chip->ops->write(hdev, hwmon_chip, hwmon_chip_pec, 0, val);
+			if (err && err != -EOPNOTSUPP)
+				goto put;
+		}
+		if (!val)
+			client->flags &= ~I2C_CLIENT_PEC;
+		else
+			client->flags |= I2C_CLIENT_PEC;
 	}
-
-	if (!val)
-		client->flags &= ~I2C_CLIENT_PEC;
-	else
-		client->flags |= I2C_CLIENT_PEC;
-
 	err = count;
 put:
 	put_device(hdev);
@@ -573,6 +572,7 @@ static const char * const hwmon_chip_attrs[] = {
 	[hwmon_chip_curr_reset_history] = "curr_reset_history",
 	[hwmon_chip_power_reset_history] = "power_reset_history",
 	[hwmon_chip_update_interval] = "update_interval",
+	[hwmon_chip_update_interval_us] = "update_interval_us",
 	[hwmon_chip_alarms] = "alarms",
 	[hwmon_chip_samples] = "samples",
 	[hwmon_chip_curr_samples] = "curr_samples",

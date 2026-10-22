@@ -1424,8 +1424,8 @@
 &usb_1_qmpphy {
 	status = "okay";
 
-	vdda-phy-supply = <&vreg_l9a_1p2>;
-	vdda-pll-supply = <&vreg_l18a_0p92>;
+	vdda-phy-supply = <&vreg_l18a_0p92>;
+	vdda-pll-supply = <&vreg_l9a_1p2>;
 };
 
 &usb_1_qmpphy_out {
@@ -1451,8 +1451,8 @@
 &usb_2_qmpphy {
 	status = "okay";
 
-	vdda-phy-supply = <&vreg_l9a_1p2>;
-	vdda-pll-supply = <&vreg_l18a_0p92>;
+	vdda-phy-supply = <&vreg_l18a_0p92>;
+	vdda-pll-supply = <&vreg_l9a_1p2>;
 };
 
 &vamacro {
@@ -1498,6 +1498,8 @@
 		power-role = "source";
 		data-role = "dual";
 		self-powered;
+
+		vbus-supply = <&pm8150b_vbus>;
 
 		source-pdos = <PDO_FIXED(5000, 3000,
 					 PDO_FIXED_DUAL_ROLE |

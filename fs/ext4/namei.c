@@ -145,9 +145,9 @@ static struct buffer_head *__ext4_read_dirblock(struct inode *inode,
 	if (IS_ERR(bh)) {
 		__ext4_warning(inode->i_sb, func, line,
 			       "inode #%llu: lblock %lu: comm %s: "
-			       "error %ld reading directory block",
+			       "error %pe reading directory block",
 			       inode->i_ino, (unsigned long)block,
-			       current->comm, PTR_ERR(bh));
+			       current->comm, bh);
 
 		return bh;
 	}
@@ -1467,6 +1467,8 @@ int ext4_search_dir(struct buffer_head *bh, char *search_buf, int buf_size,
 		/* this code is executed quadratically often */
 		/* do minimal checking `by hand' */
 		if (de->name + de->name_len <= dlimit &&
+		    (!ext4_hash_in_dirent(dir) ||
+		     (char *)de + ext4_dir_rec_len(de->name_len, dir) <= dlimit) &&
 		    ext4_match(dir, fname, de)) {
 			/* found a match - just to be sure, do
 			 * a full check */

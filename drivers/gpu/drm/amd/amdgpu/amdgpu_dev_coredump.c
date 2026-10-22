@@ -22,8 +22,8 @@
  *
  */
 
-#include <generated/utsrelease.h>
 #include <linux/devcoredump.h>
+#include <linux/utsname.h>
 #include <drm/drm_exec.h>
 #include "amdgpu_dev_coredump.h"
 #include "atom.h"
@@ -234,6 +234,9 @@ amdgpu_devcoredump_print_ibs(struct drm_printer *p,
 			drm_printf(p, "\nIB #%d 0x%llx %d dw\n", i,
 				   coredump->ibs[i].gpu_addr,
 				   coredump->ibs[i].ib_size_dw);
+
+			for (int j = 0; j < coredump->ibs[i].ib_size_dw; j++)
+				drm_printf(p, "0xffffffff\n");
 		}
 		return;
 	}
@@ -295,10 +298,10 @@ amdgpu_devcoredump_print_ibs(struct drm_printer *p,
 			amdgpu_res_first(abo->tbo.resource, offset,
 					 coredump->ibs[i].ib_size_dw * 4, &cursor);
 			while (cursor.remaining) {
-				amdgpu_device_mm_access(adev, cursor.start / 4,
-							&ib_content[off], cursor.size / 4,
+				amdgpu_device_mm_access(adev, cursor.start,
+							&ib_content[off], cursor.size,
 							false);
-				off += cursor.size;
+				off += cursor.size / 4;
 				amdgpu_res_next(&cursor, cursor.size);
 			}
 			emit_content = true;
@@ -352,7 +355,7 @@ amdgpu_devcoredump_format(char *buffer, size_t count, struct amdgpu_coredump_inf
 
 	drm_printf(&p, "**** AMDGPU Device Coredump ****\n");
 	drm_printf(&p, "version: " AMDGPU_COREDUMP_VERSION "\n");
-	drm_printf(&p, "kernel: " UTS_RELEASE "\n");
+	drm_printf(&p, "kernel: %s\n", init_utsname()->release);
 	drm_printf(&p, "module: " KBUILD_MODNAME "\n");
 	drm_printf(&p, "time: %ptSp\n", &coredump->reset_time);
 	drm_printf(&p, "pasid: %u\n", coredump->pasid);
@@ -635,7 +638,7 @@ void amdgpu_coredump(struct amdgpu_device *adev, bool skip_vram_check,
 	 */
 	adev->coredump = coredump;
 	/* Kick off coredump formatting to a worker thread. */
-	queue_work(system_unbound_wq, &adev->coredump_work);
+	queue_work(system_dfl_wq, &adev->coredump_work);
 
 	drm_info(dev, "AMDGPU device coredump file has been created\n");
 	drm_info(dev, "Check your /sys/class/drm/card%d/device/devcoredump/data\n",

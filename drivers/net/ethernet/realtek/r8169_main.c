@@ -229,7 +229,7 @@ static const struct pci_device_id rtl8169_pci_tbl[] = {
 	{ PCI_VDEVICE(REALTEK,	0x2502) },
 	{ PCI_VDEVICE(REALTEK,	0x2600) },
 	{ PCI_VDEVICE(REALTEK,	0x8129) },
-	{ PCI_VDEVICE(REALTEK,	0x8136), RTL_CFG_NO_GBIT },
+	{ PCI_VDEVICE(REALTEK,	0x8136), .driver_data = RTL_CFG_NO_GBIT },
 	{ PCI_VDEVICE(REALTEK,	0x8161) },
 	{ PCI_VDEVICE(REALTEK,	0x8162) },
 	{ PCI_VDEVICE(REALTEK,	0x8167) },
@@ -240,15 +240,15 @@ static const struct pci_device_id rtl8169_pci_tbl[] = {
 	{ PCI_VDEVICE(DLINK,	0x4302) },
 	{ PCI_VDEVICE(AT,	0xc107) },
 	{ PCI_VDEVICE(USR,	0x0116) },
-	{ PCI_VENDOR_ID_LINKSYS, 0x1032, PCI_ANY_ID, 0x0024 },
-	{ 0x0001, 0x8168, PCI_ANY_ID, 0x2410 },
+	{ PCI_VDEVICE_SUB(LINKSYS, 0x1032, PCI_ANY_ID, 0x0024) },
+	{ PCI_DEVICE_SUB(0x0001, 0x8168, PCI_ANY_ID, 0x2410) },
 	{ PCI_VDEVICE(REALTEK,	0x8125) },
 	{ PCI_VDEVICE(REALTEK,	0x8126) },
 	{ PCI_VDEVICE(REALTEK,	0x8127) },
 	{ PCI_VDEVICE(REALTEK,	0x3000) },
 	{ PCI_VDEVICE(REALTEK,	0x5000) },
 	{ PCI_VDEVICE(REALTEK,	0x0e10) },
-	{}
+	{ }
 };
 
 MODULE_DEVICE_TABLE(pci, rtl8169_pci_tbl);
@@ -5483,6 +5483,12 @@ static int r8169_mdio_register(struct rtl8169_private *tp)
 	if (tp->mac_version == RTL_GIGA_MAC_VER_61)
 		phy_disable_eee_mode(tp->phydev,
 				     ETHTOOL_LINK_MODE_2500baseT_Full_BIT);
+
+	/* Keep EEE off but the version stays EEE-capable so that link-up
+	 * still clears the MAC TX-LPI bits.
+	 */
+	if (tp->mac_version == RTL_GIGA_MAC_VER_46)
+		phy_disable_eee(tp->phydev);
 
 	/* PHY will be woken up in rtl_open() */
 	phy_suspend(tp->phydev);

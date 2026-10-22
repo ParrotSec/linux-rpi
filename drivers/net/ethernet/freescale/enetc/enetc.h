@@ -16,6 +16,7 @@
 
 #include "enetc_hw.h"
 #include "enetc4_hw.h"
+#include "enetc_mailbox.h"
 
 #define ENETC_MAC_MAXFRM_SIZE	9600
 #define ENETC_MAX_MTU		(ENETC_MAC_MAXFRM_SIZE - \
@@ -257,12 +258,6 @@ static inline union enetc_rx_bd *enetc_rxbd_ext(union enetc_rx_bd *rxbd)
 	return ++rxbd;
 }
 
-struct enetc_msg_swbd {
-	void *vaddr;
-	dma_addr_t dma;
-	int size;
-};
-
 #define ENETC_REV1	0x1
 #define ENETC_REV4	0x4
 
@@ -302,6 +297,8 @@ struct enetc_si;
 struct enetc_si_ops {
 	int (*get_rss_table)(struct enetc_si *si, u32 *table, int count);
 	int (*set_rss_table)(struct enetc_si *si, const u32 *table, int count);
+	int (*setup_cbdr)(struct enetc_si *si);
+	void (*teardown_cbdr)(struct enetc_si *si);
 };
 
 /* PCI IEP device data */
@@ -311,6 +308,13 @@ struct enetc_si {
 	enum enetc_errata errata;
 
 	struct net_device *ndev; /* back ref. */
+
+	/* General-purpose lock serializing updates that must not race,
+	 * e.g. read-modify-write of shared hardware registers and of
+	 * selected priv->flags bits between the phylink link callbacks
+	 * and the ring (re)configuration path.
+	 */
+	spinlock_t gen_lock;
 
 	union {
 		struct enetc_cbdr cbd_ring; /* Only ENETC 1.0 */
@@ -327,8 +331,6 @@ struct enetc_si {
 	const struct enetc_drvdata *drvdata;
 	const struct enetc_si_ops *ops;
 
-	struct workqueue_struct *workqueue;
-	struct work_struct rx_mode_task;
 	struct dentry *debugfs_root;
 	struct enetc_msg_swbd msg; /* Only valid for VSI */
 };
@@ -422,6 +424,7 @@ enum enetc_active_offloads {
 enum enetc_flags_bit {
 	ENETC_TX_ONESTEP_TSTAMP_IN_PROGRESS = 0,
 	ENETC_TX_DOWN,
+	ENETC_RXBDR_CM,
 };
 
 /* interrupt coalescing modes */
@@ -490,14 +493,6 @@ struct enetc_ndev_priv {
 	u64 sysclk_freq; /* NETC system clock frequency */
 };
 
-/* Messaging */
-
-/* VF-PF set primary MAC address message format */
-struct enetc_msg_cmd_set_primary_mac {
-	struct enetc_msg_cmd_header header;
-	struct sockaddr mac;
-};
-
 #define ENETC_CBD(R, i)	(&(((struct enetc_cbd *)((R).bd_base))[i]))
 
 #define ENETC_CBDR_TIMEOUT	1000 /* usecs */
@@ -518,6 +513,7 @@ int enetc_get_driver_data(struct enetc_si *si);
 void enetc_add_mac_addr_ht_filter(struct enetc_mac_filter *filter,
 				  const unsigned char *addr);
 void enetc_reset_mac_addr_filter(struct enetc_mac_filter *filter);
+void enetc_set_congestion_mode(struct enetc_ndev_priv *priv, bool enable);
 
 int enetc_open(struct net_device *ndev);
 int enetc_close(struct net_device *ndev);
@@ -550,9 +546,8 @@ void enetc_mm_link_state_update(struct enetc_ndev_priv *priv, bool link);
 void enetc_mm_commit_preemptible_tcs(struct enetc_ndev_priv *priv);
 
 /* control buffer descriptor ring (CBDR) */
-int enetc_setup_cbdr(struct device *dev, struct enetc_hw *hw, int bd_count,
-		     struct enetc_cbdr *cbdr);
-void enetc_teardown_cbdr(struct enetc_cbdr *cbdr);
+int enetc_setup_cbdr(struct enetc_si *si);
+void enetc_teardown_cbdr(struct enetc_si *si);
 int enetc4_setup_cbdr(struct enetc_si *si);
 void enetc4_teardown_cbdr(struct enetc_si *si);
 int enetc_set_mac_flt_entry(struct enetc_si *si, int index,

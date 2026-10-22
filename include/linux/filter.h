@@ -59,8 +59,9 @@ struct ctl_table_header;
 #define BPF_REG_H	BPF_REG_9	/* hlen, callee-saved */
 
 /* Kernel hidden auxiliary/helper register. */
-#define BPF_REG_AX		MAX_BPF_REG
-#define MAX_BPF_EXT_REG		(MAX_BPF_REG + 1)
+#define BPF_REG_PARAMS		MAX_BPF_REG
+#define BPF_REG_AX		(MAX_BPF_REG + 1)
+#define MAX_BPF_EXT_REG		(MAX_BPF_REG + 2)
 #define MAX_BPF_JIT_REG		MAX_BPF_EXT_REG
 
 /* unused opcode to mark special call to bpf_tail_call() helper */
@@ -381,6 +382,61 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 
 /* Legacy alias */
 #define BPF_STX_XADD(SIZE, DST, SRC, OFF) BPF_ATOMIC_OP(SIZE, BPF_ADD, DST, SRC, OFF)
+
+/*
+ * Given a BPF_ATOMIC instruction @atomic_insn, return true if it is an
+ * atomic load or store, and false if it is a read-modify-write instruction.
+ */
+static inline bool
+bpf_atomic_is_load_store(const struct bpf_insn *atomic_insn)
+{
+	switch (atomic_insn->imm) {
+	case BPF_LOAD_ACQ:
+	case BPF_STORE_REL:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+ * A load-acquire is the only BPF_STX class instruction that reads into
+ * dst_reg from src_reg + off16, i.e. it has the operand roles of a BPF_LDX.
+ * Unlike bpf_atomic_is_load_store(), @insn is not assumed to be a BPF_ATOMIC
+ * instruction here, so that callers which walk all instruction classes can
+ * use this directly.
+ */
+static inline bool bpf_atomic_is_load_acq(const struct bpf_insn *insn)
+{
+	return BPF_CLASS(insn->code) == BPF_STX &&
+	       (BPF_MODE(insn->code) == BPF_ATOMIC ||
+		BPF_MODE(insn->code) == BPF_PROBE_ATOMIC) &&
+	       insn->imm == BPF_LOAD_ACQ;
+}
+
+/*
+ * Given an instruction @insn, return the number of the BPF register that a
+ * BPF_ATOMIC reads the value at its memory operand into, or -1 if there is
+ * no such register. That is the register a BPF_PROBE_ATOMIC has to clear when
+ * the access faults. Like bpf_atomic_is_load_acq(), @insn is not assumed to
+ * be a BPF_ATOMIC here.
+ */
+static inline int bpf_atomic_load_reg(const struct bpf_insn *insn)
+{
+	if (BPF_CLASS(insn->code) != BPF_STX ||
+	    (BPF_MODE(insn->code) != BPF_ATOMIC &&
+	     BPF_MODE(insn->code) != BPF_PROBE_ATOMIC))
+		return -1;
+
+	switch (insn->imm) {
+	case BPF_LOAD_ACQ:
+		return insn->dst_reg;
+	case BPF_CMPXCHG:
+		return BPF_REG_0;
+	default:
+		return (insn->imm & BPF_FETCH) ? insn->src_reg : -1;
+	}
+}
 
 /* Memory store, *(uint *) (dst_reg + off16) = imm32 */
 
@@ -747,6 +803,27 @@ static inline u32 bpf_prog_run_pin_on_cpu(const struct bpf_prog *prog,
 	ret = bpf_prog_run(prog, ctx);
 	migrate_enable();
 	return ret;
+}
+
+static inline bool is_stack_arg_ldx(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_LDX | BPF_MEM | BPF_DW) &&
+	       insn->src_reg == BPF_REG_PARAMS &&
+	       insn->off > 0 && insn->off % 8 == 0;
+}
+
+static inline bool is_stack_arg_st(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_ST | BPF_MEM | BPF_DW) &&
+	       insn->dst_reg == BPF_REG_PARAMS &&
+	       insn->off < 0 && insn->off % 8 == 0;
+}
+
+static inline bool is_stack_arg_stx(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_STX | BPF_MEM | BPF_DW) &&
+	       insn->dst_reg == BPF_REG_PARAMS &&
+	       insn->off < 0 && insn->off % 8 == 0;
 }
 
 #define BPF_SKB_CB_LEN QDISC_CB_PRIV_LEN
@@ -1160,6 +1237,7 @@ bool bpf_jit_inlines_helper_call(s32 imm);
 bool bpf_jit_supports_subprog_tailcalls(void);
 bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
+bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);
 bool bpf_jit_supports_exceptions(void);
 bool bpf_jit_supports_ptr_xchg(void);

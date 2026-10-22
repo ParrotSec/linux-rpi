@@ -19,9 +19,9 @@ int sysctl_sched_rt_period = 1000000;
 
 /*
  * part of the period that we allow rt tasks to run in us.
- * default: 0.95s
+ * default: 1s
  */
-int sysctl_sched_rt_runtime = 950000;
+int sysctl_sched_rt_runtime = 1000000;
 
 #ifdef CONFIG_SYSCTL
 static int sysctl_sched_rr_timeslice = (MSEC_PER_SEC * RR_TIMESLICE) / HZ;
@@ -1596,8 +1596,14 @@ static void check_preempt_equal_prio(struct rq *rq, struct task_struct *p)
 	resched_curr(rq);
 }
 
-static int balance_rt(struct rq *rq, struct task_struct *p, struct rq_flags *rf)
+static int balance_rt(struct rq *rq, struct rq_flags *rf)
 {
+	/*
+	 * Note, rq->donor may change during rq lock drops,
+	 * so don't re-use p across lock drops
+	 */
+	struct task_struct *p = rq->donor;
+
 	if (!on_rt_rq(&p->rt) && need_pull_rt_task(rq, p)) {
 		/*
 		 * This is OK, because current is on_cpu, which avoids it being
@@ -1623,7 +1629,8 @@ static void wakeup_preempt_rt(struct rq *rq, struct task_struct *p, int flags)
 	/*
 	 * XXX If we're preempted by DL, queue a push?
 	 */
-	if (p->sched_class != &rt_sched_class)
+	if (p->sched_class != &rt_sched_class ||
+	    donor->sched_class != &rt_sched_class)
 		return;
 
 	if (p->prio < donor->prio) {
@@ -1865,8 +1872,8 @@ static struct task_struct *pick_next_pushable_task(struct rq *rq)
 		return NULL;
 
 	plist_for_each_entry(i, head, pushable_tasks) {
-		/* make sure task isn't on_cpu (possible with proxy-exec) */
-		if (!task_on_cpu(rq, i)) {
+		/* skip tasks that cannot be migrated */
+		if (!task_on_cpu(rq, i) && !is_migration_disabled(i)) {
 			p = i;
 			break;
 		}

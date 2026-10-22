@@ -36,8 +36,8 @@
 #include <linux/firmware/broadcom/tee_bnxt_fw.h>
 #endif
 
-#define BNXT_DEFAULT_RX_COPYBREAK 256
-#define BNXT_MAX_RX_COPYBREAK 1024
+#define BNXT_MIN_RX_HDR_BUF	256
+#define BNXT_MAX_RX_HDR_BUF	1024
 
 extern struct list_head bnxt_block_cb_list;
 
@@ -789,7 +789,6 @@ struct nqe_cn {
 
 #define MAX_TPA		64
 #define MAX_TPA_P5	256
-#define MAX_TPA_P5_MASK	(MAX_TPA_P5 - 1)
 #define MAX_TPA_SEGS_P5	0x3f
 
 #if (BNXT_PAGE_SHIFT == 16)
@@ -993,6 +992,7 @@ struct bnxt_tx_ring_info {
 	u16			txq_index;
 	u8			tx_napi_idx;
 	u8			kick_pending;
+	struct tx_bd		*kick_txbd0;
 	struct bnxt_db_info	tx_db;
 
 	struct tx_bd		*tx_desc_ring[MAX_TX_PAGES];
@@ -2382,6 +2382,7 @@ struct bnxt {
 
 	u16			max_tpa_v2;
 	u16			max_tpa;
+	u16			max_tpa_roundup_size;
 	u32			rx_buf_size;
 	u32			rx_buf_use_size;	/* useable size */
 	u16			rx_offset;
@@ -2469,9 +2470,7 @@ struct bnxt {
 #define BNXT_STATE_ABORT_ERR	5
 #define BNXT_STATE_FW_FATAL_COND	6
 #define BNXT_STATE_DRV_REGISTERED	7
-#define BNXT_STATE_PCI_CHANNEL_IO_FROZEN	8
 #define BNXT_STATE_NAPI_DISABLED	9
-#define BNXT_STATE_L2_FILTER_RETRY	10
 #define BNXT_STATE_FW_ACTIVATE		11
 #define BNXT_STATE_RECOVER		12
 #define BNXT_STATE_FW_NON_FATAL_COND	13
@@ -2630,7 +2629,6 @@ struct bnxt {
 
 	struct work_struct	sp_task;
 	unsigned long		sp_event;
-#define BNXT_RX_MASK_SP_EVENT		0
 #define BNXT_RX_NTP_FLTR_SP_EVENT	1
 #define BNXT_LINK_CHNG_SP_EVENT		2
 #define BNXT_HWRM_EXEC_FWD_REQ_SP_EVENT	3

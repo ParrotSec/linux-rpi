@@ -1,0 +1,6 @@
+lib/modules/7.2.11+deb14-sparc64/config                   usr/lib/modules/7.2.11+deb14-sparc64
+lib/modules/7.2.11+deb14-sparc64/System.map               usr/lib/modules/7.2.11+deb14-sparc64
+# Keep list uptodate with debian/templates/modules.postrm.j2
+lib/modules/7.2.11+deb14-sparc64/modules.builtin          usr/lib/modules/7.2.11+deb14-sparc64
+lib/modules/7.2.11+deb14-sparc64/modules.builtin.modinfo  usr/lib/modules/7.2.11+deb14-sparc64
+lib/modules/7.2.11+deb14-sparc64/modules.order            usr/lib/modules/7.2.11+deb14-sparc64

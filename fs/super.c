@@ -24,6 +24,7 @@
 #include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/blkdev.h>
+#include <linux/memcontrol.h>
 #include <linux/mount.h>
 #include <linux/security.h>
 #include <linux/writeback.h>		/* for the emergency remount stuff */
@@ -102,7 +103,7 @@ static bool super_flags(const struct super_block *sb, unsigned int flags)
  * creation will succeed and SB_BORN is set by vfs_get_tree() or we're
  * woken and we'll see SB_DYING.
  *
- * The caller must have acquired a temporary reference on @sb->s_count.
+ * The caller must have acquired a temporary reference on @sb->s_passive.
  *
  * Return: The function returns true if SB_BORN was set and with
  *         s_umount held. The function returns false if SB_DYING was
@@ -328,7 +329,7 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	init_rwsem(&s->s_umount);
 	lockdep_set_class(&s->s_umount, &type->s_umount_key);
 	/*
-	 * sget() can have s_umount recursion.
+	 * sget_fc() can have s_umount recursion.
 	 *
 	 * When it cannot find a suitable sb, it allocates a new
 	 * one (this one), and tries again to find a suitable old
@@ -359,6 +360,7 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 		s->s_iflags |= SB_I_NODEV;
 	INIT_HLIST_NODE(&s->s_instances);
 	INIT_HLIST_BL_HEAD(&s->s_roots);
+	spin_lock_init(&s->s_roots_lock);
 	mutex_init(&s->s_sync_lock);
 	INIT_LIST_HEAD(&s->s_inodes);
 	spin_lock_init(&s->s_inode_list_lock);
@@ -366,7 +368,7 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	spin_lock_init(&s->s_inode_wblist_lock);
 	fserror_mount(s);
 
-	s->s_count = 1;
+	refcount_set(&s->s_passive, 1);
 	atomic_set(&s->s_active, 1);
 	mutex_init(&s->s_vfs_rename_mutex);
 	lockdep_set_class(&s->s_vfs_rename_mutex, &type->s_vfs_rename_key);
@@ -402,31 +404,26 @@ fail:
 /* Superblock refcounting  */
 
 /*
- * Drop a superblock's refcount.  The caller must hold sb_lock.
+ * Drop a superblock's passive reference.  Must be called WITHOUT sb_lock held;
+ * put_super() acquires sb_lock itself when the final reference is dropped.
  */
-static void __put_super(struct super_block *s)
+void put_super(struct super_block *s)
 {
-	if (!--s->s_count) {
+	if (refcount_dec_and_test(&s->s_passive)) {
+		struct file_system_type *type = s->s_type;
+
+		spin_lock(&sb_lock);
 		list_del_init(&s->s_list);
+		hlist_del_init(&s->s_instances);
+		spin_unlock(&sb_lock);
+
 		WARN_ON(s->s_dentry_lru.node);
 		WARN_ON(s->s_inode_lru.node);
 		WARN_ON(s->s_mounts);
 		call_rcu(&s->rcu, destroy_super_rcu);
+		/* The unlink above may touch type->fs_supers, so drop it last. */
+		put_filesystem(type);
 	}
-}
-
-/**
- *	put_super	-	drop a temporary reference to superblock
- *	@sb: superblock in question
- *
- *	Drops a temporary reference, frees superblock if there's no
- *	references left.
- */
-void put_super(struct super_block *sb)
-{
-	spin_lock(&sb_lock);
-	__put_super(sb);
-	spin_unlock(&sb_lock);
 }
 
 static void kill_super_notify(struct super_block *sb)
@@ -438,23 +435,16 @@ static void kill_super_notify(struct super_block *sb)
 		return;
 
 	/*
-	 * Remove it from @fs_supers so it isn't found by new
-	 * sget{_fc}() walkers anymore. Any concurrent mounter still
-	 * managing to grab a temporary reference is guaranteed to
-	 * already see SB_DYING and will wait until we notify them about
-	 * SB_DEAD.
+	 * Let concurrent mounts know that this thing is really dead.
+	 * sget_fc() skips SB_DEAD superblocks and calls test() under
+	 * sb_lock, so set it under sb_lock: once we return no test()
+	 * runs on this superblock anymore and none will start. Everyone
+	 * else already saw SB_DYING and either discarded the superblock
+	 * or waits for SB_DEAD.
 	 */
 	spin_lock(&sb_lock);
-	hlist_del_init(&sb->s_instances);
-	spin_unlock(&sb_lock);
-
-	/*
-	 * Let concurrent mounts know that this thing is really dead.
-	 * We don't need @sb->s_umount here as every concurrent caller
-	 * will see SB_DYING and either discard the superblock or wait
-	 * for SB_DEAD.
-	 */
 	super_wake(sb, SB_DEAD);
+	spin_unlock(&sb_lock);
 }
 
 /**
@@ -477,15 +467,10 @@ void deactivate_locked_super(struct super_block *s)
 
 		kill_super_notify(s);
 
-		/*
-		 * Since list_lru_destroy() may sleep, we cannot call it from
-		 * put_super(), where we hold the sb_lock. Therefore we destroy
-		 * the lru lists right now.
-		 */
+		/* list_lru_destroy() may sleep; put_super() callers may not. */
 		list_lru_destroy(&s->s_dentry_lru);
 		list_lru_destroy(&s->s_inode_lru);
 
-		put_filesystem(fs);
 		put_super(s);
 	} else {
 		super_unlock_excl(s);
@@ -517,7 +502,7 @@ EXPORT_SYMBOL(deactivate_super);
  * @sb: superblock to acquire
  *
  * Acquire a temporary reference on a superblock and try to trade it for
- * an active reference. This is used in sget{_fc}() to wait for a
+ * an active reference. This is used in sget_fc() to wait for a
  * superblock to either become SB_BORN or for it to pass through
  * sb->kill() and be marked as SB_DEAD.
  *
@@ -528,7 +513,7 @@ static bool grab_super(struct super_block *sb)
 {
 	bool locked;
 
-	sb->s_count++;
+	refcount_inc(&sb->s_passive);
 	spin_unlock(&sb_lock);
 	locked = super_lock_excl(sb);
 	if (locked) {
@@ -555,7 +540,7 @@ static bool grab_super(struct super_block *sb)
  *	lock held in read mode in case of success. On successful return,
  *	the caller must drop the s_umount lock when done.
  *
- *	Note that unlike get_super() et.al. this one does *not* bump ->s_count.
+ *	Note that unlike get_super() et.al. this one does *not* bump ->s_passive.
  *	The reason why it's safe is that we are OK with doing trylock instead
  *	of down_read().  There's a couple of places that are OK with that, but
  *	it's very much not a general-purpose interface.
@@ -672,12 +657,12 @@ void generic_shutdown_super(struct super_block *sb)
 	}
 	/*
 	 * Broadcast to everyone that grabbed a temporary reference to this
-	 * superblock before we removed it from @fs_supers that the superblock
-	 * is dying. Every walker of @fs_supers outside of sget{_fc}() will now
-	 * discard this superblock and treat it as dead.
+	 * superblock that it is dying. Every walker of @fs_supers outside
+	 * of sget_fc() will now discard this superblock and treat it as
+	 * dead.
 	 *
-	 * We leave the superblock on @fs_supers so it can be found by
-	 * sget{_fc}() until we passed sb->kill_sb().
+	 * sget_fc() keeps finding the superblock until SB_DEAD is set, so
+	 * a concurrent mounter waits until we passed sb->kill_sb().
 	 */
 	super_wake(sb, SB_DYING);
 	super_unlock_excl(sb);
@@ -756,6 +741,9 @@ retry:
 	spin_lock(&sb_lock);
 	if (test) {
 		hlist_for_each_entry(old, &fc->fs_type->fs_supers, s_instances) {
+			/* Only unlinked at the last passive reference. */
+			if (super_flags(old, SB_DEAD))
+				continue;
 			if (test(old, fc))
 				goto share_extant_sb;
 		}
@@ -809,67 +797,6 @@ share_extant_sb:
 }
 EXPORT_SYMBOL(sget_fc);
 
-/**
- *	sget	-	find or create a superblock
- *	@type:	  filesystem type superblock should belong to
- *	@test:	  comparison callback
- *	@set:	  setup callback
- *	@flags:	  mount flags
- *	@data:	  argument to each of them
- */
-struct super_block *sget(struct file_system_type *type,
-			int (*test)(struct super_block *,void *),
-			int (*set)(struct super_block *,void *),
-			int flags,
-			void *data)
-{
-	struct user_namespace *user_ns = current_user_ns();
-	struct super_block *s = NULL;
-	struct super_block *old;
-	int err;
-
-retry:
-	spin_lock(&sb_lock);
-	if (test) {
-		hlist_for_each_entry(old, &type->fs_supers, s_instances) {
-			if (!test(old, data))
-				continue;
-			if (user_ns != old->s_user_ns) {
-				spin_unlock(&sb_lock);
-				destroy_unused_super(s);
-				return ERR_PTR(-EBUSY);
-			}
-			if (!grab_super(old))
-				goto retry;
-			destroy_unused_super(s);
-			return old;
-		}
-	}
-	if (!s) {
-		spin_unlock(&sb_lock);
-		s = alloc_super(type, flags, user_ns);
-		if (!s)
-			return ERR_PTR(-ENOMEM);
-		goto retry;
-	}
-
-	err = set(s, data);
-	if (err) {
-		spin_unlock(&sb_lock);
-		destroy_unused_super(s);
-		return ERR_PTR(err);
-	}
-	s->s_type = type;
-	strscpy(s->s_id, type->name, sizeof(s->s_id));
-	list_add_tail(&s->s_list, &super_blocks);
-	hlist_add_head(&s->s_instances, &type->fs_supers);
-	spin_unlock(&sb_lock);
-	get_filesystem(type);
-	shrinker_register(s->s_shrink);
-	return s;
-}
-EXPORT_SYMBOL(sget);
-
 void drop_super(struct super_block *sb)
 {
 	super_unlock_shared(sb);
@@ -883,7 +810,6 @@ void drop_super_exclusive(struct super_block *sb)
 	super_unlock_excl(sb);
 	put_super(sb);
 }
-EXPORT_SYMBOL(drop_super_exclusive);
 
 enum super_iter_flags_t {
 	SUPER_ITER_EXCL		= (1U << 0),
@@ -912,14 +838,17 @@ static void __iterate_supers(void (*f)(struct super_block *, void *), void *arg,
 	struct super_block *sb, *p = NULL;
 	bool excl = flags & SUPER_ITER_EXCL;
 
-	guard(spinlock)(&sb_lock);
+	spin_lock(&sb_lock);
 
 	for (sb = first_super(flags);
 	     !list_entry_is_head(sb, &super_blocks, s_list);
 	     sb = next_super(sb, flags)) {
 		if (super_flags(sb, SB_DYING))
 			continue;
-		sb->s_count++;
+
+		if (!refcount_inc_not_zero(&sb->s_passive))
+			continue;
+
 		spin_unlock(&sb_lock);
 
 		if (flags & SUPER_ITER_UNLOCKED) {
@@ -929,13 +858,14 @@ static void __iterate_supers(void (*f)(struct super_block *, void *), void *arg,
 			super_unlock(sb, excl);
 		}
 
-		spin_lock(&sb_lock);
 		if (p)
-			__put_super(p);
+			put_super(p);
 		p = sb;
+		spin_lock(&sb_lock);
 	}
+	spin_unlock(&sb_lock);
 	if (p)
-		__put_super(p);
+		put_super(p);
 }
 
 void iterate_supers(void (*f)(struct super_block *, void *), void *arg)
@@ -964,7 +894,9 @@ void iterate_supers_type(struct file_system_type *type,
 		if (super_flags(sb, SB_DYING))
 			continue;
 
-		sb->s_count++;
+		if (!refcount_inc_not_zero(&sb->s_passive))
+			continue;
+
 		spin_unlock(&sb_lock);
 
 		locked = super_lock_shared(sb);
@@ -973,14 +905,14 @@ void iterate_supers_type(struct file_system_type *type,
 			super_unlock_shared(sb);
 		}
 
-		spin_lock(&sb_lock);
 		if (p)
-			__put_super(p);
+			put_super(p);
 		p = sb;
+		spin_lock(&sb_lock);
 	}
-	if (p)
-		__put_super(p);
 	spin_unlock(&sb_lock);
+	if (p)
+		put_super(p);
 }
 
 EXPORT_SYMBOL(iterate_supers_type);
@@ -996,15 +928,17 @@ struct super_block *user_get_super(dev_t dev, bool excl)
 		if (sb->s_dev != dev)
 			continue;
 
-		sb->s_count++;
+		if (!refcount_inc_not_zero(&sb->s_passive))
+			continue;
+
 		spin_unlock(&sb_lock);
 
 		locked = super_lock(sb, excl);
 		if (locked)
 			return sb;
 
+		put_super(sb);
 		spin_lock(&sb_lock);
-		__put_super(sb);
 		break;
 	}
 	spin_unlock(&sb_lock);
@@ -1435,9 +1369,7 @@ static struct super_block *bdev_super_lock(struct block_device *bdev, bool excl)
 	lockdep_assert_not_held(&bdev->bd_disk->open_mutex);
 
 	/* Make sure sb doesn't go away from under us */
-	spin_lock(&sb_lock);
-	sb->s_count++;
-	spin_unlock(&sb_lock);
+	refcount_inc(&sb->s_passive);
 
 	mutex_unlock(&bdev->bd_holder_lock);
 
@@ -2079,7 +2011,7 @@ int freeze_super(struct super_block *sb, enum freeze_holder who, const void *fre
 	int ret;
 
 	if (!super_lock_excl(sb)) {
-		WARN_ON_ONCE("Dying superblock while freezing!");
+		WARN_ONCE(1, "Dying superblock while freezing!");
 		return -EINVAL;
 	}
 	atomic_inc(&sb->s_active);
@@ -2183,11 +2115,14 @@ static int thaw_super_locked(struct super_block *sb, enum freeze_holder who,
 		goto out_unlock;
 
 	/*
-	 * All freezers share a single active reference.
-	 * So just unlock in case there are any left.
+	 * All freezers share a single active reference. If other freezers
+	 * remain, drop our hold and report success; the superblock stays
+	 * frozen until the last holder thaws it.
 	 */
-	if (freeze_dec(sb, who))
+	if (freeze_dec(sb, who)) {
+		error = 0;
 		goto out_unlock;
+	}
 
 	if (sb_rdonly(sb)) {
 		sb->s_writers.frozen = SB_UNFROZEN;
@@ -2243,7 +2178,7 @@ int thaw_super(struct super_block *sb, enum freeze_holder who,
 	       const void *freeze_owner)
 {
 	if (!super_lock_excl(sb)) {
-		WARN_ON_ONCE("Dying superblock while thawing!");
+		WARN_ONCE(1, "Dying superblock while thawing!");
 		return -EINVAL;
 	}
 	return thaw_super_locked(sb, who, freeze_owner);

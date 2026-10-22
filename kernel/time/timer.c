@@ -1932,7 +1932,7 @@ static void timer_recalc_next_expiry(struct timer_base *base)
  */
 static u64 cmp_next_hrtimer_event(u64 basem, u64 expires)
 {
-	u64 nextevt = hrtimer_get_next_event();
+	u64 nextevt = ktime_to_ns(hrtimer_get_next_event());
 
 	/*
 	 * If high resolution timers are enabled
@@ -2492,6 +2492,7 @@ static void migrate_timer_list(struct timer_base *new_base, struct hlist_head *h
 		timer = hlist_entry(head->first, struct timer_list, entry);
 		detach_timer(timer, false);
 		timer->flags = (timer->flags & ~TIMER_BASEMASK) | cpu;
+		debug_timer_activate(timer);
 		internal_add_timer(new_base, timer);
 	}
 }

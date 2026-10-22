@@ -12,7 +12,6 @@
 #include <linux/gpio.h>
 #include <linux/gpio/consumer.h>
 #include <linux/leds.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/overflow.h>
 #include <linux/pinctrl/consumer.h>
@@ -278,6 +277,7 @@ static int gpio_led_probe(struct platform_device *pdev)
 			if (IS_ERR(led_dat->gpiod)) {
 				dev_info(dev, "Skipping unavailable LED gpio %d (%s)\n",
 					 template->gpio, template->name);
+				led_dat->gpiod = NULL;
 				continue;
 			}
 

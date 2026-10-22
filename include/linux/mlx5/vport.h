@@ -51,8 +51,8 @@ enum {
 
 /* Vport number for each function must keep unchanged */
 enum {
-	MLX5_VPORT_PF			= 0x0,
-	MLX5_VPORT_FIRST_VF		= 0x1,
+	MLX5_VPORT_HOST_PF		= 0x0,
+	MLX5_VPORT_FIRST_HOST_VF	= 0x1,
 	MLX5_VPORT_ECPF			= 0xfffe,
 	MLX5_VPORT_UPLINK		= 0xffff
 };
@@ -61,7 +61,8 @@ u8 mlx5_query_vport_state(struct mlx5_core_dev *mdev, u8 opmod, u16 vport);
 int mlx5_modify_vport_admin_state(struct mlx5_core_dev *mdev, u8 opmod,
 				  u16 vport, u8 other_vport, u8 state);
 int mlx5_query_vport_max_tx_speed(struct mlx5_core_dev *mdev, u8 op_mod,
-				  u16 vport, u8 other_vport, u32 *max_tx_speed);
+				  u16 vport, u8 other_vport,
+				  u32 *max_tx_speed, u8 *state);
 int mlx5_modify_vport_max_tx_speed(struct mlx5_core_dev *mdev, u8 opmod,
 				   u16 vport, u8 other_vport, u16 max_tx_speed);
 int mlx5_query_nic_vport_mac_address(struct mlx5_core_dev *mdev,

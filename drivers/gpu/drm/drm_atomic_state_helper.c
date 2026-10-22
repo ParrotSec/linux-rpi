@@ -589,7 +589,7 @@ EXPORT_SYMBOL(drm_atomic_helper_connector_tv_reset);
  * %0 for success, a negative error code on error.
  */
 int drm_atomic_helper_connector_tv_check(struct drm_connector *connector,
-					 struct drm_atomic_state *state)
+					 struct drm_atomic_commit *state)
 {
 	struct drm_connector_state *old_conn_state =
 		drm_atomic_get_old_connector_state(state, connector);
@@ -731,8 +731,6 @@ void __drm_atomic_helper_private_obj_create_state(struct drm_private_obj *obj,
 {
 	if (state)
 		state->obj = obj;
-
-	obj->state = state;
 }
 EXPORT_SYMBOL(__drm_atomic_helper_private_obj_create_state);
 

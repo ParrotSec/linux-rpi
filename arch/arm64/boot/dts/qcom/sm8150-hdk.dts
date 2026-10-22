@@ -572,6 +572,8 @@
 		data-role = "dual";
 		self-powered;
 
+		vbus-supply = <&pm8150b_vbus>;
+
 		source-pdos = <PDO_FIXED(5000, 3000,
 					 PDO_FIXED_DUAL_ROLE |
 					 PDO_FIXED_USB_COMM |
@@ -799,8 +801,8 @@
 
 &usb_1_qmpphy {
 	status = "okay";
-	vdda-phy-supply = <&vreg_l3c_1p2>;
-	vdda-pll-supply = <&vreg_l18a_0p8>;
+	vdda-phy-supply = <&vreg_l18a_0p8>;
+	vdda-pll-supply = <&vreg_l3c_1p2>;
 	orientation-switch;
 };
 
@@ -810,8 +812,8 @@
 
 &usb_2_qmpphy {
 	status = "okay";
-	vdda-phy-supply = <&vreg_l3c_1p2>;
-	vdda-pll-supply = <&vreg_l5a_0p875>;
+	vdda-phy-supply = <&vreg_l5a_0p875>;
+	vdda-pll-supply = <&vreg_l3c_1p2>;
 };
 
 &usb_1 {

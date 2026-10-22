@@ -10,6 +10,7 @@
 #include <linux/ctype.h>
 #include <linux/fs_context.h>
 
+#include <linux/sunrpc/cache.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/lockd/bind.h>
 #include <linux/sunrpc/addr.h>
@@ -246,7 +247,7 @@ static ssize_t write_unlock_ip(struct file *file, char *buf, size_t size)
 	if (rpc_pton(net, fo_path, size, sap, salen) == 0)
 		return -EINVAL;
 
-	trace_nfsd_ctl_unlock_ip(net, buf);
+	trace_nfsd_ctl_unlock_ip(net, sap, svc_addr_len(sap));
 	return nlmsvc_unlock_all_by_ip(sap);
 }
 
@@ -295,14 +296,15 @@ static ssize_t write_unlock_fs(struct file *file, char *buf, size_t size)
 	 * 2.  Is that directory a mount point, or
 	 * 3.  Is that directory the root of an exported file system?
 	 */
-	nfsd4_cancel_copy_by_sb(netns(file), path.dentry->d_sb);
 	error = nlmsvc_unlock_all_by_sb(path.dentry->d_sb);
 	mutex_lock(&nfsd_mutex);
 	nn = net_generic(netns(file), nfsd_net_id);
-	if (nn->nfsd_serv)
+	if (test_bit(NFSD_NET_UP, &nn->flags)) {
+		nfsd4_cancel_copy_by_sb(netns(file), path.dentry->d_sb);
 		nfsd4_revoke_states(nn, path.dentry->d_sb);
-	else
+	} else {
 		error = -EINVAL;
+	}
 	mutex_unlock(&nfsd_mutex);
 
 	path_put(&path);
@@ -419,6 +421,7 @@ static ssize_t write_threads(struct file *file, char *buf, size_t size)
 	char *mesg = buf;
 	int rv;
 	struct net *net = netns(file);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
 	if (size > 0) {
 		int newthreads;
@@ -429,7 +432,10 @@ static ssize_t write_threads(struct file *file, char *buf, size_t size)
 			return -EINVAL;
 		trace_nfsd_ctl_threads(net, newthreads);
 		mutex_lock(&nfsd_mutex);
-		rv = nfsd_svc(1, &newthreads, net, file->f_cred, NULL);
+		if (newthreads > 0 || nn->nfsd_serv != NULL)
+			rv = nfsd_svc(1, &newthreads, net, file->f_cred, NULL);
+		else
+			rv = 0;
 		mutex_unlock(&nfsd_mutex);
 		if (rv < 0)
 			return rv;
@@ -1110,7 +1116,7 @@ static ssize_t write_v4_end_grace(struct file *file, char *buf, size_t size)
 	}
 
 	return scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%c\n",
-			 nn->grace_ended ? 'Y' : 'N');
+			 test_bit(NFSD_NET_GRACE_ENDED, &nn->flags) ? 'Y' : 'N');
 }
 
 #endif
@@ -1412,6 +1418,21 @@ static int create_proc_exports_entry(void)
 
 unsigned int nfsd_net_id;
 
+struct nfsd_genl_rqstp {
+	struct sockaddr_storage	rq_daddr;
+	struct sockaddr_storage	rq_saddr;
+	unsigned long		rq_flags;
+	ktime_t			rq_stime;
+	__be32			rq_xid;
+	u32			rq_vers;
+	u32			rq_prog;
+	u32			rq_proc;
+
+	/* NFSv4 compound */
+	u32			rq_opcnt;
+	u32			rq_opnum[16];
+};
+
 static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 					    struct netlink_callback *cb,
 					    struct nfsd_genl_rqstp *genl_rqstp)
@@ -1432,9 +1453,9 @@ static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 	    nla_put_s64(skb, NFSD_A_RPC_STATUS_SERVICE_TIME,
 			ktime_to_us(genl_rqstp->rq_stime),
 			NFSD_A_RPC_STATUS_PAD))
-		return -ENOBUFS;
+		goto out_cancel;
 
-	switch (genl_rqstp->rq_saddr.sa_family) {
+	switch (genl_rqstp->rq_saddr.ss_family) {
 	case AF_INET: {
 		const struct sockaddr_in *s_in, *d_in;
 
@@ -1448,7 +1469,7 @@ static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 				 s_in->sin_port) ||
 		    nla_put_be16(skb, NFSD_A_RPC_STATUS_DPORT,
 				 d_in->sin_port))
-			return -ENOBUFS;
+			goto out_cancel;
 		break;
 	}
 	case AF_INET6: {
@@ -1464,7 +1485,7 @@ static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 				 s_in->sin6_port) ||
 		    nla_put_be16(skb, NFSD_A_RPC_STATUS_DPORT,
 				 d_in->sin6_port))
-			return -ENOBUFS;
+			goto out_cancel;
 		break;
 	}
 	}
@@ -1472,10 +1493,14 @@ static int nfsd_genl_rpc_status_compose_msg(struct sk_buff *skb,
 	for (i = 0; i < genl_rqstp->rq_opcnt; i++)
 		if (nla_put_u32(skb, NFSD_A_RPC_STATUS_COMPOUND_OPS,
 				genl_rqstp->rq_opnum[i]))
-			return -ENOBUFS;
+			goto out_cancel;
 
 	genlmsg_end(skb, hdr);
 	return 0;
+
+out_cancel:
+	genlmsg_cancel(skb, hdr);
+	return -ENOBUFS;
 }
 
 /**
@@ -1503,18 +1528,28 @@ int nfsd_nl_rpc_status_get_dumpit(struct sk_buff *skb,
 
 	for (i = 0; i < nn->nfsd_serv->sv_nrpools; i++) {
 		struct svc_rqst *rqstp;
+		long thread_skip = 0;
 
 		if (i < cb->args[0]) /* already consumed */
 			continue;
+
+		/*
+		 * The saved thread index only applies to the pool the dump
+		 * was resumed in. Subsequent pools must start from thread 0,
+		 * otherwise their first cb->args[1] threads are silently
+		 * skipped.
+		 */
+		if (i == cb->args[0])
+			thread_skip = cb->args[1];
 
 		rqstp_index = 0;
 		list_for_each_entry_rcu(rqstp,
 				&nn->nfsd_serv->sv_pools[i].sp_all_threads,
 				rq_all) {
-			struct nfsd_genl_rqstp genl_rqstp;
+			struct nfsd_genl_rqstp genl_rqstp = {};
 			unsigned int status_counter;
 
-			if (rqstp_index++ < cb->args[1]) /* already consumed */
+			if (rqstp_index++ < thread_skip) /* already consumed */
 				continue;
 			/*
 			 * Acquire rq_status_counter before parsing the rqst
@@ -1535,9 +1570,9 @@ int nfsd_nl_rpc_status_get_dumpit(struct sk_buff *skb,
 			genl_rqstp.rq_stime = rqstp->rq_stime;
 			genl_rqstp.rq_opcnt = 0;
 			memcpy(&genl_rqstp.rq_daddr, svc_daddr(rqstp),
-			       sizeof(struct sockaddr));
+			       sizeof(struct sockaddr_storage));
 			memcpy(&genl_rqstp.rq_saddr, svc_addr(rqstp),
-			       sizeof(struct sockaddr));
+			       sizeof(struct sockaddr_storage));
 
 #ifdef CONFIG_NFSD_V4
 			if (rqstp->rq_vers == NFS4_VERSION &&
@@ -1556,17 +1591,26 @@ int nfsd_nl_rpc_status_get_dumpit(struct sk_buff *skb,
 #endif /* CONFIG_NFSD_V4 */
 
 			/*
-			 * Acquire rq_status_counter before reporting the rqst
-			 * fields to the user.
+			 * Read-side load-load fence: order the field reads
+			 * above before the counter re-read below, mirroring
+			 * the smp_rmb() in the standard seqcount retry. The
+			 * begin-side smp_load_acquire() above pairs with the
+			 * smp_store_release() in nfsd_dispatch().
 			 */
-			if (smp_load_acquire(&rqstp->rq_status_counter) !=
-			    status_counter)
+			smp_rmb();
+			if (READ_ONCE(rqstp->rq_status_counter) != status_counter)
 				continue;
 
 			ret = nfsd_genl_rpc_status_compose_msg(skb, cb,
 							       &genl_rqstp);
-			if (ret)
+			if (ret) {
+				if (skb->len) {
+					cb->args[0] = i;
+					cb->args[1] = rqstp_index - 1;
+					ret = skb->len;
+				}
 				goto out;
+			}
 		}
 	}
 
@@ -1928,6 +1972,60 @@ err_free_msg:
 }
 
 /**
+ * nfsd_nl_validate_listeners - sanity-check the listener list from userland
+ * @info: netlink metadata and command arguments
+ *
+ * Walk every NFSD_A_SERVER_SOCK_ADDR attribute and confirm that each entry
+ * is well-formed: it parses against the policy, carries both an address and
+ * a transport name, and the address is long enough for its family. Doing
+ * this up front lets the callers below assume every entry is valid and
+ * guarantees we make no changes when the request is malformed.
+ *
+ * Return: 0 if every entry is valid, or a negative errno otherwise.
+ */
+static int nfsd_nl_validate_listeners(struct genl_info *info)
+{
+	const struct nlattr *attr;
+	int rem;
+
+	nlmsg_for_each_attr_type(attr, NFSD_A_SERVER_SOCK_ADDR, info->nlhdr,
+				 GENL_HDRLEN, rem) {
+		struct nlattr *tb[NFSD_A_SOCK_MAX + 1];
+		struct sockaddr *sa;
+		int err;
+
+		err = nla_parse_nested(tb, NFSD_A_SOCK_MAX, attr,
+				       nfsd_sock_nl_policy, info->extack);
+		if (err < 0)
+			return err;
+
+		if (!tb[NFSD_A_SOCK_ADDR] || !tb[NFSD_A_SOCK_TRANSPORT_NAME])
+			return -EINVAL;
+
+		sa = nla_data(tb[NFSD_A_SOCK_ADDR]);
+		if (nla_len(tb[NFSD_A_SOCK_ADDR]) < sizeof(sa->sa_family))
+			return -EINVAL;
+
+		switch (sa->sa_family) {
+		case AF_INET:
+			if (nla_len(tb[NFSD_A_SOCK_ADDR]) <
+			    sizeof(struct sockaddr_in))
+				return -EINVAL;
+			break;
+		case AF_INET6:
+			if (nla_len(tb[NFSD_A_SOCK_ADDR]) <
+			    sizeof(struct sockaddr_in6))
+				return -EINVAL;
+			break;
+		default:
+			return -EAFNOSUPPORT;
+		}
+	}
+
+	return 0;
+}
+
+/**
  * nfsd_nl_listener_set_doit - set the nfs running sockets
  * @skb: reply buffer
  * @info: netlink metadata and command arguments
@@ -1944,6 +2042,15 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 	struct nfsd_net *nn;
 	bool delete = false;
 	int err, rem;
+
+	/*
+	 * Validate the entire listener list before making any changes, so a
+	 * malformed request fails cleanly without creating a serv or touching
+	 * the existing listeners.
+	 */
+	err = nfsd_nl_validate_listeners(info);
+	if (err)
+		return err;
 
 	mutex_lock(&nfsd_mutex);
 
@@ -1971,14 +2078,9 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 		const char *xcl_name;
 		struct sockaddr *sa;
 
+		/* validated up front in nfsd_nl_validate_listeners() */
 		if (nla_parse_nested(tb, NFSD_A_SOCK_MAX, attr,
 				     nfsd_sock_nl_policy, info->extack) < 0)
-			continue;
-
-		if (!tb[NFSD_A_SOCK_ADDR] || !tb[NFSD_A_SOCK_TRANSPORT_NAME])
-			continue;
-
-		if (nla_len(tb[NFSD_A_SOCK_ADDR]) < sizeof(*sa))
 			continue;
 
 		xcl_name = nla_data(tb[NFSD_A_SOCK_TRANSPORT_NAME]);
@@ -2032,14 +2134,9 @@ int nfsd_nl_listener_set_doit(struct sk_buff *skb, struct genl_info *info)
 		struct sockaddr *sa;
 		int ret;
 
+		/* validated up front in nfsd_nl_validate_listeners() */
 		if (nla_parse_nested(tb, NFSD_A_SOCK_MAX, attr,
 				     nfsd_sock_nl_policy, info->extack) < 0)
-			continue;
-
-		if (!tb[NFSD_A_SOCK_ADDR] || !tb[NFSD_A_SOCK_TRANSPORT_NAME])
-			continue;
-
-		if (nla_len(tb[NFSD_A_SOCK_ADDR]) < sizeof(*sa))
 			continue;
 
 		xcl_name = nla_data(tb[NFSD_A_SOCK_TRANSPORT_NAME]);
@@ -2198,6 +2295,194 @@ err_free_msg:
 }
 
 /**
+ * nfsd_nl_cache_flush_doit - flush nfsd caches via netlink
+ * @skb: reply buffer
+ * @info: netlink metadata and command arguments
+ *
+ * Flush the svc_export and/or expkey caches. If NFSD_A_CACHE_FLUSH_MASK
+ * is provided, only flush the caches indicated by the bitmask (bit 0 =
+ * svc_export, bit 1 = expkey). If omitted, flush both.
+ *
+ * Return 0 on success or a negative errno.
+ */
+int nfsd_nl_cache_flush_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct net *net = genl_info_net(info);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	u32 mask = ~0U;
+
+	if (info->attrs[NFSD_A_CACHE_FLUSH_MASK])
+		mask = nla_get_u32(info->attrs[NFSD_A_CACHE_FLUSH_MASK]);
+
+	mutex_lock(&nfsd_mutex);
+
+	if ((mask & NFSD_CACHE_TYPE_SVC_EXPORT) &&
+	    nn->svc_export_cache)
+		cache_purge(nn->svc_export_cache);
+
+	if ((mask & NFSD_CACHE_TYPE_EXPKEY) &&
+	    nn->svc_expkey_cache)
+		cache_purge(nn->svc_expkey_cache);
+
+	mutex_unlock(&nfsd_mutex);
+
+	return 0;
+}
+
+int nfsd_cache_notify(struct cache_detail *cd, struct cache_head *h, u32 cache_type)
+{
+	struct genlmsghdr *hdr;
+	struct sk_buff *msg;
+
+	if (!genl_has_listeners(&nfsd_nl_family, cd->net, NFSD_NLGRP_EXPORTD))
+		return -ENOLINK;
+
+	msg = genlmsg_new(nla_total_size(sizeof(u32)), GFP_KERNEL);
+	if (!msg)
+		return -ENOMEM;
+
+	hdr = genlmsg_put(msg, 0, 0, &nfsd_nl_family, 0, NFSD_CMD_CACHE_NOTIFY);
+	if (!hdr) {
+		nlmsg_free(msg);
+		return -ENOMEM;
+	}
+
+	if (nla_put_u32(msg, NFSD_A_CACHE_NOTIFY_CACHE_TYPE, cache_type)) {
+		nlmsg_free(msg);
+		return -ENOMEM;
+	}
+
+	genlmsg_end(msg, hdr);
+	return genlmsg_multicast_netns(&nfsd_nl_family, cd->net, msg, 0,
+				       NFSD_NLGRP_EXPORTD, GFP_KERNEL);
+}
+
+/**
+ * nfsd_nl_unlock_ip_doit - release NLM locks held by an IP address
+ * @skb: reply buffer
+ * @info: netlink metadata and command arguments
+ *
+ * Return: 0 on success or a negative errno.
+ */
+int nfsd_nl_unlock_ip_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct sockaddr *sap;
+
+	if (GENL_REQ_ATTR_CHECK(info, NFSD_A_UNLOCK_IP_ADDRESS))
+		return -EINVAL;
+	sap = nla_data(info->attrs[NFSD_A_UNLOCK_IP_ADDRESS]);
+	switch (sap->sa_family) {
+	case AF_INET:
+		if (nla_len(info->attrs[NFSD_A_UNLOCK_IP_ADDRESS]) <
+		    sizeof(struct sockaddr_in))
+			return -EINVAL;
+		break;
+	case AF_INET6:
+		if (nla_len(info->attrs[NFSD_A_UNLOCK_IP_ADDRESS]) <
+		    sizeof(struct sockaddr_in6))
+			return -EINVAL;
+		break;
+	default:
+		return -EAFNOSUPPORT;
+	}
+	/*
+	 * nlmsvc_unlock_all_by_ip() releases matching locks
+	 * across all network namespaces because lockd operates
+	 * a single global instance.
+	 */
+	trace_nfsd_ctl_unlock_ip(genl_info_net(info), sap,
+				 svc_addr_len(sap));
+	return nlmsvc_unlock_all_by_ip(sap);
+}
+
+/**
+ * nfsd_nl_unlock_filesystem_doit - revoke NFS state under a filesystem path
+ * @skb: reply buffer
+ * @info: netlink metadata and command arguments
+ *
+ * Return: 0 on success or a negative errno.
+ */
+int nfsd_nl_unlock_filesystem_doit(struct sk_buff *skb,
+				   struct genl_info *info)
+{
+	struct net *net = genl_info_net(info);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct path path;
+	int error;
+
+	if (GENL_REQ_ATTR_CHECK(info, NFSD_A_UNLOCK_FILESYSTEM_PATH))
+		return -EINVAL;
+
+	trace_nfsd_ctl_unlock_fs(net,
+			nla_data(info->attrs[NFSD_A_UNLOCK_FILESYSTEM_PATH]));
+	error = kern_path(
+			nla_data(info->attrs[NFSD_A_UNLOCK_FILESYSTEM_PATH]),
+			0, &path);
+	if (error)
+		return error;
+
+	error = nlmsvc_unlock_all_by_sb(path.dentry->d_sb);
+
+	mutex_lock(&nfsd_mutex);
+	if (test_bit(NFSD_NET_UP, &nn->flags)) {
+		nfsd4_cancel_copy_by_sb(net, path.dentry->d_sb);
+		nfsd4_revoke_states(nn, path.dentry->d_sb);
+	} else {
+		error = -EINVAL;
+	}
+	mutex_unlock(&nfsd_mutex);
+
+	path_put(&path);
+	return error;
+}
+
+/**
+ * nfsd_nl_unlock_export_doit - revoke NFSv4 state for an export path
+ * @skb: reply buffer
+ * @info: netlink metadata and command arguments
+ *
+ * Revokes all NFSv4 state (opens, locks, delegations, layouts) acquired
+ * through any export of the given path, regardless of which client holds
+ * the state.  Userspace (exportfs -u) sends this after removing the last
+ * client for a path so the underlying filesystem can be unmounted.
+ *
+ * Unlike NFSD_CMD_UNLOCK_FILESYSTEM, which operates at superblock
+ * granularity, this command revokes only the state associated with
+ * exports of a specific path.
+ *
+ * Return: 0 on success or a negative errno.
+ */
+int nfsd_nl_unlock_export_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct net *net = genl_info_net(info);
+	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
+	struct path path;
+	int error;
+
+	if (GENL_REQ_ATTR_CHECK(info, NFSD_A_UNLOCK_EXPORT_PATH))
+		return -EINVAL;
+
+	trace_nfsd_ctl_unlock_export(net,
+			nla_data(info->attrs[NFSD_A_UNLOCK_EXPORT_PATH]));
+	error = kern_path(
+			nla_data(info->attrs[NFSD_A_UNLOCK_EXPORT_PATH]),
+			0, &path);
+	if (error)
+		return error;
+
+	mutex_lock(&nfsd_mutex);
+	if (test_bit(NFSD_NET_UP, &nn->flags)) {
+		nfsd_file_close_export(net, &path);
+		nfsd4_revoke_export_states(nn, &path);
+	} else
+		error = -EINVAL;
+	mutex_unlock(&nfsd_mutex);
+
+	path_put(&path);
+	return error;
+}
+
+/**
  * nfsd_net_init - Prepare the nfsd_net portion of a new net namespace
  * @net: a freshly-created network namespace
  *
@@ -2308,11 +2593,12 @@ static int __init init_nfsd(void)
 {
 	int retval;
 
-	nfsd_debugfs_init();
-
 	retval = nfsd4_init_slabs();
 	if (retval)
 		return retval;
+
+	nfsd_debugfs_init();
+
 	retval = nfsd4_init_pnfs();
 	if (retval)
 		goto out_free_slabs;
@@ -2357,8 +2643,8 @@ out_free_lockd:
 out_free_pnfs:
 	nfsd4_exit_pnfs();
 out_free_slabs:
-	nfsd4_free_slabs();
 	nfsd_debugfs_exit();
+	nfsd4_free_slabs();
 	return retval;
 }
 
@@ -2373,9 +2659,9 @@ static void __exit exit_nfsd(void)
 	unregister_pernet_subsys(&nfsd_net_ops);
 	nfsd_drc_slab_free();
 	nfsd_lockd_shutdown();
-	nfsd4_free_slabs();
 	nfsd4_exit_pnfs();
 	nfsd_debugfs_exit();
+	nfsd4_free_slabs();
 }
 
 MODULE_AUTHOR("Olaf Kirch <okir@monad.swb.de>");

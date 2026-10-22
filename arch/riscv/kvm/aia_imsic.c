@@ -683,6 +683,9 @@ bool kvm_riscv_vcpu_aia_imsic_has_interrupt(struct kvm_vcpu *vcpu)
 	unsigned long flags;
 	bool ret = false;
 
+	if (!imsic)
+		return false;
+
 	/*
 	 * The IMSIC SW-file directly injects interrupt via hvip so
 	 * only check for interrupt when IMSIC VS-file is being used.
@@ -722,6 +725,9 @@ void kvm_riscv_vcpu_aia_imsic_put(struct kvm_vcpu *vcpu)
 	struct imsic *imsic = vcpu->arch.aia_context.imsic_state;
 	unsigned long flags;
 
+	if (!imsic)
+		return;
+
 	if (!kvm_vcpu_is_blocking(vcpu))
 		return;
 
@@ -737,6 +743,9 @@ void kvm_riscv_vcpu_aia_imsic_release(struct kvm_vcpu *vcpu)
 	struct imsic_mrif tmrif;
 	int old_vsfile_hgei, old_vsfile_cpu;
 	struct imsic *imsic = vcpu->arch.aia_context.imsic_state;
+
+	if (!imsic)
+		return;
 
 	/* Read and clear IMSIC VS-file details */
 	write_lock_irqsave(&imsic->vsfile_lock, flags);
@@ -960,9 +969,14 @@ int kvm_riscv_aia_imsic_rw_attr(struct kvm *kvm, unsigned long type,
 	if (!vcpu)
 		return -ENODEV;
 
+	if (mutex_lock_killable(&vcpu->mutex))
+		return -EINTR;
+
 	imsic = vcpu->arch.aia_context.imsic_state;
-	if (!imsic)
-		return -ENODEV;
+	if (!imsic) {
+		rc = -ENODEV;
+		goto out_unlock;
+	}
 	isel = KVM_DEV_RISCV_AIA_IMSIC_GET_ISEL(type);
 
 	read_lock_irqsave(&imsic->vsfile_lock, flags);
@@ -986,6 +1000,8 @@ int kvm_riscv_aia_imsic_rw_attr(struct kvm *kvm, unsigned long type,
 		rc = imsic_vsfile_rw(vsfile_hgei, vsfile_cpu, imsic->nr_eix,
 				     isel, write, val);
 
+out_unlock:
+	mutex_unlock(&vcpu->mutex);
 	return rc;
 }
 
